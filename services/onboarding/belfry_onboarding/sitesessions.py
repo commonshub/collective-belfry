@@ -27,7 +27,9 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -51,6 +53,12 @@ PROFILE_EDITS_PER_HOUR = 10
 PROFILE_D = "belfry:profile"  # the chat's own event for tags and place (kind 30078)
 TAGS_MAX = 30  # the chat's own limit
 TAG = re.compile(r"^[a-z0-9-]{1,30}$")
+HEADLINE_MAX = 120
+LINKS_MAX = 8
+LINK_URL_MAX = 500
+LINK_LABEL_MAX = 40
+_LABEL = r"[^\W_](?:(?:[^\W_]|-)*[^\W_])?"  # letters and digits, - inside
+HOST = re.compile(rf"^{_LABEL}(?:\.{_LABEL})*\.?$")
 TICKETS_MAX = 30
 TICKET_SECONDS = 120  # how long "holds a ticket" is believed
 NO_STORE = {"Cache-Control": "no-store"}
@@ -369,16 +377,41 @@ def _extras_content(event: dict[str, Any] | None) -> dict[str, Any]:
     return content if isinstance(content, dict) else {}
 
 
-def tags_of(svc: Services, acct: dict[str, Any]) -> list[str]:
-    """The account's tags: a member's are the chat's own list (their ``belfry:profile`` event,
-    read as the chat reads it); a guest's are kept on the contact (guests are not on the
-    members' relay, so the chat doesn't show them)."""
+GUEST_FIELDS = ["belfry_tags", "belfry_headline", "belfry_links"]
+
+
+def extras_of(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
+    """The account's ``tags``, ``headline`` and ``links``: a member's are in the chat's own
+    event (``belfry:profile``, next to their place), read as the chat reads it; a guest's are
+    kept on the contact (guests are not on the members' relay, so the chat doesn't show them).
+    Raises when a member's event can't be read."""
     if acct["role"] == "guest":
-        row = svc.odoo.read_one("res.partner", acct["partner"], ["belfry_tags"]) or {}
-        raw = row.get("belfry_tags")
-    else:
-        raw = _extras_content(_extras(svc, acct)).get("tags")
-    return clean_tags(raw)
+        row = svc.odoo.read_one("res.partner", acct["partner"], GUEST_FIELDS) or {}
+        return contact_extras(row)
+    return content_extras(_extras_content(_extras(svc, acct)))
+
+
+def contact_extras(row: dict[str, Any]) -> dict[str, Any]:
+    """A guest's ``tags``, ``headline`` and ``links`` from their contact."""
+    return {
+        "tags": clean_tags(row.get("belfry_tags")),
+        "headline": clean_headline(row.get("belfry_headline")),
+        "links": clean_links(row.get("belfry_links")),
+    }
+
+
+def content_extras(content: dict[str, Any]) -> dict[str, Any]:
+    """A member's ``tags``, ``headline`` and ``links`` from their ``belfry:profile`` content."""
+    return {
+        "tags": clean_tags(content.get("tags")),
+        "headline": clean_headline(content.get("headline")),
+        "links": clean_links(content.get("links")),
+    }
+
+
+def tags_of(svc: Services, acct: dict[str, Any]) -> list[str]:
+    """The account's tags (``extras_of``)."""
+    return extras_of(svc, acct)["tags"]
 
 
 def clean_tags(raw: Any) -> list[str]:
@@ -389,6 +422,108 @@ def clean_tags(raw: Any) -> list[str]:
         if t and t not in out:
             out.append(t)
     return out[:30]
+
+
+def _controls(text: str) -> bool:
+    """Whether TEXT has a newline, a tab or another control or format character."""
+    return any(unicodedata.category(ch)[0] == "C" for ch in text)
+
+
+def headline_problem(raw: Any) -> str | None:
+    """Why RAW can't be a headline (None: it can; "" and None clear it)."""
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        return "type"
+    text = raw.strip()
+    if len(text) > HEADLINE_MAX:
+        return "long"
+    if _controls(text):
+        return "line"
+    return None
+
+
+def clean_headline(raw: Any) -> str | None:
+    """A stored headline as shown: trimmed, None when empty or not one line of 120 at most."""
+    if headline_problem(raw) or not isinstance(raw, str):
+        return None
+    return raw.strip() or None
+
+
+def url_problem(url: Any) -> str | None:
+    """Why URL can't be a profile link: an https address with a host, LINK_URL_MAX characters
+    at most, no spaces or control characters, no ``user@`` before the host."""
+    if not isinstance(url, str) or not url.startswith("https://") or len(url) > LINK_URL_MAX:
+        return "url"
+    if any(ch.isspace() for ch in url) or _controls(url):
+        return "url"
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 — raises for a port that isn't one
+    except ValueError:
+        return "url"
+    if "@" in parts.netloc or "\\" in url:
+        return "url"
+    host = parts.hostname or ""
+    if not host or not HOST.match(host):
+        return "url"
+    return None
+
+
+def label_problem(raw: Any) -> str | None:
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str) or len(raw.strip()) > LINK_LABEL_MAX or _controls(raw.strip()):
+        return "label"
+    return None
+
+
+def check_links(raw: Any) -> list[dict[str, Any]]:
+    """``links`` as sent to ``POST /site/profile``, checked: [{"url", "label"}] (label None
+    when there is none); 422 ``invalid`` otherwise."""
+    if not isinstance(raw, list) or len(raw) > LINKS_MAX:
+        raise ApiError(422, "invalid", f"links: a list of at most {LINKS_MAX} links.")
+    out: list[dict[str, Any]] = []
+    for link in raw:
+        if not isinstance(link, dict) or "url" not in link or set(link) - {"url", "label"}:
+            raise ApiError(422, "invalid", 'links: each link is {"url", "label"?}.')
+        if url_problem(link["url"]):
+            raise ApiError(
+                422,
+                "invalid",
+                f"links: each url is an https:// address of at most {LINK_URL_MAX} characters, "
+                "with a host, without spaces or user@.",
+            )
+        if label_problem(link.get("label")):
+            raise ApiError(
+                422,
+                "invalid",
+                f"links: a label is one line of at most {LINK_LABEL_MAX} characters.",
+            )
+        if any(o["url"] == link["url"] for o in out):
+            raise ApiError(422, "invalid", "links: the same url twice.")
+        label = link.get("label")
+        out.append({"url": link["url"], "label": label.strip() or None if label else None})
+    return out
+
+
+def clean_links(raw: Any) -> list[dict[str, Any]]:
+    """Stored links as shown (a guest's are JSON text): the ones that are still right, 8 at
+    most, none twice."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = []
+    out: list[dict[str, Any]] = []
+    for link in raw if isinstance(raw, list) else []:
+        if not isinstance(link, dict) or url_problem(link.get("url")):
+            continue
+        if label_problem(link.get("label")) or any(o["url"] == link["url"] for o in out):
+            continue
+        label = link.get("label")
+        out.append({"url": link["url"], "label": label.strip() or None if label else None})
+    return out[:LINKS_MAX]
 
 
 def tickets(svc: Services, acct: dict[str, Any]) -> list[dict[str, Any]]:
@@ -537,11 +672,11 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
         log.warning("site: requests not read: %s", type(exc).__name__)
         reqs, comments = [], []
     try:
-        tags = tags_of(svc, acct)
+        extras = extras_of(svc, acct)
     except Exception as exc:  # noqa: BLE001
         retries.soft(exc)
         log.warning("site: tags not read: %s", type(exc).__name__)
-        tags = []
+        extras = {"tags": [], "headline": None, "links": []}
     try:
         slug = villagers.slug_of(svc, acct, nip05.split("@")[0] if nip05 else "")
     except Exception as exc:  # noqa: BLE001
@@ -553,8 +688,10 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
         "username": nip05.split("@")[0] if nip05 else None,
         "nip05": nip05,
         "picture": text("picture", PICTURE_MAX),
+        "headline": extras["headline"],
         "about": text("about", ABOUT_MAX),
-        "tags": tags,
+        "tags": extras["tags"],
+        "links": extras["links"],
         "slug": slug,
         "visibility": villagers.visibility_of(villagers._contact(svc, acct["partner"])),
         "email": acct["email"] or None,
@@ -577,20 +714,48 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
 
 
 # ── POST /site/profile ──────────────────────────────────────────────────────────────────────
+PROFILE_FIELDS = {
+    "name",
+    "about",
+    "picture",
+    "headline",
+    "tags",
+    "links",
+    "slug",
+    "visibility",
+}
+
+
 def _clean_profile(body: dict[str, Any]) -> dict[str, Any]:
-    """{"name"?, "about"?, "picture"?, "tags"?, "slug"?, "visibility"?} checked: what to set
-    (a value) or take out (None). ``tags``: lowercased, without doubles; each is checked
-    against the ones the account has in ``set_tags``. ``slug``: checked in villagers.plan."""
+    """{"name"?, "about"?, "picture"?, "headline"?, "tags"?, "links"?, "slug"?, "visibility"?}
+    checked: what to set (a value) or take out (None). ``tags``: lowercased, without doubles;
+    each is checked against the ones the account has in ``set_extras``. ``slug``: checked in
+    villagers.plan. ``visibility``: ``villagers`` (older site code) is ``private``."""
     from . import villagers
 
-    unknown = set(body) - {"name", "about", "picture", "tags", "slug", "visibility"}
+    unknown = set(body) - PROFILE_FIELDS
     if unknown or not body:
-        raise ApiError(422, "invalid", "Send name, about, picture, tags, slug and / or visibility.")
+        raise ApiError(
+            422,
+            "invalid",
+            "Send name, about, picture, headline, tags, links, slug and / or visibility.",
+        )
     out: dict[str, Any] = {}
     if "visibility" in body:
-        if body["visibility"] not in villagers.VISIBILITIES:
-            raise ApiError(422, "invalid", "visibility: public or villagers.")
-        out["visibility"] = body["visibility"]
+        v = body["visibility"]
+        v = villagers.SYNONYMS.get(v, v) if isinstance(v, str) else v
+        if v not in villagers.VISIBILITIES:
+            raise ApiError(422, "invalid", "visibility: listed, private or public.")
+        out["visibility"] = v
+    if "headline" in body:
+        reason = headline_problem(body["headline"])
+        if reason:
+            raise ApiError(
+                422, "invalid", f"headline: one line of at most {HEADLINE_MAX} characters."
+            )
+        out["headline"] = clean_headline(body["headline"])
+    if "links" in body:
+        out["links"] = check_links(body["links"])
     if "slug" in body:
         if not isinstance(body["slug"], str):
             exc = ApiError(422, "slug_invalid", "slug: a word.")
@@ -631,38 +796,64 @@ def _clean_profile(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def set_tags(svc: Services, acct: dict[str, Any], tags: list[str], sign: Any) -> bool:
-    """The account's tags become TAGS; whether anything changed. A member: their
-    ``belfry:profile`` event (the list the chat shows and edits) with only ``tags`` changed,
-    the rest of its content and its tags kept, signed through the signer, on the community
-    relay. A guest: on the contact. A new tag is 1–30 of a–z, 0–9 and -; one they have already
+EXTRAS = ("tags", "headline", "links")
+
+
+def set_extras(svc: Services, acct: dict[str, Any], want: dict[str, Any], sign: Any) -> bool:
+    """The account's ``tags``, ``headline`` and / or ``links`` (the ones in WANT) become WANT's;
+    whether anything changed. A member: their ``belfry:profile`` event (where the chat keeps
+    their tags and place) with only those fields changed, the rest of its content and its tags
+    kept, signed through the signer, on the community relay; an empty headline or list of links
+    is taken out of it. A guest: on the contact (``belfry_tags``, ``belfry_headline``,
+    ``belfry_links`` as JSON text). A new tag is 1–30 of a–z, 0–9 and -; one they have already
     (written in the chat, whose rule is wider) may stay as it is."""
     from . import events
 
     guest = acct["role"] == "guest"
     try:
         event = None if guest else _extras(svc, acct)
-        have = tags_of(svc, acct) if guest else None
+        row = svc.odoo.read_one("res.partner", acct["partner"], GUEST_FIELDS) or {} if guest else {}
     except Exception as exc:  # noqa: BLE001 — never written over an event that wasn't read
         retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     content = _extras_content(event)
-    if have is None:
-        raw = content.get("tags")
-        have = list(
-            dict.fromkeys(filter(None, map(_chat_tag, raw if isinstance(raw, list) else [])))
-        )
-    if any(not TAG.match(t) and t not in have for t in tags):
-        raise ApiError(422, "invalid", "tags: 1 to 30 of a-z, 0-9 and - each.")
-    if tags == have[:30]:
+    have = contact_extras(row) if guest else content_extras(content)
+    if "tags" in want:
+        tags = want["tags"]
+        if guest:
+            known = have["tags"]
+        else:
+            raw = content.get("tags")
+            known = list(
+                dict.fromkeys(filter(None, map(_chat_tag, raw if isinstance(raw, list) else [])))
+            )
+            have = {**have, "tags": known[:30]}
+        if any(not TAG.match(t) and t not in known for t in tags):
+            raise ApiError(422, "invalid", "tags: 1 to 30 of a-z, 0-9 and - each.")
+    changes = {k: want[k] for k in EXTRAS if k in want and want[k] != have[k]}
+    if not changes:
         return False
     if mail_limited(acct):
         raise ApiError(429, "too_many", "Too many changes in a short time.")
     if guest:
-        svc.odoo.write("res.partner", [acct["partner"]], {"belfry_tags": tags})
+        vals: dict[str, Any] = {}
+        if "tags" in changes:
+            vals["belfry_tags"] = changes["tags"]
+        if "headline" in changes:
+            vals["belfry_headline"] = changes["headline"] or False
+        if "links" in changes:
+            links = changes["links"]
+            vals["belfry_links"] = json.dumps(links, ensure_ascii=False) if links else False
+        svc.odoo.write("res.partner", [acct["partner"]], vals)
         return True
     if svc.relay is None:
         raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+    body = dict(content)
+    for k, v in changes.items():
+        if k == "tags" or v:
+            body[k] = v
+        else:
+            body.pop(k, None)  # no headline, no links: not in the event
     kept = [t for t in (event or {}).get("tags", []) if isinstance(t, list)]
     try:
         new = sign(
@@ -670,7 +861,7 @@ def set_tags(svc: Services, acct: dict[str, Any], tags: list[str], sign: Any) ->
                 "kind": 30078,
                 "created_at": max(_now(), int((event or {}).get("created_at") or 0) + 1),
                 "tags": kept or [["d", PROFILE_D]],
-                "content": json.dumps({**content, "tags": tags}, ensure_ascii=False),
+                "content": json.dumps(body, ensure_ascii=False),
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -680,7 +871,7 @@ def set_tags(svc: Services, acct: dict[str, Any], tags: list[str], sign: Any) ->
     try:
         svc.relay.publish(new, sign)
     except Exception as exc:  # noqa: BLE001
-        log.warning("site: tags not on the community relay: %s", type(exc).__name__)
+        log.warning("site: profile extras not on the community relay: %s", type(exc).__name__)
         retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     events.forget_reads()
@@ -718,14 +909,18 @@ def _set_profile(svc: Services, acct: dict[str, Any], want: dict[str, Any]) -> d
     """The account's kind 0 with these fields changed and everything else kept (nip05, fields
     this API doesn't know), signed through the signer; on the groups relay (where the website's
     names are read, and the only one a guest is on) and, for a member, the community relay.
-    ``tags``: set_tags."""
+    ``tags``, ``headline``, ``links``: set_extras."""
     from . import events, followers, webrequests
 
     sign = signer(svc, acct)
-    tags = want.pop("tags", None)
-    changed = set_tags(svc, acct, tags, sign) if tags is not None else False
-    if tags is not None:
-        log.info("site: partner %s set their tags from the website", acct["partner"])
+    extras = {k: want.pop(k) for k in EXTRAS if k in want}
+    changed = set_extras(svc, acct, extras, sign) if extras else False
+    if extras:
+        log.info(
+            "site: partner %s set their %s from the website",
+            acct["partner"],
+            ", ".join(sorted(extras)),
+        )
     if not want:
         return {"ok": True, "changed": changed}
     content, at = _profile(svc, acct)

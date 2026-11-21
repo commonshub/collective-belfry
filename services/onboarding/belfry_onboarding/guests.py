@@ -1247,13 +1247,14 @@ def became_member(svc: Services, pubkey: str) -> int:
 
 
 def carry_tags(svc: Services, pubkey: str) -> bool:
-    """A guest's profile tags live on their contact (``belfry_tags``, set on the website:
-    sitesessions.py); a member's live in their kind 30078 ``d`` = ``belfry:profile`` event on
-    the community relay, where the chat reads them. When a guest becomes a member the contact's
-    tags go into that event (added after the ones it has, 30 at most; the rest of the event
+    """A guest's profile tags, headline and links live on their contact (``belfry_tags``,
+    ``belfry_headline``, ``belfry_links``, set on the website: sitesessions.py); a member's live
+    in their kind 30078 ``d`` = ``belfry:profile`` event on the community relay, where the chat
+    reads them. When a guest becomes a member they go into that event (tags added after the
+    ones it has, 30 at most; a headline and links only when it has none; the rest of the event
     kept), signed through the signer as the website does for a member, and leave the contact.
     Best effort: nothing for someone who holds their own key (the belfry can't sign for them),
-    and when the relay or the signer doesn't answer the tags stay on the contact. Whether an
+    and when the relay or the signer doesn't answer they stay on the contact. Whether an
     event was published."""
     import time
 
@@ -1267,9 +1268,10 @@ def carry_tags(svc: Services, pubkey: str) -> bool:
     pid = next((m2o_id(r.get("partner_id")) for r in rows if r.get("tier") != "agent"), None)
     if not pid or svc.relay is None:
         return False
-    raw = (svc.odoo.read_one("res.partner", int(pid), ["belfry_tags"]) or {}).get("belfry_tags")
-    tags = sitesessions.clean_tags(raw)
-    if not tags:
+    row = svc.odoo.read_one("res.partner", int(pid), sitesessions.GUEST_FIELDS) or {}
+    held = sitesessions.contact_extras(row)
+    tags = held["tags"]
+    if not (tags or held["headline"] or held["links"]):
         return False
     found = community.member_signer(svc, int(pid))
     if found is None or found[0] != pubkey:
@@ -1280,15 +1282,21 @@ def carry_tags(svc: Services, pubkey: str) -> bool:
     content = sitesessions._extras_content(event)
     have = sitesessions.clean_tags(content.get("tags"))
     merged = (have + [t for t in tags if t not in have])[:30]
+    body = {**content, "tags": merged} if merged != have else dict(content)
+    # a headline and links only where the event has none (the chat's own win)
+    if held["headline"] and not sitesessions.clean_headline(content.get("headline")):
+        body["headline"] = held["headline"]
+    if held["links"] and not sitesessions.clean_links(content.get("links")):
+        body["links"] = held["links"]
     published = False
-    if merged != have:
+    if body != content:
         kept = [t for t in (event or {}).get("tags", []) if isinstance(t, list)]
         new = sign(
             {
                 "kind": 30078,
                 "created_at": max(int(time.time()), int((event or {}).get("created_at") or 0) + 1),
                 "tags": kept or [["d", sitesessions.PROFILE_D]],
-                "content": json.dumps({**content, "tags": merged}, ensure_ascii=False),
+                "content": json.dumps(body, ensure_ascii=False),
             }
         )
         if new.get("pubkey") != pubkey:
@@ -1298,7 +1306,11 @@ def carry_tags(svc: Services, pubkey: str) -> bool:
         from . import events
 
         events.forget_reads()
-    svc.odoo.write("res.partner", [int(pid)], {"belfry_tags": []})
+    svc.odoo.write(
+        "res.partner",
+        [int(pid)],
+        {"belfry_tags": [], "belfry_headline": False, "belfry_links": False},
+    )
     return published
 
 
