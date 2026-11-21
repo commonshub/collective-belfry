@@ -80,8 +80,13 @@ odoo_exec() {
 # ---------- 1. health ----------
 log "1/6 waiting for services"
 [[ "${REGISTER:-}" == belfry ]] || wait_for odoo "$ODOO_URL/web/health"
-wait_for authentik "$AK_URL/-/health/ready/"
-wait_for keycast "$KC_URL/health"
+# SIGNER=belfry (docker-compose.signer.yml): Belfry's own signer, no Keycast and no Authentik.
+# The signer has no port outside its network; the onboarding service waits for its health.
+OWN_SIGNER=0; [[ "${SIGNER:-keycast}" == belfry ]] && OWN_SIGNER=1
+if [[ $OWN_SIGNER -eq 0 ]]; then
+  wait_for authentik "$AK_URL/-/health/ready/"
+  wait_for keycast "$KC_URL/health"
+fi
 # Issuer2's own metadata: behind the proxy the credential issuer metadata comes through the
 # onboarding service, which starts only after bootstrap.
 wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/oauth-authorization-server/openid4vci"
@@ -377,6 +382,9 @@ echo "VAT ${PASS_VAT_RATE:-21}% on the passes (included, excluded tax ids: $VAT_
 
 fi  # Odoo
 
+if [[ $OWN_SIGNER -eq 1 ]]; then
+  log "4/6 and 5/6 skipped: Belfry's own signer (SIGNER=belfry), no Keycast and no Authentik"
+else
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
 # Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*
@@ -633,6 +641,7 @@ ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-issuer" \
   || die "provider belfry-issuer missing or without ISSUER_OIDC_CLIENT_SECRET (run gen-secrets.sh, recreate authentik)"
 echo "blueprint belfry-issuer-app: successful (issuer sign-in for authorization-code offers)"
 set_secret AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
+fi  # Keycast and Authentik
 
 # ---------- 6. summary ----------
 log "6/6 done"

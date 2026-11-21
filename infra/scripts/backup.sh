@@ -63,6 +63,11 @@ envval() { # value of a variable from the environment, else from infra/.env
 compose() {
   local files=(-f "$INFRA/docker-compose.yml")
   [[ -n "$(envval BELFRY_DOMAIN)" ]] && files+=(-f "$INFRA/docker-compose.prod.yml")
+  # a belfry on its own signer (SIGNER=belfry): the signer and its volume are in this file
+  if [[ "$(envval SIGNER)" == belfry ]]; then
+    files+=(-f "$INFRA/docker-compose.signer.yml")
+    [[ -n "$(envval BELFRY_DOMAIN)" ]] && files+=(-f "$INFRA/docker-compose.signer-prod.yml")
+  fi
   docker compose --project-directory "$INFRA" "${files[@]}" --profile app "$@"
 }
 project() { compose config --format json | jq -r .name; }
@@ -71,9 +76,13 @@ project() { compose config --format json | jq -r .name; }
 # the NIP-46 relay and Redis are). The SQLite and LMDB volumes are paused while they are copied.
 # register-data is the belfry's own register (REGISTER=belfry, one SQLite file: people, passes,
 # invites, followers); infra/data holds the theme, the installed apps, the setup page's state and
-# the changelog.
-VOLUMES=(odoo-data register-data mint-data vote-data blossom-data community-relay-data authentik-media git-data)
-PAUSE=(mint vote blossom relay git onboarding)
+# the changelog. signer-data is Belfry's own signer (SIGNER=belfry, one SQLite file): every
+# account, username and session, and the sealed keys that the custody seed cannot give back (keys
+# from before the seed, imported from Keycast). With it the backup needs infra/secrets/
+# signer_master_key (in FILES through infra/secrets): the sealed keys open with nothing else.
+# A volume that does not exist on this belfry is skipped.
+VOLUMES=(odoo-data register-data signer-data mint-data vote-data blossom-data community-relay-data authentik-media git-data)
+PAUSE=(mint vote blossom relay git onboarding signer)
 FILES=(infra/.env infra/data infra/keycast/master.key infra/issuer/keys infra/odoo/odoo.conf
   infra/issuer/config/issuer2-profiles.conf infra/issuer/config/issuer-service.conf
   infra/issuer/config/authentication-service.conf infra/verifier/config/verifier-service.conf
@@ -351,6 +360,12 @@ cmd_drill() {
   if [[ "$(jq length <<<"$diff")" != 0 ]]; then
     jq -r '.[]' <<<"$diff" | sed 's/^/  differs: /'
     jq -r '.[]' <<<"$diff" | grep -Eq "$key_tables" && fail=1
+  fi
+  # Belfry's own signer: its database came back (the volume's file count is checked above) and
+  # the key that opens it is among the restored files.
+  if jq -e '.volumes["signer-data"]' "$dir/manifest.json" >/dev/null; then
+    if [[ -s "$tmp/infra/secrets/signer_master_key" ]]; then say "signer: database and master key restored"
+    else echo "signer-data is in the backup but infra/secrets/signer_master_key is not: the sealed keys cannot be opened" >&2; fail=1; fi
   fi
   [[ $fail == 0 ]] && say "drill passed: $(jq -r '.host + " " + .created' "$dir/manifest.json") restores" || die "drill failed"
 }

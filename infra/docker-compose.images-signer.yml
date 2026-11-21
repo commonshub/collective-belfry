@@ -1,0 +1,7 @@
+# The prebuilt image of Belfry's own signer (.github/workflows/images.yml), for a belfry with
+# SIGNER=belfry: after docker-compose.images.yml and docker-compose.signer.yml (`belfry apply`
+# adds it and sets the tag to the git tree hash of services/signer).
+services:
+  signer:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-signer:${BELFRY_SIGNER_TAG:?set by belfry apply}
+    build: !reset null
