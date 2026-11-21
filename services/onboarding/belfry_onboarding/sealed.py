@@ -792,6 +792,61 @@ def shared_rumors(history: dict[str, Any], receiver: str) -> list[dict[str, Any]
     return out
 
 
+# ── the delivery report of a mail (§7) ──────────────────────────────────────────────────────
+REPORT = 7679
+
+
+def report_for(report: Any, belfry: str) -> tuple[str, str]:
+    """How a client reads a kind 7679 of the belfry: ("letterbox", <lb>) when it has an ``lb``
+    tag (opened with that letterbox's secret, never by the signer), ("signer", "") when it has
+    none (the old kind, to the account key). ValueError when it is not a report of BELFRY."""
+    if not valid_event(report) or report["kind"] != REPORT or report["pubkey"] != belfry:
+        raise ValueError("not a delivery report of the belfry")
+    if not is_key(_one(report, "ephemeral-pubkey")):
+        raise ValueError("the report names no key")
+    lbs = _values(report, "lb")
+    if not lbs:
+        return "signer", ""
+    if len(lbs) != 1 or not is_key(lbs[0]):
+        raise ValueError("the report's lb is not one key")
+    return "letterbox", lbs[0]
+
+
+def read_report(secret: bytes, report: dict[str, Any]) -> dict[str, Any]:
+    """The body of a delivery report, opened with SECRET (a letterbox secret, or the account's
+    for the old kind): NIP-44 with conv(SECRET, the ``ephemeral-pubkey``). ValueError when it
+    does not open."""
+    try:
+        body = json.loads(
+            nip44_decrypt(
+                conversation_key(secret, bytes.fromhex(_one(report, "ephemeral-pubkey") or "")),
+                report["content"],
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — another key's, or not NIP-44
+        raise ValueError("the report does not open with this key") from exc
+    if not isinstance(body, dict):
+        raise ValueError("the report is not an object")
+    return body
+
+
+def open_report(
+    report: Any, belfry: str, key_chain: list[dict[str, str]]
+) -> tuple[str, dict[str, Any] | None]:
+    """What a device does with a kind 7679, given its key chain ([{"lb", "secret"}, …]):
+    ("opened", body); ("signer", None): no ``lb``, the old kind, for the signer as before, never
+    tried with a letterbox; ("locked", None): its letterbox is not in the key chain: kept, tried
+    again when keys arrive. ValueError: not a report, or it does not open with the secret of
+    its own ``lb`` (dropped)."""
+    how, lb = report_for(report, belfry)
+    if how == "signer":
+        return "signer", None
+    held = next((k for k in key_chain if k.get("lb") == lb), None)
+    if held is None:
+        return "locked", None
+    return "opened", read_report(bytes.fromhex(held["secret"]), report)
+
+
 # ── when a roster may say ready (§6) ────────────────────────────────────────────────────────
 COUNTED_DAYS = 30
 

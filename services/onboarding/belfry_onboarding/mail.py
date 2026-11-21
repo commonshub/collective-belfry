@@ -947,8 +947,30 @@ def report(
     Encrypted to the head letterbox of CHAIN (the sender's), named in an ``lb`` tag, when it is
     ready (docs/sealed.md §7); else to their account key. The caller reads the chain, before
     anything is sent (handle_wrap)."""
+    sealed_to = chain.lb if chain is not None and chain.ready else ""
+    event = report_event(
+        _belfry(svc).secret, sender, sealed_to, email_id, rcpts, code, answer, int(time.time())
+    )
+    _publish(svc, event)
+
+
+def report_event(
+    belfry_secret: bytes,
+    sender: str,
+    lb: str,
+    email_id: str,
+    rcpts: list[str],
+    code: int,
+    answer: str,
+    now: int,
+    temp: bytes | None = None,
+    nonce: bytes | None = None,
+    aux: bytes | None = b"",
+) -> dict[str, Any]:
+    """The kind 7679 itself, signed by the belfry key: encrypted from a throwaway key (named in
+    ``ephemeral-pubkey``) to the letterbox LB, with an ``lb`` tag, or to SENDER's account key
+    when LB is "". TEMP, NONCE, AUX fix what is otherwise drawn (the vectors)."""
     status = "delivered" if 200 <= code < 300 else "failed" if code >= 500 else "delayed"
-    now = int(time.time())
     body = {
         "status": status,
         "recipient": ", ".join(rcpts),
@@ -958,21 +980,24 @@ def report(
         ("delivered_at" if status == "delivered" else "failed_at"): now,
         "details": answer[:500],
     }
-    sealed_to = chain.lb if chain is not None and chain.ready else ""
-    to, lb_tag = (sealed_to, [["lb", sealed_to]]) if sealed_to else (sender, [])
-    temp = PrivateKey()
-    content = nip44_encrypt(conversation_key(temp.secret, bytes.fromhex(to)), json.dumps(body))
-    pub = temp.public_key_xonly.format().hex()
-    del temp
-    event = _sign_as_belfry(svc)(
+    once = temp or PrivateKey().secret
+    content = nip44_encrypt(
+        conversation_key(once, bytes.fromhex(lb or sender)), json.dumps(body), nonce
+    )
+    return sealed.sign(
+        belfry_secret,
         {
             "kind": DSN,
             "created_at": now,
-            "tags": [["r", email_id], ["ephemeral-pubkey", pub], *lb_tag],
+            "tags": [
+                ["r", email_id],
+                ["ephemeral-pubkey", sealed.pubkey_of(once)],
+                *([["lb", lb]] if lb else []),
+            ],
             "content": content,
-        }
+        },
+        aux,
     )
-    _publish(svc, event)
 
 
 def reported(svc: Services, email_id: str) -> bool:

@@ -1589,6 +1589,107 @@ def pins() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     return follow_cases, trust_cases
 
 
+# ── the delivery report of a mail (§7) ──────────────────────────────────────────────────────
+def reports() -> dict[str, Any]:
+    from belfry_onboarding import mail
+
+    cases = []
+    lb1 = {"lb": PUB["alice_lb1"], "secret": SECRET["alice_lb1"].hex()}
+    lb2 = {"lb": PUB["alice_lb2"], "secret": SECRET["alice_lb2"].hex()}
+    lb3 = {"lb": PUB["alice_lb3"], "secret": SECRET["alice_lb3"].hex()}
+    now = T0 + 960
+    body = {
+        "status": "delivered",
+        "recipient": "carol@example.org",
+        "smtp_code": 250,
+        "smtp_response": "OK",
+        "attempted_at": now,
+        "delivered_at": now,
+        "details": "OK",
+    }
+
+    def made(name, lb):
+        return mail.report_event(
+            SECRET["belfry"],
+            PUB["alice"],
+            PUB[lb] if lb else "",
+            "0123456789abcdef0123456789abcdef",
+            ["carol@example.org"],
+            250,
+            "OK",
+            now,
+            temp=h("once/" + name),
+            nonce=h("nonce/report/" + name),
+            aux=AUX,
+        )
+
+    first = "a report to the sender's head letterbox"
+    sealed_report = made(first, "alice_lb2")
+    for name, note, report, chain, want in (
+        (
+            first,
+            "§7: Alice's chain is ready, so the report of her mail is encrypted to her head "
+            "letterbox (alice_lb2) and says so in an lb tag. Her device has that secret.",
+            sealed_report,
+            [lb1, lb2],
+            {"state": "opened", "body": body},
+        ),
+        (
+            "the wrong letterbox secret",
+            "The same report; the key chain pairs alice_lb2 with another secret (alice_lb3's): "
+            "it does not open.",
+            sealed_report,
+            [{"lb": PUB["alice_lb2"], "secret": SECRET["alice_lb3"].hex()}],
+            {"state": "error"},
+        ),
+        (
+            "a report without lb is the signer's",
+            "The old kind: encrypted to Alice's account key, no lb tag. The app hands it to the "
+            "signer as before and never tries a letterbox secret on it.",
+            made("a report without lb is the signer's", None),
+            [lb1, lb2],
+            {"state": "signer"},
+        ),
+        (
+            "a report whose lb is not in the key chain",
+            "The same sealed report on a device that holds only alice_lb1 and alice_lb3: kept, "
+            "not opened, tried again when keys arrive.",
+            sealed_report,
+            [lb1, lb3],
+            {"state": "locked"},
+        ),
+    ):
+        try:
+            state, opened = sealed.open_report(report, PUB["belfry"], chain)
+            got = {"state": state} | ({"body": opened} if opened is not None else {})
+        except ValueError:
+            got = {"state": "error"}
+        agree(name, got, want)
+        cases.append(
+            {"name": name, "note": note, "report": report, "key_chain": chain, "expected": want}
+        )
+    # the old kind opens with the account's secret (what the signer does), for completeness
+    agree(
+        "old kind, account key",
+        sealed.read_report(SECRET["alice"], cases[2]["report"]),
+        body,
+    )
+    return {
+        "note": "The kind 7679 delivery report of a member's outgoing mail, signed by the belfry "
+        "key, found by its r tag (the mail's email-id), no p tag. content = NIP-44 with "
+        "conv(secret, the key in ephemeral-pubkey) of a JSON object. With an lb tag the secret "
+        "is that letterbox's; without, the account's (the signer). 'key_chain' is what the "
+        "device holds. expected.state: opened (with the body), signer (no lb: not the "
+        "device's to open), locked (lb not in the key chain: kept), error (does not open with "
+        "the secret held for its lb). The throwaway key is SHA-256('belfry sealed "
+        "vectors/once/' + the first case's name) and the nonce SHA-256('belfry sealed "
+        "vectors/nonce/report/' + that name); the third case uses its own name.",
+        "belfry": PUB["belfry"],
+        "account": PUB["alice"],
+        "cases": cases,
+    }
+
+
 def pin_sections() -> dict[str, Any]:
     follow_cases, trust_cases = pins()
     shape = (
@@ -1652,6 +1753,7 @@ def build() -> dict[str, Any]:
         "history": history(),
         "ready": ready(),
         **pin_sections(),
+        "reports": reports(),
     }
 
 

@@ -210,6 +210,47 @@ def test_every_ready_case(v):
         assert got is case["expected"]["may_carry_ready"], case["name"]
 
 
+def test_every_report_case(v):
+    r = v["reports"]
+    assert len(r["cases"]) >= 4
+    for case in r["cases"]:
+        want = case["expected"]
+        if want["state"] == "error":
+            with pytest.raises(ValueError):
+                sealed.open_report(case["report"], r["belfry"], case["key_chain"])
+            continue
+        state, body = sealed.open_report(case["report"], r["belfry"], case["key_chain"])
+        assert state == want["state"], case["name"]
+        assert body == want.get("body"), case["name"]
+        how, lb = sealed.report_for(case["report"], r["belfry"])
+        assert (how == "signer") == (want["state"] == "signer")
+        assert not any(t[0] == "p" for t in case["report"]["tags"])
+    # the old kind is the account's to open, never a letterbox's
+    old = next(c for c in r["cases"] if c["expected"]["state"] == "signer")
+    assert sealed.read_report(secret(v, "alice"), old["report"])["status"] == "delivered"
+    for key in old["key_chain"]:
+        with pytest.raises(ValueError):
+            sealed.read_report(bytes.fromhex(key["secret"]), old["report"])
+    # and no one else's report
+    with pytest.raises(ValueError):
+        sealed.open_report(r["cases"][0]["report"], v["keys"]["mallory"]["pubkey"], [])
+
+
+def test_the_vector_report_is_what_mail_report_publishes(m, v, sent):
+    """The report in the vectors and the one the belfry really sends have the same shape."""
+    publish_chain(m, ready=True)
+    session(m, PHONE)
+    mail.handle_wrap(m, out_wrap(PHONE))
+    live = dsn(m, "d1")
+    vector = v["reports"]["cases"][0]
+    assert [t[0] for t in live["tags"]] == [t[0] for t in vector["report"]["tags"]]
+    key_chain = [{"lb": pub(LB), "secret": LB.secret.hex()}]
+    state, body = sealed.open_report(live, BELFRY_PUB, key_chain)
+    assert state == "opened" and set(body) == set(vector["expected"]["body"])
+    assert body["status"] == "delivered" and body["recipient"] == "bob@example.org"
+    assert sealed.open_report(live, BELFRY_PUB, []) == ("locked", None)
+
+
 def run_steps(case):
     """The steps of a follow / trust case from its pin: (chain, pin) after the last one. Each
     step's event, pin and chain are checked on the way; the pin goes through JSON each time, as
