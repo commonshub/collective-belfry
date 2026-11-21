@@ -40,7 +40,11 @@ POST https://belfry.<domain>/connect/token
 ```
 
 Then connect to the bunker URL with a fresh client key (step 4). `prompt=none` signs in silently
-when the browser is known and the app approved, else returns `error=login_required`. Sign out:
+when the browser is known and the app approved. An approved app (approved by an admin, served
+by the belfry, or one of its phone apps) whose visitor is not signed in is sent back to its
+registered address with `error=login_required`. An app that is not approved gets no redirect at
+all, not even an error: the belfry shows a page (403), because an address nobody approved is
+never redirected to. So if a silent check never comes back, the app is not approved yet. Sign out:
 forget the bunker URL, and `GET https://belfry.<domain>/connect/logout?return_to=<your page>` to
 end the belfry sign-in too. The rest of this skill is for apps that can't redirect (bots, agents,
 native apps).

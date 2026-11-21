@@ -12,8 +12,14 @@ without changing anybody's key.
 - Phase 2 (same branch, section 1b): with `SIGNER=belfry` a belfry needs **neither Keycast nor
   Authentik nor Redis**. A new belfry can be installed that way; an existing one cannot switch
   yet. **Nothing in production changes**: the default is still `SIGNER=keycast`, unchanged.
-- Phase 3: the migration of a live belfry (section 6: the script, a rehearsal, the switch of
-  one belfry), then the pages Keycast had that Belfry does not have yet (section 5).
+- Phase 3, first part (same branch): the fixes of an independent review (section 1d), the
+  guards that keep a signer from ever making a new key for somebody who has one (section 6,
+  "The guards"), and **the migration as code** (section 6b, "Moving a belfry":
+  `infra/scripts/migrate-to-own-signer.sh` and `migration.py`). Written and unit-tested;
+  **never run against a real Keycast database, signer, Authentik or Docker**.
+- Still ahead: the signer's own items (section 11, "For the Rust round"), a rehearsal on a copy
+  of a real belfry, the switch of one belfry, then what Keycast had that Belfry does not have
+  yet (section 10).
 
 The signer is `services/signer` (Rust), first written by Friedger for OSV in PR #7. Its README
 is the reference for keys, connections, the API and the bunker; this document is the plan.
@@ -43,9 +49,12 @@ the installer or the `belfry` command, or touch what an app sees.
 ## 1b. What phase 2 delivers
 
 **The switch is one setting.** `SIGNER=belfry` means: Belfry's own signer, no Authentik
-(`stewards.own_mode`). The service refuses to start with `PASS_SIGNIN=authentik` next to it, and
-with `SIGNER=keycast` when a token of Authentik or Keycast is missing (`stewards.check_settings`;
-those three settings are no longer required otherwise). `services.authentik` is then an object
+(`stewards.own_mode`). The service refuses to start with `PASS_SIGNIN=authentik` next to it.
+With `SIGNER=keycast` it is exactly as tolerant as before this branch: `AUTHENTIK_TOKEN`,
+`KEYCAST_ADMIN_TOKEN` and `KEYCAST_SERVICE_TOKEN` must be set and may be empty
+(`stewards.check_settings`; they were required fields without a default, and the four production
+servers get this code with the default long before any migration). With `SIGNER=belfry` none
+of the three is needed. `services.authentik` is then an object
 that raises on any use, so a forgotten caller fails in the tests, not silently in production.
 It works with both registers; with `REGISTER=odoo` the Odoo module must be upgraded first (the
 new field `res.partner.belfry_steward`; **not run against a real Odoo**).
@@ -99,6 +108,58 @@ Not Keycast's: the logout is a GET (the apps navigate to it), so another site ca
 browser out of `belfry.<domain>` (a nuisance, nothing more). Sessions of a belfry with Keycast
 keep their cookies as they were (no `sid`).
 
+**A sign-in of an app is not a NIP-46 connection** (since the review). The token exchange opens
+a connection in the signer and hands the app its bunker URL, but the wallet never connects to
+it: it signs over `/api/nostr` only, and the signer drops a connection nobody connected to
+within ten minutes. So the table (`appsignin.sqlite`) alone decides whether a token works; the
+member's list of sessions (`/api/me/sessions`, the console's Devices) is the signer's list plus
+the sign-ins whose connection the signer no longer has (`appsignin.with_grants`, same id: the
+bunker key), and signing a session out ends the sign-in with it (`appsignin.session_revoked`,
+called by `discovery.py`, `console.revoke_device` and `sales.py`). An outside app's sign-in
+does not decrypt (`nip44_decrypt`, `nip04_decrypt`) unless its row says the member allowed it
+(`grants.decrypt`; nothing sets it yet: the sign-in page has no such question).
+
+**A silent sign-in (`prompt=none`)**, decided: an address in the registry (served by the belfry,
+approved by an admin, or the phone apps' `sh.belfry.app://connect`) whose visitor is not signed
+in is redirected to that registered address with `error=login_required`; that is not an open
+redirect. Any other address gets a page (403) and no redirect. The same in both modes
+(`connect.py`, `authorize`; tests in `test_connect.py` and `test_own_mode.py`).
+
+### 1d. The review's findings (phase 3, first part)
+
+| | Finding | What changed | Where |
+| --- | --- | --- | --- |
+| 1 | The name@domain sign-in gave an approved outside app an `own` session | It passes the app's scope, as `/connect` does | `sessions.py:283` (`connect.scope_of`); test `test_signing_in_by_name_gives_an_outside_app_an_outside_session` |
+| 2 | An app that signs over HTTP only lost its sign-in after ten minutes | The sign-in stands on the table, not on the connection (above) | `appsignin.py` `check_live`, `with_grants`, `session_revoked`; test `test_an_app_that_only_signs_over_http_keeps_its_sign_in` |
+| 3 | The first-run setup could be claimed again; a signer started empty would mint keys | Section 6, "The guards" | `signerguard.py`, `setup.has_admin`, `clients/signer.py` `preload_user`, `infra/scripts/belfry` `ever_had_people` |
+| 4 | A chosen username like `50` blocked member 50's account for ever | Nobody chooses a name accounts start with (`usernames.problem`: `reserved`; also the first admin's); a taken member number no longer stops an account: it is made as `member-<id>` (`core.preload_account`, both signers) | `usernames.py:87`, `core.py` `preload_account`, `community.py` `member_token`, `setup.py` `create_first_admin` |
+| 5 | `prompt=none` for an app nobody approved | Decided as above; the two skills say so | `connect.py` `authorize`, `skills/belfry-app/SKILL.md`, `skills/open-source-village/SKILL.md` |
+| 6 | Lows | `mail.py` uses `own_mode`; `redeem` checks `client_pubkey` before it spends the code; `belfry.json` `sign_in.login` names the pass page's sign-in on a belfry without Authentik (the field stays: whether the phone apps decode it strictly was not checked); `signer_master_key` is written 600 (the signer runs as the file's owner, `HOST_UID`, like Keycast: no group read needed); `check_settings` as above; the compose comment about the signer's network is corrected (below) | `mail.py`, `connect.py` `redeem`, `discovery.py`, `gen-secrets.sh`, `stewards.py`, `docker-compose.signer.yml` |
+
+**A suspended member's name still resolves in `nostr.json`**, as with Keycast: its
+`find_pubkey_by_username` (`core/src/repositories/user.rs:762` at `fe9c646`) has no status in
+its WHERE, and the signer's `GET /names/{username}` has none either. Kept the same so a move
+changes nothing; whether a closed membership should keep its address is a product question,
+not a migration one (section 9).
+
+**The signer's network.** The signer shares its internal network with the onboarding service
+(the API's caller) and the bunker relay (which it dials), so the relay can open the API's port.
+The API token, which only the onboarding service holds, is what keeps it out. Giving the signer
+two networks would not change that: containers that share any network reach every port of each
+other. A real split needs the API to listen on one interface only (section 11).
+
+**Which scope each session gets** (every caller of `create_bunker`):
+
+| Caller | Session | Scope | Why |
+| --- | --- | --- | --- |
+| `connect.py:271` (`/connect/token`, and `/api/oauth/token` through it) | an app's sign-in in the browser | `connect.scope_of`: `own` for an app the belfry serves (installed, the chat, the suite when it runs here, the phone apps' address), else `outside` | an admin's approval lets an app sign people in; it does not make it the belfry's |
+| `sessions.py:283` (`POST /api/v1/session`, and by DM) | name@domain and a code | the same function | the phone apps (`sh.belfry.app://connect`) are `own`; any other app is what it is |
+| `setup.py:449` | the first admin's browser on `/setup` | `own` | the console's own page |
+| `guests.py:792`, `events.py:1203` | a guest who joined from a link, in the chat | `own` | the chat signs moderation, AUTH and NIP-98 to the belfry for them |
+| `guests.py:1183` | a guest's code signs an existing account in (`client`: web, iOS, Android) | `own` | the belfry's own chat clients only (`NATIVE_CLIENTS`, else "Chat") |
+| `sales.py:2486`, `ticketsales.py:617` | the browser that bought a pass or a ticket | `own` | the website's checkout then asks the belfry's API with NIP-98 as the buyer, which an `outside` session may not sign |
+| `applyverified.py`, `sitesessions.py`, `remoteapps.py` | none | | they return a bunker URL another of these made, a site session (no bunker), or sign for a remote app inside the service with its own limits |
+
 ## 2. The signer: what was added and fixed
 
 | | What | Where |
@@ -130,6 +191,18 @@ the signer because that is where a NIP-46 request arrives; the service applies t
 function to `/api/nostr`. Chosen against a facade-only limit: an app holding a bunker URL never
 passes the service. A limit on `created_at` was considered and not added: outboxes and sealed
 conversations sign events that are not from now.
+
+**More limits, in the service today and pending in the signer** (decided in the review): an
+outside connection never signs app data named `belfry:…` (kind 30078 with such a `d` tag: the
+sealed conversations' anchor `belfry:sealed`, the read state, the channel order, a channel's
+inbox and web settings), never a label in a `belfry/…` namespace (kind 1985: a pin, a
+proposal's status, a ticket checked in, a vouch, a button's press and answer), and decrypts
+(`nip44_decrypt`, `nip04_decrypt`) only when its connection carries a consent flag, as remote
+apps' connections do. Kind 5 stays allowed. `remoteapps._forbidden` and `/api/nostr` apply
+them now; the signer does not yet, so an outside app that holds a bunker URL can still get
+those signed over NIP-46 until section 11's item 6 is done. The vectors are in
+`services/signer/vectors/limits-next.json`, a separate file on purpose: `limits.rs`'s test
+reads `limits.json` and would fail on cases it does not implement.
 
 Decision to confirm: kinds 0 and 3 are refused to an approved outside app too (the rule of
 remote apps "only when the app said so" has no way to say so at `/connect`). An outside Nostr
@@ -175,9 +248,9 @@ What a caller of the Python client could notice is listed at the top of `clients
 The ones that matter for the product:
 
 - **An unclaimed connection lives 10 minutes**, not 30 days. Every sign-in Belfry does itself
-  names the client key (`sessions.py:279`, `guests.py:792,1183`, `events.py:1203`,
-  `ticketsales.py:617`, `sales.py:2483`), so this meets the two made without: `setup.py:399`
-  (the first admin's session, connected within seconds) and **`connect.py:247`, the `/connect`
+  names the client key (`sessions.py:283`, `guests.py:792,1183`, `events.py:1203`,
+  `ticketsales.py:617`, `sales.py:2486`), so this meets the two made without: `setup.py:449`
+  (the first admin's session, connected within seconds) and **`connect.py:271`, the `/connect`
   sign-in of approved apps** (OAuth code + PKCE: the app gets the bunker URL from the token
   exchange and has to send its first `connect` within ten minutes of it; an app that keeps the
   URL and connects later finds the session gone). Since phase 2: `setup.py` binds the first
@@ -186,7 +259,11 @@ The ones that matter for the product:
   app that does not has ten minutes **from the answer that carries the URL** (the session is
   made in that request, never earlier), and signs in again if it missed them: nothing is
   re-issued by itself. The suite's apps connect at once after the exchange. An agent "acting
-  through a bunker URL" handed over by hand would have to connect within ten minutes.
+  through a bunker URL" handed over by hand would have to connect within ten minutes. An app
+  that never connects and signs over `/api/nostr` (the wallet) loses the connection and keeps
+  its sign-in (section 1c).
+- **An account is read before it is asked for**, and made only with the key the register has
+  for the person (section 6, "The guards"); Keycast's preload made whatever it made.
 - **A client key is never freed.** In Keycast the move to an own key deletes the account's
   authorizations and with them the record of its client keys; here revoked connections stay.
 - **Statuses**: `active` and `suspended` only; `banned` is kept as `suspended`. The reason is
@@ -275,7 +352,44 @@ Keycast's sessions over"): one account a call, one transaction, all or nothing, 
 a bunker key the formula does not give is refused with the row's index. It was tested with
 rows made from the formula, **never with a row of a real Keycast database**.
 
-### What the migration script reads (not written yet)
+### The guards: never a new key for somebody who has one
+
+The worst thing a move can do is not to lose a session but to give a member another key: a
+signer asked for an account it does not have makes one, and for a key from before the custody
+seed (or imported) the key it makes is a different one. `signerguard.py` closes that:
+
+- **Per account.** The own signer's client reads an account before it asks for one. When it
+  must be made and the register already has a key for the person (their newest pass with a
+  key), the signer is asked with `expect_pubkey`: it writes nothing when the key it would make
+  differs, and the client raises `KeyNotHeld` with an error line that names the migration. A
+  key the seed gives again is made again (a lost volume, `restore-keys`); a person the
+  register has no key for is made as always. A register that cannot be read is an error, not
+  "no key". (`clients/signer.py` `preload_user`, `signerguard.register_key` / `install`.)
+- **At start.** With `SIGNER=belfry` the service looks up to 40 members up in the signer (the
+  oldest and the newest). It does not start when the signer holds one with another key, or
+  holds none of them: the log says which and why. `SIGNER_RECOVERING=1` lets a start with none
+  through, for one case only: the signer's volume is lost and the keys are being derived again
+  from the seed; the per-account guard still applies. (`signerguard.check_start`, `app.py`.)
+- **Between import and switch** the running service still has `SIGNER=keycast`: it never
+  talks to the signer, so it cannot make anything there. Only the migration's one-off
+  container does, and it creates accounts with their public key named.
+- **The first-run setup** is open only when all of this holds: there is a setup folder, no
+  `first-admin.json`, nobody is an admin (and the admins' home answers), and **the register
+  has no people**: no pass that is active and none that was ever given a key
+  (`signerguard.has_people`; an invitation nobody took is not a person; a register that does
+  not answer counts as "has people"). A belfry with members and no admin on record is one
+  whose record is missing (the file lost in a restore, the admins not yet copied from
+  Authentik), not a new one. `belfry setup-reset` is the deliberate way to open it: it now
+  also opens such a belfry (it says so and asks), by writing `"open": true` into `reset.json`,
+  which the next first admin clears. A new, empty belfry is claimable as before.
+  (`setup.has_admin`, `reopened`, `reset`.)
+- **`belfry config`** refuses to change `SIGNER` without `BELFRY_SIGNER_MIGRATED=1` whenever
+  the belfry has, or ever had, people: the running service says (`python -m belfry_onboarding
+  has-people`), a `first-admin*.json` (also one a reset archived) or `reset.json` says, and a
+  stack that is down but has data volumes counts as yes. (`infra/scripts/belfry`
+  `ever_had_people`.)
+
+### What the migration reads
 
 Schema read from upstream's `database/migrations` at `fe9c646`; Belfry's patches add no table
 and no column (0022 and 0023 only write `client_pubkey`, `connected_client_pubkey` and
@@ -366,8 +480,8 @@ And around the data:
   same file.
 - **The switch itself**: `BELFRY_SIGNER=belfry BELFRY_SIGNER_MIGRATED=1 belfry config`, then
   `belfry apply` (which stops and removes Keycast's, Authentik's and Redis's containers and
-  leaves their data). `belfry config` refuses the switch on a belfry with a first admin
-  without `BELFRY_SIGNER_MIGRATED=1`. Web sessions of `belfry.<domain>` and the pass page are
+  leaves their data); `migrate-to-own-signer.sh switch` does both. `belfry config` refuses the
+  switch on a belfry that has, or ever had, people without `BELFRY_SIGNER_MIGRATED=1`. Web sessions of `belfry.<domain>` and the pass page are
   the service's own cookies and survive; **Authentik sessions end** (nobody uses them on a
   belfry with `PASS_SIGNIN=belfry`; an OSV-look belfry, `PASS_SIGNIN=authentik`, cannot switch:
   section 5, entry 6).
@@ -377,6 +491,121 @@ And around the data:
   with its access token, asks for a new sign-in at once.
 - **After the switch** the `signer-data` volume is the only place sessions and usernames live:
   it goes into `backup.sh` before the switch, not after (item 9 above).
+
+## 6b. Moving a belfry
+
+`infra/scripts/migrate-to-own-signer.sh <phase>`, as the owner of the checkout or root. Every
+phase can be run again; each prints counts; none prints a key, a secret or an e-mail address
+(public keys are shortened, addresses masked). The Python side is `python -m belfry_onboarding
+signer-migrate plan|import|verify` (`migration.py`), fed Keycast's rows through a pipe: they are
+never written to disk. Reports go to `infra/data/setup/migration/` (counts, vine ids, shortened
+public keys, app names).
+
+**Before the day**: the belfry runs this code with `SIGNER=keycast` (`belfry update`, `belfry
+apply`: so the switch has nothing left to build except the signer); `PASS_SIGNIN=belfry` (a
+belfry that signs in through Authentik cannot move: section 10); backups are set up
+(`BACKUP_RECIPIENTS`, `BACKUP_TARGET`); the custody seed is unlocked.
+
+| | Command | What it does | What is down |
+| --- | --- | --- | --- |
+| 1 | `migrate-to-own-signer.sh check` | Read-only. The code's commit, the settings, free disk (stops under 1 GB; a signer built on the box needs about 3 GB for 15 to 30 minutes), the master key, the seed; that Keycast's database, Authentik and the register answer; then the plan: accounts by kind (`member`, `guest`, `agent`, `own_key`, `no_vine_id`), usernames, suspended, sessions by state (`served`, `revoked`, `expired`, `never_connected`, `unverified`), how many live ones are the belfry's own apps' and how many outside apps', and every problem | nothing |
+| 2 | `… backup` | A backup from the last hour, or `backup.sh run` now. Without a successful one nothing else runs (import wants one from the last 24 hours, switch and cleanup one from the last hour) | as every night: the services with a data volume are paused for the copy |
+| 3 | `… import` | Makes `signer_token` and `signer_master_key` if missing and checks the latter **is** Keycast's `master.key`; starts the signer next to Keycast with its bunker off (`docker-compose.signer-import.yml`: it answers no NIP-46 request, so no request gets two answers); imports keys with the public key each must open to, members' own keys, usernames, suspended state, sessions (per account, 400 rows or 256 kB a call: the signer's body limit is 2 MB), and Authentik's admins into the register's flag | nothing; the belfry runs on Keycast |
+| 4 | `… verify` | For every account: the signer's key = Keycast's = the register's; custody, username, state; every served session is live in the signer with its bunker key and client key, and nothing else is; every person of the register is in the signer; the admins. A report file. Exit 1 on any difference | nothing |
+| 5 | `… switch` | A fresh backup; asks for `switch <domain>`; **stops Keycast and the service** (nothing writes to Keycast's database from here); a last import; the verify that decides (not clean: Keycast and the service start again, nothing was switched); `BELFRY_SIGNER=belfry BELFRY_SIGNER_MIGRATED=1 belfry config`; `belfry apply`; then waits for the signer, asks the service, and verifies the keys once more | **the belfry**, from the stop to the end of `belfry apply` |
+| 6 | `… rollback` | Asks for `rollback <domain>`; stops the signer and removes its container (not its volume); `BELFRY_SIGNER=keycast`; `belfry apply` brings Keycast, Authentik and Redis back on their untouched data | the belfry, for one `belfry apply` |
+| 7 | `… cleanup` | Only at a terminal, only with the two clean reports (the one the switch was decided on and one from after it), only seven days after the switch (`--before-seven-days` overrides), after a fresh backup, after the typed sentence `delete keycast and authentik of <domain>`: empties Keycast's and Authentik's databases (they stay, empty: Postgres' health check looks for `keycast`), removes Authentik's two volumes and the five containers. Keeps `infra/keycast/master.key`, the seed, the backups | nothing |
+
+`… status` shows where a belfry is. Options: `--exclude <pubkey>` (leave one Keycast account
+out on purpose: an account without a `vine_id` stops check, import and verify until it is named),
+`--accept-lost-sessions N`, `--accept-missing-stewards N` (below), `--yes` (no question before
+switch or rollback; never for cleanup).
+
+**How writes between import and switch are kept out.** They are not kept out: the belfry runs
+normally between steps 3 and 5, people join and sign in, and the rehearsal's verify goes stale
+(it then says `account_not_imported` or `session_missing`: run import again). What decides is
+the verify inside `switch`, made after Keycast (its API and its signer daemon, one container)
+and the onboarding service are stopped: with those two down nothing writes to Keycast's
+database, the last import reads its final state, and the report carries a digest of the rows
+it compared. The alternative, comparing a report's time with the database's last write, was
+dropped: Keycast writes a use counter on every signature, so the database is never quiet while
+it runs.
+
+**How long it is down.** From the stop to the end of `belfry apply`: the last import and verify
+are four short container runs (a minute or two for some hundred accounts and some thousand
+sessions: an estimate, never measured), then one `belfry apply` that recreates the signer, the
+service and the proxy and removes five containers. Three to ten minutes on the boxes we run;
+one `apply` has taken thirty minutes on the smallest. Down in that time: signing (the chat and
+the phone apps cannot post or authenticate to the relays), every sign-in, the service's pages
+and API (console, invitations, checkout, the website it serves, incoming mail is deferred),
+uploads (the file server asks the service). The relays themselves keep running; what incoming
+mail does while the service is away (refused for the moment, or deferred by the sender) was
+not checked.
+
+**What the operator sees** when it goes well: in `check`, five lines of counts ending in
+`problems: 0` and `check: nothing stands in the way`; in `import`, `keys: N derived from the
+seed, N imported as they are, N there already, N members' own`, the usernames, the sessions
+(`live written`, `revoked written`, `there already`) and the admins; in `verify`, `verified: N
+accounts, N keys equal in Keycast, the signer and the register, …` and `verify: CLEAN` with the
+report's path; in `switch`, the same twice more around `belfry apply`, and how long it took.
+When it does not: every problem and every mismatch is one line of JSON naming the account by its
+vine id (`odoo-partner-<id>`), and the phase exits 1.
+
+**What can stop it**, and what to do:
+
+- `no_vine_id`: an account made on Keycast's own pages. Decide per account; `--exclude` leaves
+  it behind on purpose.
+- `username_not_carried`: a username outside the signer's `a-z 0-9 . _ -` (1 to 63). Rename it
+  in Keycast first.
+- `register_has_another_key`, `member_not_in_keycast`: the register and Keycast disagree about
+  a person. Never go on; find out why.
+- `session_lost`: two accounts in use have a live session with the same client key (possible
+  for sessions older than Keycast patch 0023). One account keeps the key: an active one before
+  a suspended one, a served session before a revoked one, then the one used last; the other
+  device signs in again. Accept it by number, `--accept-lost-sessions N`, or sign that device
+  out first. A suspended account's session never costs an active account its key (the eight
+  guests one phone made on Enspiral: seven closed ones do not take the key from the eighth).
+- `unverified` sessions in the counts (connected, but `verified_client_pubkey` is not the
+  connected key): §6 reads Keycast as not serving them, so they are left out. **If that number
+  is not zero on a real belfry, stop and read Keycast's `validate_client` again**: if they are
+  served after all, those members would be signed out.
+- `steward_without_person`: an admin in Authentik with no person in the register. Nothing to
+  carry; accept by number, `--accept-missing-stewards N`, or give them a membership first.
+
+**What members notice.**
+
+- **The web chat and the phone apps stay signed in.** Their sessions are carried with their
+  bunker keys and client keys, so sealed conversations keep their devices. They cannot send for
+  the minutes of the switch.
+- **Apps of the suite** (calendar, vote, groups, village; only where they run) keep signing
+  over NIP-46 and sign in again at their next token refresh; **the wallet** signs in again at
+  once (section 6).
+- **A sign-in link or bunker URL that was handed out and never connected to** no longer works:
+  ask for a new one. (`never_connected` in the counts.)
+- **Outside apps an admin approved** keep their session with the limits of an outside app
+  (section 2): no profile or contact list, nothing for the belfry's own hosts, relays, labels
+  or app data.
+- **`apps.<domain>`**: Keycast's pages are gone (dashboard, security, key export, move to an
+  own key: section 10). The address leads to `belfry.<domain>`.
+- Members who hold their own key, remote apps (`remoteapps.py`), passes in wallets, mail,
+  push: nothing changes. `nostr.json` answers the same names.
+- Admins are who they were. A session of Authentik (`login.<domain>`) ends; nobody uses one
+  on a belfry with `PASS_SIGNIN=belfry`.
+
+**Rolling back.** Before the switch there is nothing to roll back: stop the import's signer
+(`BELFRY_SIGNER_IMPORT=1 belfry compose stop signer`) or leave it. After it, `… rollback`:
+Keycast and Authentik come back as they were, because nothing wrote to them. What the signer
+gained since the switch does not go back: sessions opened since end (those devices sign in
+again), usernames and admins changed since are as they were before, people who joined since
+get the same key from Keycast when it is a derived one (the same seed), and nobody else has
+any other. The signer's volume is kept, so a second attempt starts from it (`existing` rows).
+
+**Never run.** No part of the script has run against Docker, Postgres, a real signer or
+Authentik: the SQL (column names and types are from upstream's migrations), `compose run` with
+the import override, the image pull or build, `backup.sh` from inside it, `belfry config` and
+`apply` in sequence, the health waits. The Python side is unit-tested against rows shaped like
+§6's and a stand-in for the signer that applies its rules. The first run belongs on a copy of a
+real belfry restored from a backup (`backup.sh drill` makes one), not on a belfry.
 
 ## 7. How to try it
 
@@ -459,6 +688,16 @@ Not run, and why it matters:
 - `limits.rs`'s host parsing was held to Python 3.12's `urlsplit` through the vectors only.
 - Limits kept in memory (codes, flows) assume one process, as the rest of the service does.
 
+What was run in phase 3's first part: the Python suite (numbers at the end of this section's
+list), `bash -n` on `migrate-to-own-signer.sh` and `belfry` (shellcheck is not installed on the
+machine), and `docker compose config` on the merged files with `docker-compose.signer-import.yml`
+(the signer comes up with `BUNKER_RELAYS` empty next to Keycast, Authentik and Redis; the
+onboarding service keeps `SIGNER` unset and gains the signer's network and token; with the
+prebuilt images the signer's image is the tagged one) and with `docker-compose.signer.yml`. No
+Docker container, no cargo, no Rust change: the disk was nearly full again (4 GB free). So the
+signer does **not** yet do what section 11 lists, and `limits-next.json` is tested in Python
+only.
+
 ## 9. Open questions
 
 1. **Self-custody and key export** (section 5, entries 2 and 5): pages a member sees, so they
@@ -474,3 +713,77 @@ Not run, and why it matters:
    `--own-signer`. Proposed: after one belfry has run on it and the migration is rehearsed.
 6. **The first belfry to migrate**: one with `PASS_SIGNIN=belfry`, `OSV_APPS=0` and few
    members (belfry.sh or belfry.brussels); never the OSV-look setup first.
+7. **A suspended member's address** keeps resolving in `nostr.json` (section 1d), as with
+   Keycast. Should a closed membership lose its NIP-05 name? Then both signers' answers change
+   together, after the move.
+8. **Usernames that look like member numbers** are now refused to people who choose one
+   (`50`, `member-12`, `guest-12`, and any `xx-NN`: two to six letters, a dash, two or more
+   digits, the old `osv-0007` shape). That last pattern also refuses `bob-42`. Narrow it to the
+   belfry's own member-number prefix?
+9. **Consent to decrypt for an outside app**: the flag exists on a sign-in (`grants.decrypt`)
+   and nothing sets it. The sign-in page needs the question (drawn first), or outside apps
+   never read private messages over `/api/nostr`.
+
+## 10. Not available yet in belfry mode
+
+For the next rounds. Each is absent, not broken: nothing on a belfry with its own signer
+offers it.
+
+| What | Where it stands | Where to pick it up |
+| --- | --- | --- |
+| **Move to an own key** (self-custody) | The signer can (`POST /accounts/{id}/own-key`: `services/signer/src/api.rs:205`, route `:549`) and the service knows what follows (`core.key_changed`, `core.py:603`; Keycast's hook `app.py:552` stays routed and unused). No page and no endpoint join them: a member cannot do it | a page with a fresh e-mail code and a proof of the new key (canvas first), calling the signer and then `key_changed` |
+| **Key export** | The signer can (`POST /accounts/{id}/export`: `api.rs:335`, `signer.rs:730`); nothing in the service calls it | the same page; `clients/signer.py` has no `export` method on purpose until then |
+| **EUDI-wallet sign-in** (sign in with the pass) | Lived in Authentik through the bridge (`bridge.py:110` `start_authorization`, an OIDC provider for Authentik's source). Nothing calls it without Authentik | its own step in `passlogin.py` (the bridge's verifier side is reusable), if wanted (section 9, question 4) |
+| **`nostrconnect://`** to the signer | Not answered by the signer (`services/signer/README.md:112`). Members' other Nostr apps go through the service's own remote signer (`remoteapps.py:4`, `:176`), which works in both modes | nothing to do unless the signer should answer it itself |
+| **The issuer's own login** (walt.id Issuer2's authorization-code flow) | Points at Authentik (`infra/issuer/config/authentication-service.conf.tmpl:12-13`; the shim `app.py:767`, `:777`). Passes are issued with a pre-authorized code, which does not use it; whether Issuer2 starts without Authentik is not verified | start a stack and see; then drop the config or point it at the bridge |
+| **`smoke.sh` and the `*-check` scripts** | Drive Keycast's and Authentik's pages (`infra/scripts/smoke.sh:29-30`, `:380`, `:387`, `:486`; `silent-signin-check.sh`, `self-custody-check.sh`, `chat-login-check.mjs`, `wallet-check.mjs`, …). `signer-smoke.py` is the only check of this mode | a `smoke.sh` branch for `SIGNER=belfry` (e-mail and code sign-in, `/api/oauth/*` of `appsignin.py`) |
+| **A session's `redirect_origin`** | Always empty (`clients/signer.py:349`, `appsignin.py:459`): the signer keeps no origin. `discovery.chat_session` (`discovery.py:323`) tells a chat session by its name and accepts an empty origin | section 11, item 9 |
+| **Consent to decrypt, profile and contacts for outside apps** | Refused (`remoteapps.py` `_forbidden`, `allowed`; `appsignin.py` `rpc`) with no way for a member to allow them | section 9, questions 2 and 9 |
+
+## 11. For the Rust round
+
+Nothing in `services/signer` changed in phase 3's first part. What the signer needs next, from
+the review and from writing the migration:
+
+1. **A failed `renew` keeps `subscribed` true and waits 300 s** (`bunker.rs:473-483`: `renew(…)
+   || subscribed`, then `renew_at = now + RENEW`), so new connections are not listened for
+   until then; and **`wait_subscribed` returns at once while disconnected**
+   (`signer.rs:370-375`), so the API answers "made" for a connection nobody listens on.
+2. **`ensure_account` checks, then upserts** (`signer.rs:463-500`, `store.rs:386-393`: `ON
+   CONFLICT (vine_id) DO UPDATE SET pubkey = …`): two requests at once can both pass the check,
+   and the second write replaces the first row. Insert-or-fail in one statement, then read.
+3. **The rate-limit bucket is chosen before `event.verify()`** (`bunker.rs:213-218`): a forged
+   event with the client's public key spends the client's allowance.
+4. **Unclaimed connections migrated from the PR's schema never expire** (no `expires_at`).
+5. **The body limit and `/import/connections`**: 5,000 rows a call are allowed
+   (`api.rs:465`), axum's default body limit is 2 MB. The migration sends 400 rows or 256 kB a
+   call, so it is not hit today; raise the limit for that route or lower the row limit.
+6. **More limits for outside connections** (decided; the service applies them already,
+   section 2): decrypt (`nip44_decrypt`, `nip04_decrypt`) only when the connection carries a
+   `decrypt` consent flag (`POST /accounts/{id}/connections {…, decrypt: true}`, kept on the
+   row, as `remoteapps.py` keeps it); never a signature for kind 30078 with a `d` tag starting
+   `belfry:` nor for kind 1985 with an `L` tag, or an `l` tag's mark, that is `belfry` or starts
+   `belfry/` (trimmed, any case); kind 5 stays allowed. Vectors:
+   `services/signer/vectors/limits-next.json` (`cases` for `sign_event`, `methods` for the
+   decrypt flag). When `limits.rs` passes them: move the cases into `limits.json`, delete the
+   file, point `test_more_limits_the_signer_does_not_have_yet` at the one file, and have
+   `clients/signer.py` `create_bunker` and `/import/connections` carry the flag.
+7. **Reading for the migration's verify**: `GET /accounts/{id}/connections` lists live
+   connections only, so revoked rows that were imported cannot be compared (the report counts
+   them as `not_verifiable`); an `?all=true` would close that. And there is no list or count of
+   accounts, so verify cannot see an account the signer has that Keycast did not, and the
+   start check samples 40 members instead of comparing all.
+8. **A mode that makes no accounts**: the guard against new keys is in the service
+   (`expect_pubkey` on every creation, section 6). A signer switch (`SIGNER_NO_NEW_ACCOUNTS=1`,
+   or refusing `PUT` without `expect_pubkey` / `own_pubkey` once it holds accounts) would hold
+   even if a caller forgot.
+9. **A connection's origin**: keep the address a session was opened from (`origin` on
+   creation, in the list), so `redirect_origin` is not always empty and the migration can
+   carry Keycast's.
+10. **The API on one interface**: the bunker relay shares the signer's network and reaches
+    the API's port (section 1d). A second listener address, or a Unix socket for the API,
+    would let Compose keep the relay out.
+11. **A sign-in without a connection**: the service no longer ties an app's HTTP sign-in to a
+    NIP-46 connection (section 1c), and `/sign` takes a `connection` id whose limits it applies
+    (README, "API"). If HTTP sign-ins should be limited by the signer too, it needs a kind of
+    connection with no bunker key and no deadline for them to name.
