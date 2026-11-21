@@ -35,9 +35,9 @@ import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
-import { AllowPrompt, DevicesScreen, EncryptionScreen, OnlyDeviceAlert, ShowHowScreen } from './Sealed'
+import { AllowPrompt, DevicesScreen, EncryptionScreen, FreshElsewherePrompt, OnlyDeviceAlert, ShowHowScreen } from './Sealed'
 import { askNow, testSignRoster, chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
-import { demoAsk, demoLinked, demoUnlockHere, onlyDevice } from '../core/sealed'
+import { demoAsk, demoFreshElsewhere, demoLinked, demoUnlockHere, onlyDevice } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen, eventPath } from './Calendar'
@@ -201,7 +201,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         watchDms() // others typing to me (typing.ts): one live subscription on the community relay
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, demoSealed, demoAsk, demoLinked, demoUnlockHere, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
+        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, demoSealed, demoAsk, demoLinked, demoUnlockHere, demoFreshElsewhere, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -379,7 +379,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
   const current = section === 'c' ? chanId : section === 'events' ? a : undefined
   const place = places ? placeOf(route) : undefined
-  if (!wide) return <><Phone current={current} section={section} open={drawer} bar={place ? <TabBar place={place} /> : undefined}>{view}</Phone>{toast}<AllowPrompt /></>
+  if (!wide) return <><Phone current={current} section={section} open={drawer} bar={place ? <TabBar place={place} /> : undefined}>{view}</Phone>{toast}<AllowPrompt /><FreshElsewherePrompt email={session.email} /></>
   return (
     <div className="layout wide">
       <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} top={places ? <SidePlaces place={place} /> : undefined} /></aside>
@@ -387,6 +387,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
       {pane && <aside className="thread-pane" aria-label="Thread">{pane}</aside>}
       {toast}
       <AllowPrompt />
+      <FreshElsewherePrompt email={session.email} />
     </div>
   )
 }

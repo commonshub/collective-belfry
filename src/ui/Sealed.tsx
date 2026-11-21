@@ -8,7 +8,7 @@ import { touch, useVersion } from '../core/store'
 import { FULL, PENDING_OTHER, active as sealedOn, mySessions } from '../core/sealedrt'
 import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
-import { canStartFresh, startFresh, canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
+import { answerElsewhere, freshElsewhere, signOutOthers, canStartFresh, startFresh, canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
 import { MailIcon } from './icons'
 import { Avatar, Sheet, SheetOrPopover, go, up, type Anchor } from './common'
 
@@ -405,6 +405,59 @@ export function OnlyDeviceAlert({ verb, onGo, onClose }: { verb: 'sign out' | 'f
       <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={() => { onClose(); go('accounts/link') }}>Link a device</button>
       <button className="btn seal-red" disabled={busy} aria-busy={busy || undefined} onClick={() => void go2()}>{busy ? <><Spin /> {verb === 'forget' ? 'Forgetting…' : 'Signing out…'}</> : verb === 'forget' ? 'Forget anyway' : 'Sign out anyway'}</button>
       <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+    </dialog>
+  )
+}
+
+/** "Today at 9:41 PM", "Yesterday at …", "12 Nov at …". */
+function atWords(at: number): string {
+  const d = new Date(at), now = new Date()
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diff = Math.round((day(now) - day(d)) / 86400e3)
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  return `${diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : dayMonth(at)} at ${time}`
+}
+const andList = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
+
+/** Boards messages/encryption-fresh-elsewhere and -done (canvas v122): an old browser, still signed
+ *  in, learns my sealed conversations were started fresh on another device. Over any page, back at
+ *  every load until a button is clicked; no ×. EMAIL: the account's, for the done state. */
+export function FreshElsewherePrompt({ email }: { email?: string }) {
+  useVersion()
+  const e = freshElsewhere()
+  const ref = useRef<HTMLDialogElement>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState<string[] | null>(null)
+  const open = !!e || done !== null
+  useEffect(() => { const d = ref.current; if (open && d && !d.open) d.showModal() }, [open])
+  if (!open) return null
+  const finish = async (then?: () => void) => { await answerElsewhere(); setDone(null); then?.() }
+  if (done) return (
+    <dialog ref={ref} className="seal-alert seal-elsewhere-done" role="alertdialog" aria-labelledby="seal-else-t" onCancel={(ev) => ev.preventDefault()}>
+      <span className="seal-ok"><Ico size={32}><path d="M5 12.5l4.5 4.5L19 7.5" /></Ico></span>
+      <h2 id="seal-else-t">Every other device is signed out</h2>
+      <p>{done.length ? `${andList(done)} can’t open your account any more.` : 'No other device can open your account any more.'}</p>
+      <p>Someone may have signed in with a code sent to {email || 'your e-mail'}: change that e-mail’s password.</p>
+      <p>To read sealed conversations here again, start fresh on this device.</p>
+      <button className="btn" style={{ marginTop: 14 }} onClick={() => void finish(() => go('dm/unlock'))}>Show how</button>
+      <button className="btn ghost" onClick={() => void finish()}>Done</button>
+    </dialog>
+  )
+  const name = e!.name
+  return (
+    <dialog ref={ref} className="seal-alert seal-elsewhere" role="alertdialog" aria-labelledby="seal-else-t" onCancel={(ev) => ev.preventDefault()}>
+      <span className="seal-dvbig"><Ico size={30}><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M11 18.5h2" /></Ico></span>
+      <h2 id="seal-else-t">Sealed conversations were started fresh on {name ? `“${name}”` : 'a new device'}</h2>
+      <span className="seal-meta">{atWords(e!.at)}</span>
+      <p>This device can’t read new sealed messages until it’s allowed again.</p>
+      <p><b>If this wasn’t you, sign out every other device.</b></p>
+      {error && <div className="error">{error}</div>}
+      <button className="btn seal-red" style={{ marginTop: 14 }} disabled={busy} aria-busy={busy || undefined} onClick={async () => {
+        setBusy(true); setError('')
+        try { setDone(await signOutOthers()) } catch (x) { setError(x instanceof Error ? x.message : String(x)) } finally { setBusy(false) }
+      }}>{busy ? <><Spin /> Signing out…</> : 'Sign out every other device'}</button>
+      <button className="btn ghost" disabled={busy} onClick={() => void finish()}>It was me</button>
     </dialog>
   )
 }

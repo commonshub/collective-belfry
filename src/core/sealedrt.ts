@@ -37,7 +37,10 @@ interface State {
   fresh: Record<string, Fresh> // person → their latest fresh start noticed
   first: Record<Conv, number> // conv → when this device first saw it sealed
   asked: number // my last device request
+  /** canvas v122: my sealed conversations were started fresh on another device while this one held my keys */
+  elsewhere?: Elsewhere
 }
+export interface Elsewhere { root: string; device: string; at: number; answered?: boolean }
 const emptyState = (): State => ({ keys: {}, pins: {}, convs: [], shared: {}, unshared: [], fresh: {}, first: {}, asked: 0 })
 let st: State = emptyState()
 
@@ -62,7 +65,9 @@ function merge(a: State, b: State): State {
   const unshared = [...new Set([...a.unshared, ...b.unshared])]
   const shared = { ...b.shared, ...a.shared }
   for (const r of unshared) delete shared[r]
-  return { keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked) }
+  const ea = a.elsewhere, eb = b.elsewhere
+  const elsewhere = !ea ? eb : !eb ? ea : ea.root === eb.root ? { ...ea, answered: !!(ea.answered || eb.answered) } : ea.at >= eb.at ? ea : eb
+  return { ...(elsewhere ? { elsewhere } : {}), keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked) }
 }
 
 let device: { secret: Uint8Array; pub: string } | null = null
@@ -276,6 +281,16 @@ function notePin(pk: string, c: C.Chain, next: C.Pin, event: C.FollowEvent, rost
   const fresh: Fresh | undefined = event === 'fresh_start' ? { root: c.rosters[0].id, at: c.rosters[0].created_at * 1000, shared: [] }
     : event === 'switch' ? { root: c.rosters[0].id, head: head.id, at: Date.now(), shared: [] } : undefined
   if (fresh) st.fresh[pk] = fresh
+  // canvas v122: my own account started fresh by another device while this one held my keys (it was
+  // in my head): said at once, and at every load until answered (an attacker after the e-mail code)
+  const root = c.rosters[0]
+  if (pk === me() && event === 'fresh_start' && device && root.signer !== device.pub && !head.devices.includes(device.pub) && Object.keys(st.keys).length && st.elsewhere?.root !== root.id) {
+    const e: Elsewhere = { root: root.id, device: root.signer, at: root.created_at * 1000 }
+    st.elsewhere = e
+    void commit((s) => { if (s.elsewhere?.root !== e.root) s.elsewhere = e })
+    void mySessions(0).then(() => touch(), () => {}) // the new device's name, from a fresh session list
+    touch()
+  }
   void commit((s) => { s.pins[pk] = { ...pin, heads: { ...(event === 'fresh_start' ? {} : s.pins[pk]?.heads ?? {}), ...pin.heads } }; if (fresh) s.fresh[pk] = fresh })
   if (event === 'switch' && pk === me()) scheduleMyDevice(1000)
 }
@@ -837,7 +852,25 @@ async function takeHandovers() {
     handoverTried.set(w.id, 'done')
     const added = await addKeys(got)
     if (added.length) { keysArrived(added); scheduleMyDevice(2000) /* in the head now: my name (§3.5) */ }
+    await handBack(opened.seal.pubkey, got)
   }
+}
+
+/** §5.4: an old device of mine, allowed again after a fresh start, sends the device that allowed it
+ *  the keys it holds that the hand-over didn't bring (the old chain's: the earlier messages open
+ *  again there). Once per giver (kv); only to a device of my head now. */
+const KV_BACK = 'sealed:handback:'
+async function handBack(giver: string, got: C.LbKey[]) {
+  if (!device || giver === device.pub) return
+  const c = chainOf(me())
+  if (!c || !C.headOf(c).devices.includes(giver) || !C.headOf(c).devices.includes(device.pub)) return
+  const brought = new Set(got.map((k) => k.lb))
+  const extra = Object.entries(st.keys).filter(([lb]) => !brought.has(lb)).map(([lb, secret]) => ({ lb, secret }))
+  if (!extra.length || (await kvGet(KV_BACK + giver).catch(() => undefined))) return
+  try {
+    for (const chunk of C.keyChunks(device.pub, me(), extra, nowS())) await publishNow('main', C.handKeys(device.secret, me(), chunk, giver))
+    await kvSet(KV_BACK + giver, { giver, at: Date.now() }).catch(() => {})
+  } catch { /* not accepted: tried again at the next hand-over from it */ }
 }
 
 /** Canvas v90: Allow on a 21st device. */
@@ -881,6 +914,37 @@ async function handAllKeys(dev: string): Promise<boolean> {
     noteHanded(dev)
     return true
   } catch { return false }
+}
+
+/** canvas v122: the fresh start made elsewhere, until one of its buttons is clicked. */
+export const freshElsewhere = (): Elsewhere | undefined => (st.elsewhere && !st.elsewhere.answered ? st.elsewhere : undefined)
+export async function answerElsewhere() {
+  const e = st.elsewhere
+  if (!e) return
+  st.elsewhere = { ...e, answered: true }
+  await commit((s) => { if (s.elsewhere?.root === e.root) s.elsewhere = { ...s.elsewhere, answered: true } })
+  touch()
+}
+export const OTHERS_NOT_OUT = 'Couldn’t sign out every device. Try again.'
+/** "Sign out every other device": every session of my account but this device's ends
+ *  (/me/sessions/revoke); then this device asks to be allowed again (§5.2). The names of those
+ *  signed out; OTHERS_NOT_OUT when the list can't be read or any session stays. */
+export async function signOutOthers(): Promise<string[]> {
+  const sessions = await mySessions(0)
+  if (!sessions || !device) throw new Error(OTHERS_NOT_OUT)
+  const others = sessions.filter((r) => r.client_pubkey !== device!.pub && r.bunker_pubkey)
+  let failed = false
+  const names: string[] = []
+  for (const row of others) {
+    try {
+      const r = await signedFetch(`${BELFRY.api}/me/sessions/revoke`, 'POST', { bunker_pubkey: row.bunker_pubkey })
+      if (r.ok) names.push(row.device || row.application_name || 'A device'); else failed = true
+    } catch { failed = true }
+  }
+  sessionsCache = null
+  if (failed) throw new Error(OTHERS_NOT_OUT)
+  await ask(0).catch(() => { /* asked again at the next start */ })
+  return names
 }
 
 /** Not me: end that device's session; no roster change. Says so when it can't. */

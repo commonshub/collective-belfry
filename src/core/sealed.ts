@@ -295,4 +295,23 @@ export function demoUnlockHere() { state.lockedHere.clear(); touch() }
 export function demoAsk(name: string, kind: DeviceKind = 'computer', full = false) { demo = true; state.full = full; state.asking = { id: crypto.randomUUID(), name, kind, at: Date.now() - 120e3 }; touch() }
 /** Demo: a device came in by scanning my Link code. */
 export function demoLinked(name: string, kind: DeviceKind = 'tablet') { demo = true; state.linked = { name, kind }; touch() }
+// canvas v122 messages/encryption-fresh-elsewhere: my sealed conversations were started fresh on
+// another device while this one held my keys
+let demoElse: { name: string; at: number } | undefined
+let demoElseFails = false
+/** The fresh start made elsewhere, until answered: the device's name ('' when the sessions don't
+ *  name it) and when (ms). */
+export function freshElsewhere(): { name: string; at: number } | undefined {
+  if (real()) { const e = R.freshElsewhere(); return e ? { name: sessionName(e.device), at: e.at } : undefined }
+  return demoElse
+}
+export async function answerElsewhere() { if (real()) return R.answerElsewhere(); demoElse = undefined; touch() }
+/** Every other session ends; the names of those signed out. */
+export async function signOutOthers(): Promise<string[]> {
+  if (real()) return R.signOutOthers()
+  await later()
+  if (demoElseFails) { demoElseFails = false; throw new Error(R.OTHERS_NOT_OUT) } // demo: fails once
+  return state.mine.filter((d) => !d.here).map((d) => d.name)
+}
+export function demoFreshElsewhere(name = 'Chrome on Windows', failing = false) { demo = true; demoElseFails = failing; demoElse = { name, at: Date.now() - 60e3 }; touch() }
 export const resetSealed = () => { state = empty(); demo = false; touch() }
