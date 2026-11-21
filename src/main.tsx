@@ -88,5 +88,5 @@ createRoot(document.getElementById('root')!).render(<Guard whole><App /></Guard>
 ;(window as unknown as { __belfryStarted?: boolean }).__belfryStarted = true // boot.js: no fallback needed
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  navigator.serviceWorker.register('./sw.js').catch(() => { /* offline shell is a bonus */ })
+  navigator.serviceWorker.register(import.meta.env.BASE_URL + 'sw.js').catch(() => { /* offline shell is a bonus */ })
 }

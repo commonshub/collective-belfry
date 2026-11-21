@@ -18,6 +18,9 @@ function belfryNames(): Plugin {
         .replace(/(<meta name="theme-color" content=")[^"]*/, '$1#ffffff')
         .replace('./icons/apple-touch-icon.png', './icons/belfry/apple-touch-icon.png')
         .replace('./icons/icon-192.png', './icons/belfry/icon-192.png')
+        // always at the root of chat.<domain>, also opened at a path (chat.<domain>/login/<username>,
+        // served as is so the #l= secret survives): the page's own files from the root
+        .replace(/(src|href)="\.\//g, '$1="/')
     },
     generateBundle() {
       if (!on) return
@@ -37,7 +40,8 @@ function belfryNames(): Plugin {
   }
 }
 
-// base './' so the build works from any sub-path (e.g. /projects/osv-app/)
+// base './' so the build works from any sub-path (e.g. /projects/osv-app/); the Belfry chat is
+// always at the root of chat.<domain> and is opened at paths too (/login/<username>): '/'
 // the chat's version, shown in About Belfry: the commit it is built from and the day
 const version = (() => {
   let sha = 'dev'
@@ -45,4 +49,4 @@ const version = (() => {
   return `${sha} · ${new Date().toISOString().slice(0, 10)}`
 })()
 
-export default defineConfig({ base: './', plugins: [react(), belfryNames()], define: { __CHAT_VERSION__: JSON.stringify(version) } })
+export default defineConfig({ base: process.env.VITE_THEME === 'belfry' ? '/' : './', plugins: [react(), belfryNames()], define: { __CHAT_VERSION__: JSON.stringify(version) } })
