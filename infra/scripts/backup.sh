@@ -134,6 +134,7 @@ cmd_run() {
   need "$AGE"; need jq
   local recipients target keep local_keep stamp out name args=()
   paused=()  # global: the EXIT trap still sees them after this function returns
+  paused_ids=()  # containers paused by id: the migration's import signer (see below)
   recipients=$(envval BACKUP_RECIPIENTS); target=$(envval BACKUP_TARGET)
   keep=$(envval BACKUP_KEEP); keep=${keep:-30}
   local_keep=$(envval BACKUP_LOCAL_KEEP); local_keep=${local_keep:-2}
@@ -143,7 +144,7 @@ cmd_run() {
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   name="belfry-$(hostname -s)-$stamp.tar.age"
   work=$(mktemp -d "${TMPDIR:-/var/tmp}/belfry-backup.XXXXXX")
-  trap 'rm -rf "${work:-}"; [[ ${#paused[@]} -gt 0 ]] && compose unpause "${paused[@]}" >/dev/null 2>&1 || true' EXIT
+  trap 'rm -rf "${work:-}"; [[ ${#paused[@]} -gt 0 ]] && compose unpause "${paused[@]}" >/dev/null 2>&1; [[ ${#paused_ids[@]} -gt 0 ]] && docker unpause "${paused_ids[@]}" >/dev/null 2>&1 || true' EXIT
   local proj; proj=$(project)
   mkdir -p "$work/b/volumes"
 
@@ -157,6 +158,17 @@ cmd_run() {
   local running; running=$(compose ps --services --status running)
   for s in "${PAUSE[@]}"; do grep -qx "$s" <<<"$running" && paused+=("$s"); done
   [[ ${#paused[@]} -gt 0 ]] && compose pause "${paused[@]}" >/dev/null 2>&1
+  # A service running outside this compose project's files: the signer that the migration
+  # starts next to Keycast (docker-compose.signer-import.yml, SIGNER still keycast) writes to
+  # signer-data during a rehearsal; paused by its container, so its SQLite copy is consistent.
+  local s id
+  for s in "${PAUSE[@]}"; do
+    grep -qx "$s" <<<"$running" && continue
+    while read -r id; do
+      [[ -n "$id" ]] || continue
+      docker pause "$id" >/dev/null 2>&1 && paused_ids+=("$id")
+    done < <(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter "label=com.docker.compose.service=$s" --filter status=running)
+  done
   local vols='{}'
   for v in "${VOLUMES[@]}"; do
     docker volume inspect "${proj}_$v" >/dev/null 2>&1 || continue
@@ -164,7 +176,8 @@ cmd_run() {
     vols=$(jq --arg v "$v" --argjson n "$(gzip -dc "$work/b/volumes/$v.tar.gz" | tar -t | grep -vc '/$')" '.[$v] = $n' <<<"$vols")
   done
   [[ ${#paused[@]} -gt 0 ]] && compose unpause "${paused[@]}" >/dev/null 2>&1
-  paused=()
+  [[ ${#paused_ids[@]} -gt 0 ]] && docker unpause "${paused_ids[@]}" >/dev/null 2>&1
+  paused=() paused_ids=()
 
   # Secret files (never the plain custody seed) and the code as it runs here.
   local present=()

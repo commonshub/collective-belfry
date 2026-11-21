@@ -102,6 +102,7 @@ class Account:
     sealed: str  # hex of Keycast's encrypted key; "": the member holds their own key
     kind: str = "member"  # member | guest | agent | own_key | no_vine_id | phantom
     excluded: bool = False
+    keycast_admin: bool = False  # Keycast's own admin account, left out by itself
     # an account Keycast made for a person who holds their own key (an agent: register's pass
     # names the agent's own key, Keycast minted a derived one when something asked for the
     # partner's token): not carried, the signer must not hold that key
@@ -259,6 +260,8 @@ def scope_of(svc: Any, origin: str, approved: set[str] | None) -> tuple[str, boo
     - ``https://<host>`` with the belfry's domain or a host under it: the OAuth flow of one of
       its own apps (the chat on chat.<domain>, earlier on the apex, the suite). **own**.
     - the origin of an outside app an admin approved: **outside**.
+    - ``http://…`` (a test app on localhost, or an outside app): **outside**: no app of the
+      belfry is served over plain HTTP.
     - anything else (``nostrconnect://<client>`` of nostr-login, an https origin nobody
       approved): **own, guessed**, counted, and blocking verify unless accepted by number
       (``--accept-guessed N``). A chat session carried as outside would lock its member out
@@ -282,6 +285,12 @@ def scope_of(svc: Any, origin: str, approved: set[str] | None) -> tuple[str, boo
     if domain and host and (host == domain or host.endswith("." + domain)):
         return "own", False
     if approved is not None and origin in {o.lower().rstrip("/") for o in approved}:
+        return "outside", False
+    if origin.startswith("http://"):
+        # no app of a belfry is served over plain HTTP (the chat, the suite and the phone apps'
+        # pages are https or native): such a session is a test app (localhost) or an outside
+        # one. Carried as outside, it keeps the outside limits; nothing of the belfry's own is
+        # lost by that, and nobody has to accept a guess for it.
         return "outside", False
     return "own", True
 
@@ -323,6 +332,7 @@ def plan(
     doc: dict[str, Any],
     exclude: Iterable[str] = (),
     now: int | None = None,
+    keycast_admin: str = "",
 ) -> Plan:
     """What a migration of DOC (``{"accounts": [...], "sessions": [...], "now"}``: the rows of
     docs/own-signer.md §6) would do, checked against the register. Reads only."""
@@ -330,6 +340,10 @@ def plan(
         raise MigrationError("the rows are not {accounts: [...], sessions: [...]}")
     now = int(now or _int(doc.get("now")) or time.time())
     excluded = {_hex(e) for e in exclude} - {""}
+    # Keycast's own admin (KEYCAST_ADMIN_PUBKEY, made by every install with Keycast): an account
+    # without a vine id that nobody signs in with; left out without being named (Friedger's
+    # review of #8: every migration stopped on it)
+    keycast_admin = _hex(keycast_admin)
     problems: list[dict[str, Any]] = []
 
     def problem(kind: str, **more: Any) -> None:
@@ -368,8 +382,10 @@ def plan(
             username=username,
             status="active" if status == "active" else "suspended",
             sealed=sealed,
-            excluded=pubkey in excluded,
+            excluded=pubkey in excluded
+            or (bool(keycast_admin) and pubkey == keycast_admin and not vine),
         )
+        a.keycast_admin = bool(keycast_admin) and pubkey == keycast_admin and not vine
         accounts[pubkey] = a
         m = VINE.fullmatch(vine)
         if not vine:
@@ -565,6 +581,7 @@ def counts(p: Plan) -> dict[str, Any]:
     return {
         "accounts": len(p.accounts),
         "excluded": len(p.accounts) - len(inc),
+        "keycast_admin_excluded": sum(1 for a in p.accounts if a.keycast_admin),
         "by_kind": dict(sorted(kinds.items())),
         "with_username": sum(1 for a in inc if a.username),
         "suspended": sum(1 for a in inc if a.status != "active"),
@@ -930,16 +947,21 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
         return sent
 
     # pass 1: rows without a client key (a key that went to another account is released here)
+    first: dict[str, int] = {}
     for a in order:
         keyless = [s for s in by_user.get(a.pubkey, []) if s.carried and not s.client]
         if keyless:
-            sess["existing"] -= send(a, keyless)  # pass 2 sends them again: "there already"
-    # pass 2: every carried row
+            first[a.vine_id] = send(a, keyless)
+    # pass 2: every carried row. It sends pass 1's rows again, and the signer counts them
+    # "there already": those are taken off again, but never more than pass 2 counted so (the
+    # count is the rows' first answer, pass 1's; display only)
     for a in order:
         if a.vine_id in stopped:
             continue
         rows = [s for s in by_user.get(a.pubkey, []) if s.carried]
+        before = sess["existing"]
         send(a, rows)
+        sess["existing"] -= min(first.get(a.vine_id, 0), sess["existing"] - before)
         if a.vine_id in stopped:
             continue
         # a live session the signer has that Keycast no longer has at all: revoked
@@ -1391,7 +1413,13 @@ def summary(c: dict[str, Any]) -> list[str]:
     kinds = ", ".join(f"{n} {k}" for k, n in c["by_kind"].items()) or "none"
     states = ", ".join(f"{n} {k}" for k, n in c["sessions_by_state"].items()) or "none"
     return [
-        f"accounts in Keycast: {c['accounts']} ({kinds}); excluded on purpose: {c['excluded']}",
+        f"accounts in Keycast: {c['accounts']} ({kinds}); excluded on purpose: {c['excluded']}"
+        + (
+            f" (of them Keycast's own admin, KEYCAST_ADMIN_PUBKEY: {c['keycast_admin_excluded']},"
+            " left out by itself)"
+            if c.get("keycast_admin_excluded")
+            else ""
+        ),
         f"with a username: {c['with_username']}; suspended: {c['suspended']}; "
         f"people with a key in the register: {c['register_members']}",
         f"sessions: {c['sessions']} ({states})",
@@ -1426,7 +1454,12 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
         return 2
     try:
         doc = json.load(stdin)
-        p = plan(svc, doc, exclude=args.exclude or ())
+        p = plan(
+            svc,
+            doc,
+            exclude=args.exclude or (),
+            keycast_admin=str(getattr(args, "keycast_admin", "") or ""),
+        )
     except (ValueError, MigrationError) as exc:
         say(f"signer-migrate: {exc}")
         return 2
@@ -1465,7 +1498,9 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
     except (MigrationError, httpx.HTTPError) as exc:
         say(f"signer-migrate: the signer does not answer: {type(exc).__name__}")
         return 2
-    if health.get("seed") not in (True, "unlocked"):
+    # carry-back only reads what the signer holds (a rollback after a reboot finds the seed
+    # locked, and must still go back); every other phase writes or compares derived keys
+    if args.phase != "carry-back" and health.get("seed") not in (True, "unlocked"):
         say("signer-migrate: the signer has no custody seed (locked): unlock it first")
         return 2
     authentik = None

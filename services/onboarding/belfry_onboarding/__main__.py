@@ -101,6 +101,13 @@ def main(argv: list[str] | None = None) -> int:
         help="leave this Keycast account out on purpose (hex; may be repeated)",
     )
     mig.add_argument(
+        "--keycast-admin",
+        default="",
+        metavar="PUBKEY",
+        help="Keycast's own admin account (KEYCAST_ADMIN_PUBKEY): left out by itself when it "
+        "has no vine id",
+    )
+    mig.add_argument(
         "--accept-lost-sessions",
         type=int,
         default=0,

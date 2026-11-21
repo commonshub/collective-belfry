@@ -1352,6 +1352,9 @@ def test_custody_must_agree_with_the_register(town):
         ("https://unknown.example.org", "own", True),
         ("nostrconnect://" + "ab" * 32, "own", True),
         ("https://belfry.test.evil.org", "own", True),
+        # plain HTTP is no app of a belfry: outside, with its limits, and nothing to accept
+        ("http://localhost:8080", "outside", False),
+        ("http://chat.belfry.test", "outside", False),
     ],
 )
 def test_scope_comes_from_keycasts_origin(world, origin, scope, guessed):
@@ -1589,3 +1592,94 @@ def test_the_box_guard_stops_on_a_silent_postgres_and_a_state_without_a_box(tmp_
     assert run("7123", json.dumps({"box": box})).stdout.strip() == "passed"
     r = run("9999", json.dumps({"box": box}))
     assert r.returncode == 1 and "another box" in r.stderr
+
+
+# ── Friedger's review of #8 ─────────────────────────────────────────────────────────────────
+def test_keycasts_own_admin_is_left_out_by_itself_and_said_so(town):
+    w = town
+    admin = w.person("KcAdmin", vine=False)  # KEYCAST_ADMIN_PUBKEY: no vine id
+    assert "no_vine_id" in [p["problem"] for p in w.plan().problems]
+    p = w.plan(keycast_admin=admin.pubkey)
+    assert "no_vine_id" not in [x["problem"] for x in p.problems]
+    c = migration.counts(p)
+    assert c["excluded"] == 1 and c["keycast_admin_excluded"] == 1
+    assert "Keycast's own admin" in migration.summary(c)[0]
+    # an account WITH a vine id is never taken for it
+    p = w.plan(keycast_admin=w.ana.pubkey)
+    assert migration.counts(p)["keycast_admin_excluded"] == 0
+    assert not next(a for a in p.accounts if a.pubkey == w.ana.pubkey).excluded
+
+
+def test_check_and_verify_say_who_becomes_an_admin_and_who_has_no_pass(town):
+    w = town
+    over = migration.admins_overview(
+        w.svc, ["ana@example.org", "sue@example.org", "nobody@example.org"]
+    )
+    # Sue's pass was revoked: an admin without an active pass; nobody@ has no person here
+    assert over == {
+        "admins": ["a•••@example.org", "n•••@example.org", "s•••@example.org"],
+        "without_active_pass": ["s•••@example.org"],
+    }
+    lines: list[str] = []
+    migration.say_admins(lines.append, over, becomes=True)
+    assert "admins after the move (3)" in lines[0] and "without an active pass (1)" in lines[1]
+    assert "sue@" not in " ".join(lines)
+    # verify reads the register's flag
+    w.odoo.write("res.partner", [w.gone.partner], {stewards.FIELD: True})
+    assert migration.admins_overview(w.svc)["without_active_pass"] == ["s•••@example.org"]
+
+
+def test_carry_back_reads_with_the_seed_locked(moved, monkeypatch):
+    """A rollback after a reboot (the seed in tmpfs, locked) still reads what to carry back."""
+    w = moved
+    w.signer.health = lambda: {"seed": "locked"}
+    monkeypatch.setattr(w.svc.settings, "signer", "belfry")
+    code, out, err = run_cli(w, "carry-back", monkeypatch)
+    assert code == 0, err and json.loads(out) == {"revoke": [], "suspend": []}
+    monkeypatch.setattr(w.svc.settings, "signer", "keycast")
+    code, out, err = run_cli(w, "import", monkeypatch)
+    assert code == 2 and "locked" in err  # everything that writes still needs it
+
+
+def test_the_sync_counts_each_row_once(town):
+    """Pass 2 sends pass 1's rows again: they are counted once ("there already" on a rerun
+    equals what the first run wrote), never fewer (Friedger: 56 shown for 62 rows)."""
+    w = town
+    plan = w.plan()
+    first = migration.run_import(plan, w.signer)["sessions"]
+    written = first["imported"] + first["revoked"] + first["existing"] + first["updated"]
+    assert written > 0
+    again = migration.run_import(w.plan(), w.signer)["sessions"]
+    assert again["imported"] == 0 and again["existing"] + again["updated"] == written, again
+
+
+def test_rollback_cleanup_and_check_keep_to_the_review(tmp_path):
+    fns = functions((SCRIPTS / "migrate-to-own-signer.sh").read_text())
+    r, carry, c, chk = (
+        fns["cmd_rollback"],
+        fns["keycast_carry_back"],
+        fns["cmd_cleanup"],
+        fns["cmd_check"],
+    )
+    # rollback: the list on stdin (never one argument), a way past a signer that is down, and
+    # the service started again when the carry-back fails
+    assert '"$back"' not in carry.replace("printf '%s' \"$back\"", "")
+    assert "json.load(sys.stdin)" in carry and "json.loads(sys.argv[1])" not in carry
+    assert "SKIP_CARRY_BACK" in r and "start onboarding" in r
+    assert (
+        r.index("keycast_carry_back")
+        < r.index("start onboarding")
+        < r.index("BELFRY_SIGNER=keycast")
+    )
+    # cleanup resumes: a marker before the first deletion, the first verify reused, nothing
+    # swallowed, and never before new accounts were opened again
+    assert "cleanup_started" in c and "opened_at" in c
+    assert c.index("state_set cleanup_started") < c.index("DROP SCHEMA")
+    rm = c[c.index("rm -sf keycast") :][:200]
+    assert "|| true" not in rm and "|| die" in rm
+    # check refuses an empty CONSOLE_URL; the switch's apply fills it
+    assert "CONSOLE_URL" in chk and "die" in chk[chk.index("CONSOLE_URL") - 200 :][:600]
+    belfry = functions((SCRIPTS / "belfry").read_text())
+    assert 'env_set CONSOLE_URL "https://belfry.' in belfry["legacy_settings"]
+    # Keycast's own admin is named to the Python side by itself
+    assert "--keycast-admin" in fns["py"]

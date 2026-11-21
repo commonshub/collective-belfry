@@ -39,6 +39,8 @@
 #                               report's scope_guessed list before accepting)
 #   --yes                       no question before `switch` (never for `cleanup`)
 #   --before-seven-days         `cleanup` although the switch is less than seven days old
+#   --skip-carry-back           rollback without writing the signer's sign-outs and suspensions
+#                               into Keycast (a signer that is down cannot be read): they come back
 #   --no-tmux                   switch, rollback and cleanup outside tmux or screen (a dropped
 #                               SSH session in the middle of `belfry apply` leaves a half-applied
 #                               stack: run them under tmux)
@@ -82,7 +84,7 @@ cd "$ROOT"
 
 PHASE=${1:-}
 [[ $# -gt 0 ]] && shift
-YES=0 EARLY=0 NO_TMUX=0
+YES=0 EARLY=0 NO_TMUX=0 SKIP_CARRY_BACK=0
 PY_FLAGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -94,6 +96,7 @@ while [[ $# -gt 0 ]]; do
     --yes) YES=1; shift ;;
     --before-seven-days) EARLY=1; shift ;;
     --no-tmux) NO_TMUX=1; shift ;;
+    --skip-carry-back) SKIP_CARRY_BACK=1; shift ;;
     *) die "unknown option $1 (see the top of $SELF)" ;;
   esac
 done
@@ -190,6 +193,10 @@ py() { # py PHASE REPORT_FILE [flags…]
     run=(icompose --profile app run --rm -T --no-deps onboarding)
   fi
   local -a flags=("$@")
+  # Keycast's own admin (an account without a vine id on every install with Keycast) is left out
+  # by itself; the counts say so
+  local kc_admin; kc_admin=$(env_get KEYCAST_ADMIN_PUBKEY)
+  if [[ "$kc_admin" =~ ^[0-9a-f]{64}$ ]]; then flags+=(--keycast-admin "$kc_admin"); fi
   # after the switch Authentik is not running, and people sign in, join and rename: what is
   # compared from then on is the keys (the verify that decided ran with everything stopped)
   if [[ "$(signer_now)" == belfry && "$phase" != plan ]]; then flags+=(--no-stewards --keys-only); fi
@@ -508,7 +515,15 @@ cmd_switch() {
   "$BELFRY" apply || die "belfry apply failed after the switch. Look at 'belfry status' and 'belfry logs onboarding'; '$0 rollback' goes back to Keycast."
   step "After the switch"
   wait_signer
-  compose exec -T onboarding python -m belfry_onboarding has-people >/dev/null \
+  # the service may still be starting (its start check reads the signer): asked again for a
+  # minute before giving up
+  local tries=0
+  until compose exec -T onboarding python -m belfry_onboarding has-people >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [[ $tries -lt 30 ]] || break
+    sleep 2
+  done
+  [[ $tries -lt 30 ]] \
     || die "the service does not answer after the switch (belfry logs onboarding; it refuses to start when the signer does not hold its members). '$0 rollback' goes back."
   out="$STATE_DIR/verify-after-$(stamp).json"
   py verify "$out" "${PY_FLAGS[@]}" || die "the verify after the switch is NOT clean (report: $out). New accounts stay closed. '$0 rollback' goes back to Keycast."
@@ -537,18 +552,24 @@ cmd_open() {
 # again, so that a rollback does not bring back what was signed out or suspended: sessions
 # Keycast still has live that the signer revoked, accounts Keycast has active that the signer
 # suspended. Sessions opened on the signer since cannot go back (Keycast has no row for them).
+# Fails (returns 1) instead of dying: the caller starts the service again first.
 keycast_carry_back() {
   local tenant back n
   tenant=$(env_get KEYCAST_TENANT_DOMAIN); tenant=${tenant:-localhost}
-  back=$(rows | compose --profile app run --rm -T --no-deps onboarding python -m belfry_onboarding signer-migrate carry-back --no-stewards) \
-    || die "the signer's sign-outs and suspensions could not be read: nothing was rolled back (the signer is still running)"
-  n=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(len(d["revoke"]) + len(d["suspend"]))' "$back")
+  # read only: works with the custody seed locked (after a reboot); not with a signer that is
+  # down (crash loop): then --skip-carry-back
+  back=$(rows | compose --profile app run --rm -T --no-deps onboarding python -m belfry_onboarding signer-migrate carry-back --no-stewards) || {
+    say "the signer's sign-outs and suspensions could not be read (is the signer up? belfry logs signer). Run rollback again, or with --skip-carry-back to go back without them."
+    return 1
+  }
+  # on stdin, never as one argument: a long list of sign-outs is over the kernel's 128 KiB cap
+  n=$(printf '%s' "$back" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["revoke"]) + len(d["suspend"]))') || return 1
   say "Carrying back to Keycast: $n sign-outs and suspensions made on the signer since the switch."
   [[ "$n" -gt 0 ]] || return 0
   # values checked here once more (64 hex, whole numbers): nothing else reaches the SQL
-  python3 -c '
+  printf '%s' "$back" | python3 -c '
 import json, re, sys
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 hexkey = re.compile(r"^[0-9a-f]{64}$")
 print("BEGIN;")
 for bunker, at in d["revoke"]:
@@ -561,9 +582,11 @@ for pubkey in d["suspend"]:
     print(f"UPDATE users SET status = \x27suspended\x27 WHERE pubkey = \x27{pubkey}\x27 "
           "AND status = \x27active\x27 "
           "AND tenant_id = (SELECT id FROM tenants WHERE domain = :\x27tenant\x27);")
-print("COMMIT;")' "$back" \
-    | compose exec -T postgres psql -U postgres -d keycast -q -v ON_ERROR_STOP=1 -v tenant="$tenant" -f - >/dev/null \
-    || die "writing the sign-outs and suspensions into Keycast failed: nothing was rolled back (the signer is still running; 'belfry apply' keeps this belfry on it)"
+print("COMMIT;")' \
+    | compose exec -T postgres psql -U postgres -d keycast -q -v ON_ERROR_STOP=1 -v tenant="$tenant" -f - >/dev/null || {
+    say "writing the sign-outs and suspensions into Keycast failed (one transaction: nothing of it was written)."
+    return 1
+  }
 }
 
 cmd_rollback() {
@@ -588,8 +611,17 @@ cmd_rollback() {
   take_apply_lock
   step "Stopping the service"
   compose --profile app stop onboarding >/dev/null || true
-  step "Carrying sign-outs and suspensions back to Keycast"
-  keycast_carry_back
+  if [[ $SKIP_CARRY_BACK -eq 1 ]]; then
+    say "--skip-carry-back: sign-outs and suspensions made on the signer since the switch are NOT"
+    say "written into Keycast: sessions signed out there and accounts suspended there come back."
+  else
+    step "Carrying sign-outs and suspensions back to Keycast"
+    if ! keycast_carry_back; then
+      say "Starting the service again: nothing was rolled back, this belfry stays on its own signer."
+      compose --profile app start onboarding >/dev/null 2>&1 || say "the service did not start: belfry apply"
+      die "rollback stopped before anything changed"
+    fi
+  fi
   step "Stopping the signer"
   # it must not go on answering the sessions Keycast answers again
   compose --profile app stop signer >/dev/null || true
@@ -610,6 +642,11 @@ cmd_cleanup() {
   local d switched report after; d=$(domain); switched=$(state_get switched_at)
   report=$(state_get switch_report); after=$(state_get after_report)
   [[ -n "$switched" ]] || die "no switch on record ($STATE): this belfry was not moved by this script"
+  # a switch that stopped before 'open' leaves new accounts closed: cleanup removes the way back,
+  # so the belfry must first be whole
+  [[ -n "$(state_get opened_at)" ]] \
+    || die "new accounts were never opened again after the switch (no 'open' on record): run '$0 open' first"
+  local started; started=$(state_get cleanup_started)
   [[ -s "$report" && "$(report_field "$report" ok)" == true ]] \
     || die "the clean verify report the switch was decided on is missing ($STATE_DIR): nothing is deleted without it"
   report_of_this_box "$report" || die "the switch's report was not made on this box: nothing is deleted"
@@ -623,8 +660,19 @@ cmd_cleanup() {
   [[ -t 0 ]] || die "cleanup asks its question at a terminal: it never runs unattended"
   take_apply_lock
   step "A last look, and a backup that holds what is deleted"
-  local last="$STATE_DIR/verify-cleanup-$(stamp).json"
-  py verify "$last" "${PY_FLAGS[@]}" || die "the verify is not clean any more: nothing was deleted"
+  local last
+  if [[ -z "$started" ]]; then
+    last="$STATE_DIR/verify-cleanup-$(stamp).json"
+    py verify "$last" "${PY_FLAGS[@]}" || die "the verify is not clean any more: nothing was deleted"
+    state_set cleanup_verify "$last"
+  else
+    # a cleanup that stopped half-way: Keycast's tables may be gone, so no verify can run any
+    # more; the one made before the first deletion stands
+    last=$(state_get cleanup_verify)
+    [[ -s "$last" && "$(report_field "$last" ok)" == true ]] && report_of_this_box "$last" \
+      || die "a cleanup was started on $(date -u -d "@$started" '+%F %T UTC') but its clean verify report is missing ($last): nothing more is deleted"
+    say "Resuming the cleanup started on $(date -u -d "@$started" '+%F %T UTC') (its verify: $last)."
+  fi
   fresh_backup
   # keys from before the custody seed ("imported") exist only in signer-data and its backups
   # once Keycast's database is emptied: a backup made after the switch must hold them
@@ -647,12 +695,16 @@ cmd_cleanup() {
   read -r -p "Type 'delete keycast and authentik of $d' to go on: " answer
   [[ "$answer" == "delete keycast and authentik of $d" ]] || die "nothing was deleted"
   step "Deleting"
+  # from the first deletion on, a rerun resumes (no verify: Keycast's tables may be gone)
+  [[ -n "$started" ]] || state_set cleanup_started "$(now)"
   # held keys the signer archived during the migration's window (moves to an own key made in
   # Keycast between import and switch): kept until now as the window's safety net
   py drop-archive "$STATE_DIR/drop-archive-$(stamp).json" \
     || die "the signer's archived keys could not be deleted: cleanup stopped here (run it again)"
   say "deleted the signer's archived keys"
-  compose --profile keycast rm -sf keycast keycast-migrate authentik-server authentik-worker redis >/dev/null 2>&1 || true
+  compose --profile keycast rm -sf keycast keycast-migrate authentik-server authentik-worker redis >/dev/null \
+    || die "removing Keycast's and Authentik's containers failed: cleanup stopped here (run it again)"
+  say "removed Keycast's and Authentik's containers"
   # the databases stay, empty, as on a belfry installed with its own signer (postgres' health
   # check looks for the database keycast). The first failure stops here: cleaned_at is only
   # recorded when everything went.
@@ -678,7 +730,7 @@ cmd_cleanup() {
 cmd_status() {
   say "signer: $(signer_now); sign-in: $(env_get PASS_SIGNIN)"
   local k v
-  for k in backup_at imported_at verified_at switched_at verified_after opened_at rolled_back_at cleaned_at; do
+  for k in backup_at imported_at verified_at switched_at verified_after opened_at rolled_back_at cleanup_started cleaned_at; do
     v=$(state_get "$k")
     say "$k: $([[ -n "$v" ]] && date -u -d "@$v" '+%F %T UTC' || echo -)"
   done
@@ -695,5 +747,5 @@ case "$PHASE" in
   rollback) cmd_rollback ;;
   cleanup) cmd_cleanup ;;
   status) cmd_status ;;
-  *) sed -n '2,45p' "$SELF" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,/^set -euo/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
