@@ -158,6 +158,24 @@ def test_members_go_straight_in_once_approved(web, odoo):
     assert "error=login_required" in silent.headers["location"]
 
 
+def test_a_silent_sign_in_answers_an_approved_address_and_no_other(web, odoo):
+    """prompt=none without a session: an approved app is told ``login_required`` at its own
+    registered address; an address nobody approved gets a page, never a redirect (it would be
+    an open one). The same with Keycast and with the own signer."""
+    services = web.app.state.services
+    r = authorize(web, prompt="none")
+    assert r.status_code == 403 and "location" not in r.headers
+    assert "Your Bank" not in r.text  # nor the link's own text
+    apps.decide(services, web.people["Ana"], APP, "Chat", True)
+    r = authorize(web, prompt="none")
+    assert r.status_code == 302
+    assert r.headers["location"].startswith(APP + "?error=login_required")
+    assert "state=st8" in r.headers["location"]
+    r = authorize(web, prompt="none", redirect_uri="sh.belfry.app://connect")  # the phone app
+    assert r.status_code == 302
+    assert r.headers["location"].startswith("sh.belfry.app://connect?error=login_required")
+
+
 def test_withdrawn_and_admin_only(web, odoo, relay):
     services = web.app.state.services
     apps.decide(services, web.people["Ana"], APP, "", True)

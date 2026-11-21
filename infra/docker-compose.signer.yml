@@ -45,8 +45,14 @@ services:
 
   # The members' keys, derived from the custody seed and sealed at rest with the master key;
   # signs for the onboarding service (internal API) and for apps over NIP-46 on the bunker
-  # relay. Its own network only: no internet, no published port, reachable by the onboarding
-  # service alone; it reaches the bunker relay.
+  # relay. Its own network only: no internet, no published port. Two services share that
+  # network with it: the onboarding service (the API's one caller) and the bunker relay (which
+  # the signer dials). The relay can therefore open the API's port too; what keeps it out is
+  # the bearer token (signer_token), which only the onboarding service is given. A second
+  # network would not change that: containers that share any network reach every port of each
+  # other, so the API would have to listen on one interface only (a fixed address on a network
+  # of its own, SIGNER_LISTEN=<address>:8200). Not done: fixed subnets clash on hosts we do not
+  # control, and it was never run (docs/own-signer.md, "For the Rust round").
   signer:
     image: belfry-signer:local
     build:
@@ -114,6 +120,7 @@ services:
       PASS_SIGNIN: belfry
 
 # signer (internal, no internet): the signer with the onboarding service and the bunker relay
+# (both reach the signer's port; the API token is the onboarding service's alone, see above)
 networks:
   signer:
     internal: true

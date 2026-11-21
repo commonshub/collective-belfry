@@ -85,15 +85,19 @@ def clean(wanted: Any) -> str:
 
 
 def problem(name: str) -> str | None:
-    """Why NAME can't be a username (VALID, MAX, RESERVED): ``short`` (nothing), ``long``,
-    ``chars``, ``reserved``; None: it can."""
+    """Why NAME can't be a username somebody chooses (VALID, MAX, RESERVED, DEFAULT):
+    ``short`` (nothing), ``long``, ``chars``, ``reserved``; None: it can.
+
+    The names accounts start with are reserved too (DEFAULT: "50", "0007", "osv-0007",
+    "member-12", "guest-12"): an account is made under its member number, so a member who
+    took "50" would stand in the way of member 50's account."""
     if not name:
         return "short"
     if len(name) > MAX:
         return "long"
     if not VALID.fullmatch(name):
         return "chars"
-    if name in RESERVED:
+    if name in RESERVED or DEFAULT.fullmatch(name):
         return "reserved"
     return None
 

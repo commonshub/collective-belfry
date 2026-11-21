@@ -27,12 +27,20 @@ What is Belfry's own here, on purpose (the review of PR #7's first version of th
   them here and in the signer.
 - **What an outside app may have signed** is what remoteapps.py allows a remote app (one rule
   set, ``remoteapps.allowed``): no NIP-98 for the belfry's hosts, no AUTH for its relays, no
-  kind 24133, no NIP-29 moderation. The belfry's own apps sign anything.
+  kind 24133, no NIP-29 moderation, no app data named ``belfry:…`` (30078), no label in a
+  ``belfry/…`` namespace (1985). It encrypts; it decrypts only when the member said so for that
+  app (the grant's ``decrypt``; nothing sets it yet). The belfry's own apps sign anything.
 - **Browser sessions end on the server**: a session of ``belfry.<domain>`` carries an id, and a
   logout writes it down (``ended``), so a copied cookie is worth nothing afterwards.
 
-The grant's session in the signer is made without a client key (the app has not told one); the
-app gets the bunker URL in the token answer and has ten minutes to connect with it.
+**A grant is not a NIP-46 connection.** The token exchange also opens a connection in the signer
+and hands the app its bunker URL; an app that told no client key has ten minutes to connect with
+it, and one that never does (the wallet signs only through ``/api/nostr``) loses that connection
+in the signer. Its sign-in stays: what decides is the table here. So the member's list of
+sessions is the signer's list **plus** the grants whose connection is not in it
+(:func:`with_grants`), under the same id (the connection's bunker key), and signing a session out
+ends the grant with it (:func:`session_revoked`): every place that lists or revokes sessions
+calls these two (discovery.py, console.py, sales.py).
 """
 
 from __future__ import annotations
@@ -137,13 +145,20 @@ class Store:
                 spent TEXT NOT NULL DEFAULT '',
                 created INTEGER NOT NULL,
                 used INTEGER,
-                revoked INTEGER);
+                revoked INTEGER,
+                label TEXT NOT NULL DEFAULT '',
+                decrypt INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS grants_access ON grants (access);
             CREATE INDEX IF NOT EXISTS grants_refresh ON grants (refresh);
             CREATE INDEX IF NOT EXISTS grants_partner ON grants (partner);
             CREATE TABLE IF NOT EXISTS ended (sid TEXT PRIMARY KEY, until INTEGER NOT NULL);
             """
         )
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(grants)")}
+        if "label" not in cols:  # a table made before grants carried their session's name
+            self._db.execute("ALTER TABLE grants ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+        if "decrypt" not in cols:
+            self._db.execute("ALTER TABLE grants ADD COLUMN decrypt INTEGER NOT NULL DEFAULT 0")
 
     def add(self, row: dict[str, Any]) -> None:
         cols = ", ".join(row)
@@ -346,6 +361,11 @@ def exchange(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any
         "refresh": refresh_mark,
         "refresh_until": now + REFRESH_SECONDS,
         "created": now,
+        "label": str(c["bunker"].get("app_name") or "")[:64],
+        # whether the member let this app read their private messages. The sign-in page has
+        # no such question yet, so this is 0 for every app that is not the belfry's own: an
+        # outside app encrypts, and does not decrypt (remoteapps.allowed).
+        "decrypt": 1 if c.get("decrypt") is True else 0,
     }
     st.add(grant)
     log.info(
@@ -400,17 +420,66 @@ def member_token(svc: Services, grant: dict[str, Any]) -> str:
 
 def check_live(svc: Services, grant: dict[str, Any]) -> str:
     """The member's signer token when the grant still stands on every side: the app is still in
-    the registry, the member still has a pass and this key, and the session was not signed out
-    in the signer (the console's Devices list, the chat's Sessions)."""
+    the registry, the member still has a pass and this key, and the grant was not ended (by
+    the app, by a refresh token used twice, or by the member signing the session out: the
+    console's Devices list and the chat's Sessions call :func:`session_revoked`).
+
+    The grant's NIP-46 connection is not asked for: the signer drops one no client connected
+    to within ten minutes, and an app that signs only over ``/api/nostr`` never connects."""
     if not apps.is_approved(svc, grant["uri"]):
         end_grant(svc, grant, "the app is no longer approved")
         raise SignInError(401, "invalid_token", "this sign-in has ended")
-    token = member_token(svc, grant)
-    sessions = svc.keycast.list_sessions(token)
-    if not any((s.get("bunker_pubkey") or "") == grant["bunker"] for s in sessions):
-        store(svc).revoke(grant["id"], _now())
+    fresh = store(svc).by("id", grant["id"])
+    if fresh is None or fresh.get("revoked") is not None:
         raise SignInError(401, "invalid_token", "this sign-in has ended")
-    return token
+    return member_token(svc, grant)
+
+
+def _iso(ts: Any) -> str | None:
+    if not ts:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(ts)))
+
+
+def with_grants(svc: Services, partner: int, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The signer's sessions of a member plus their apps' sign-ins whose connection the signer
+    no longer has (never connected to: the app signs over HTTP). Same fields; the id is the
+    bunker key the connection had. Nothing is added on a belfry with Keycast."""
+    if not enabled(svc):
+        return rows
+    try:
+        grants = store(svc).live_of(int(partner), _now())
+    except (sqlite3.Error, SignInError):
+        log.exception("appsignin: the grants of partner %s cannot be read", partner)
+        return rows
+    have = {str(r.get("bunker_pubkey") or "") for r in rows}
+    more = [
+        {
+            "application_name": g.get("label") or apps.session_label(svc, g["uri"], g["client_id"]),
+            "redirect_origin": "",
+            "bunker_pubkey": g["bunker"],
+            "client_pubkey": None,
+            "created_at": _iso(g["created"]),
+            "last_activity": _iso(g.get("used")),
+            "activity_count": 0,
+        }
+        for g in reversed(grants)
+        if g["bunker"] not in have
+    ]
+    return [*rows, *more]
+
+
+def session_revoked(svc: Services, partner: int, bunker: str | None = None) -> int:
+    """A member's session was signed out (BUNKER: its bunker key; None: all of them): the
+    sign-ins of apps that stand on it end too. Returns how many."""
+    if not enabled(svc):
+        return 0
+    st, now, n = store(svc), _now(), 0
+    for g in st.live_of(int(partner), now):
+        if (bunker is None or g["bunker"] == bunker) and st.revoke(g["id"], now):
+            n += 1
+            log.info("appsignin: grant %s of %s ended: its session was signed out", g["id"][:8], g["uri"])
+    return n
 
 
 def end_grant(svc: Services, grant: dict[str, Any], why: str) -> None:
@@ -484,6 +553,9 @@ def rpc(svc: Services, authorization: str | None, body: dict[str, Any]) -> Any:
             return svc.keycast.sign_event(token, {**unsigned, "pubkey": grant["pubkey"]})
         if len(params) < 2 or not all(isinstance(p, str) for p in params[:2]):
             raise SignInError(400, "invalid_request", "needs a public key and a text")
+        if outside and not remoteapps.allowed(None, bool(grant.get("decrypt")), method, None, own):
+            # reading what was written to the member needs their word, per app
+            raise SignInError(403, "forbidden", "not allowed for this app")
         return svc.keycast.nostr_rpc(token, method, [params[0], params[1]])
     except SignInError:
         raise

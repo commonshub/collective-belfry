@@ -84,6 +84,7 @@ from . import (
     salesstripe,
     sessions,
     setup,
+    signerguard,
     signin,
     sitenotify,
     sitesessions,
@@ -158,6 +159,13 @@ def build_signer(settings: Settings) -> KeycastClient | SignerClient:
 
 
 def build_services(settings: Settings) -> Services:
+    made = _build_services(settings)
+    # the own signer makes a new account only with the key the register has for the person
+    signerguard.install(made)
+    return made
+
+
+def _build_services(settings: Settings) -> Services:
     stewards.check_settings(settings)
     registry = eudi.load(settings.eudi_dir)
     return Services(
@@ -257,6 +265,10 @@ def create_app(services: Services | None = None) -> FastAPI:
         theme.CURRENT = theme.load(app.state.services.settings)
         app.state.homepage = make_homepage(app.state.services.settings)
         app.state.gitview = gitview.make(app.state.services.settings)
+        if services is None:
+            # a belfry on its own signer whose signer does not hold its members' keys does
+            # not start (signerguard.py: never a new key for somebody who has one)
+            await run_in_threadpool(signerguard.check_start, app.state.services)
         # Bring the relay whitelist and the Authentik participants group up to date with Odoo
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)

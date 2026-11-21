@@ -54,6 +54,12 @@ def check_settings(settings: Any) -> None:
                 "set PASS_SIGNIN=belfry (the belfry's own e-mail and code sign-in)"
             )
         return
+    # As before the own signer existed, and no stricter: the three variables had to be there
+    # and could be empty (they were required fields without a default). Production boxes get
+    # this code with SIGNER=keycast long before any migration: what started then starts now.
+    given = getattr(settings, "model_fields_set", None)
+    if given is None:
+        return
     missing = [
         env
         for env, name in (
@@ -61,7 +67,7 @@ def check_settings(settings: Any) -> None:
             ("KEYCAST_ADMIN_TOKEN", "keycast_admin_token"),
             ("KEYCAST_SERVICE_TOKEN", "keycast_service_token"),
         )
-        if not getattr(settings, name, "")
+        if name not in given
     ]
     if missing:
         raise ValueError(f"SIGNER=keycast needs {', '.join(missing)}")

@@ -304,6 +304,10 @@ def test_the_two_clients_have_the_same_methods_and_arguments():
         }
 
     keycast, own = public(KeycastClient), public(SignerClient)
+    # the one method only the own signer has: a read that never creates (signerguard.py's
+    # check at start and the migration's verify; nothing in the product calls it)
+    assert "account" in own and "account" not in keycast
+    del own["account"]
     assert set(keycast) == set(own)
     for name, sig in keycast.items():
         assert list(sig.parameters) == list(own[name].parameters), name

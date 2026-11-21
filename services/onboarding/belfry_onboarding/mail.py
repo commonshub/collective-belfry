@@ -61,7 +61,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, community, drops, followers, homepage, sealed
+from . import apps, community, drops, followers, homepage, sealed, stewards
 from .blossom import event_id, verify_signature
 from .core import Services
 from .nip46check import conversation_key, nip44_decrypt, nip44_encrypt, sign_event
@@ -1231,7 +1231,7 @@ def register(app: FastAPI) -> None:
                     "Cache-Control": "public, max-age=300",
                 },
             )
-        if name not in ("_smtp", "_groups") and services.settings.signer == "belfry":
+        if name not in ("_smtp", "_groups") and stewards.own_mode(services.settings):
             # Belfry's own signer has no web side: its usernames are answered here (Keycast
             # answers them itself, and the proxy sends it everything but the two names above;
             # docs/own-signer.md, "Still to move")

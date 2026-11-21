@@ -16,11 +16,16 @@ Where the two signers differ, and what the caller sees:
   only a name for the account, which the per-user methods turn back into the path. Nothing
   stored it before and nothing should now.
 - **preload_user on an account that exists.** Keycast answers with the account as it is,
-  whatever ``key_version`` or ``pubkey`` say. The signer refuses a ``pubkey`` that is not the
-  account's (409 ``mismatch``: never a silent new key); this client then reads the account and
-  returns its public key, so callers that compare it with what they expected (``restore-keys``,
-  ``sessions.py``) see the difference as before. ``display_name`` is not kept by the signer
-  (the name lives in the register and in the kind-0 profile).
+  whatever ``key_version`` or ``pubkey`` say. So does this client: it reads the account first
+  and returns its public key, so callers that compare it with what they expected
+  (``restore-keys``, ``sessions.py``) see a difference as before. ``display_name`` is not kept
+  by the signer (the name lives in the register and in the kind-0 profile).
+- **preload_user on an account that does not exist.** It is made, but never with another key
+  than the register already has for the person: ``expected`` (set by ``signerguard.install``)
+  gives that key, the signer is asked with ``expect_pubkey`` and writes nothing when the key it
+  would make differs; :class:`KeyNotHeld` is raised. A username somebody else holds is 409
+  (``httpx.HTTPStatusError``), as with Keycast: ``core.preload_account`` then asks again with
+  another name.
 - **Statuses.** The signer knows ``active`` and ``suspended``; ``banned`` is stored as
   ``suspended`` (both mean: nothing is signed). The reason is not kept.
 - **sign_event / nostr_rpc.** Keycast answers 200 with ``{"error"}`` when it refuses a request;
@@ -46,6 +51,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
@@ -80,6 +86,15 @@ def _code(response: httpx.Response) -> str:
     return str(data.get("error") or "") if isinstance(data, dict) else ""
 
 
+class KeyNotHeld(RuntimeError):
+    """The register has a key for this person, the signer has no account for them, and the
+    account it would make has another key: nothing was made (signerguard.py)."""
+
+    def __init__(self, vine_id: str):
+        super().__init__(f"the signer does not hold the key of {vine_id} and may not make another")
+        self.vine_id = vine_id
+
+
 class SignerClient:
     def __init__(
         self,
@@ -93,6 +108,8 @@ class SignerClient:
         self.domain = domain
         self._client = client or httpx.Client(timeout=timeout)
         self._headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        # vine_id -> the key the register has for that person, or None (signerguard.install)
+        self.expected: Callable[[str], str | None] | None = None
 
     # -- plumbing -------------------------------------------------------------------------------
 
@@ -183,17 +200,53 @@ class SignerClient:
         if not vine_id:
             raise ValueError("vine_id must not be empty")
         token = TOKEN_PREFIX + vine_id
+        have = self._request("GET", self._account(token))
+        if have.status_code == 200:
+            # it exists: answered as it is, never changed (as Keycast's preload); the caller
+            # compares the key with the one it expected
+            if pubkey and str(have.json().get("pubkey") or "").lower() != pubkey.lower():
+                log.warning("signer: %s exists with another key than the one asked for", vine_id)
+            return {"pubkey": have.json()["pubkey"], "token": token}
+        if have.status_code != 404:
+            have.raise_for_status()
         body: dict[str, Any] = {"key_version": int(key_version or 0), "username": username}
+        expect = None
         if pubkey:
             body["own_pubkey"] = pubkey
+        elif self.expected is not None:
+            # a new account for somebody the register already has a key for: the signer may
+            # make it only if it comes out with that key (signerguard.py). A register that
+            # cannot be read raises here: not knowing is not "no key".
+            expect = self.expected(vine_id)
+            if expect:
+                body["expect_pubkey"] = expect
         r = self._request("PUT", self._account(token), body)
         if r.status_code == 409 and _code(r) == "mismatch":
-            # the account exists with another key: as Keycast, answer with the account as it
-            # is; the caller compares the key with the one it expected
+            again = self._request("GET", self._account(token))
+            if again.status_code == 404 and expect:
+                # no account, and the one the signer would make has another key
+                log.error(
+                    "signer: no account %s here, and the key this signer would make is not the "
+                    "one the register has (%s…): refusing to make a new key. Was this belfry "
+                    "migrated (docs/own-signer.md, Moving a belfry)?",
+                    vine_id,
+                    expect[:8],
+                )
+                raise KeyNotHeld(vine_id)
+            # made by somebody else in between, with another key: answered as it is
             log.warning("signer: %s exists with another key than the one asked for", vine_id)
-            r = self._request("GET", self._account(token))
+            r = again
         r.raise_for_status()
         return {"pubkey": r.json()["pubkey"], "token": token}
+
+    def account(self, vine_id: str) -> dict[str, Any] | None:
+        """The account as the signer has it (``vine_id, pubkey, custody, key_version, status,
+        username``), or None when it has none. Never creates anything."""
+        r = self._request("GET", self._account(TOKEN_PREFIX + vine_id))
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
 
     def set_user_status(self, pubkey: str, status: str, reason: str | None = None) -> None:
         """``active``, ``suspended`` or ``banned`` (kept as suspended) for the account with

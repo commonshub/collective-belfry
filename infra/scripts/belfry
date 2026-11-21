@@ -137,6 +137,26 @@ extra_apps() { local a; for a in $(env_get EXTRA_APPS); do [[ " ${EXTRA_KEYS[*]}
 # the push gateway (services/push-gateway): compose profile push-gateway, only with PUSH_GATEWAY=1
 push_gateway() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get PUSH_GATEWAY)" == 1 ]]; }
 
+# Whether this belfry has, or ever had, people: what decides if its signer may be switched
+# without a migration (cmd_config). The running service answers from the register (a pass that
+# is active or was ever given a key); the setup folder's files answer too (a first admin, also
+# one a reset archived). Not knowing counts as yes: a stack that is down but has data volumes
+# is not a new belfry.
+ever_had_people() {
+  compgen -G "$SETUP_DIR/first-admin*.json" >/dev/null && return 0
+  [[ -s "$SETUP_DIR/reset.json" ]] && return 0
+  local out
+  if out=$(compose --profile app exec -T onboarding python -m belfry_onboarding has-people 2>/dev/null | tail -n1); then
+    [[ "$out" == no ]] && return 1
+    return 0
+  fi
+  local project=${COMPOSE_PROJECT_NAME:-belfry}
+  if docker volume ls -q 2>/dev/null | grep -Eq "^${project}_(register-data|postgres|odoo-data|signer-data)$"; then
+    return 0
+  fi
+  return 1
+}
+
 compose() {
   local files=("${COMPOSE_FILES[@]}")
   if no_odoo; then files+=(-f infra/docker-compose.noodoo.yml); fi
@@ -237,8 +257,10 @@ cmd_config() {
     if [[ "$BELFRY_SIGNER" != "$now_signer" ]]; then
       # the two signers do not share accounts or sessions: switching a belfry that has people
       # signs everyone out and loses usernames unless its migration ran (docs/own-signer.md §6)
-      if [[ -s "$SETUP_DIR/first-admin.json" && "${BELFRY_SIGNER_MIGRATED:-}" != 1 ]]; then
-        die "this belfry has people on $now_signer: switching the signer needs its migration first (docs/own-signer.md §6); BELFRY_SIGNER_MIGRATED=1 once that is done"
+      # Asked of the data, not of one file: first-admin.json is gone after a setup-reset or a
+      # restore, and the people are still there.
+      if [[ "${BELFRY_SIGNER_MIGRATED:-}" != 1 ]] && ever_had_people; then
+        die "this belfry has, or had, people on $now_signer (or its stack is down and that cannot be checked): switching the signer needs its migration first (infra/scripts/migrate-to-own-signer.sh; docs/own-signer.md, Moving a belfry). The migration's switch sets BELFRY_SIGNER_MIGRATED=1 itself."
       fi
       pairs+=(SIGNER "$BELFRY_SIGNER")
       # no Authentik with Belfry's own signer: its own e-mail and code sign-in
@@ -806,19 +828,29 @@ if d["remaining_admins"]:
 if d["revert"]:
     print("Settings the setup page changed during the claim: " + ", ".join(sorted(d["revert"])))
 ' "$out"
-  if [[ "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["removed"]))' "$out")" == 0 ]]; then
+  local stuck
+  stuck=$(python3 -c 'import json,sys; print(1 if json.loads(sys.argv[1]).get("closed_without_admin") else 0)' "$out")
+  if [[ "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["removed"]))' "$out")" == 0 && "$stuck" != 1 ]]; then
     say "Nothing to reset. /setup is open while there is no admin: $link"
     return 0
+  fi
+  if [[ "$stuck" == 1 ]]; then
+    say "This belfry has members and no admin on record, so /setup is closed (a belfry with people is not handed to whoever comes first)."
+    say "Opening it lets the next visitor of $link become its admin."
   fi
   if [[ $yes -ne 1 ]]; then
     [[ -t 0 ]] || die "add --yes to reset without a terminal"
     local answer
-    read -r -p "Remove them and open the setup again? Type yes: " answer
+    if [[ "$stuck" == 1 ]]; then
+      read -r -p "Open the setup again? Type yes: " answer
+    else
+      read -r -p "Remove them and open the setup again? Type yes: " answer
+    fi
     [[ "$answer" == yes ]] || die "nothing changed"
   fi
   out=$(compose --profile app exec -T onboarding python -m belfry_onboarding setup-reset $all | tail -n1) \
     || die "the reset failed: see belfry logs onboarding"
-  say "Removed: $(python3 -c 'import json,sys; print(", ".join(json.loads(sys.argv[1])["removed"]))' "$out")"
+  say "Removed: $(python3 -c 'import json,sys; print(", ".join(json.loads(sys.argv[1])["removed"]) or "nobody")' "$out")"
   rm -f "$SETUP_DIR/pending.env"
   local changed=0
   if [[ $keep -ne 1 ]]; then

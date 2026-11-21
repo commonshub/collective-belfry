@@ -117,7 +117,15 @@ def document(settings: Any) -> dict[str, Any]:
         if settings.mint_url
         else None,
         "sign_in": {
-            "login": _url(settings.authentik_public_url),
+            # where a person signs in with a browser: Authentik's page, or on a belfry without
+            # Authentik (its own signer) the pass page's e-mail and code. The field stays (the
+            # phone apps decode this document; whether strictly was not checked) and always
+            # names a page that exists.
+            "login": (
+                (_url(settings.public_url) + "/me/login" if settings.public_url else "")
+                if stewards.own_mode(settings)
+                else _url(settings.authentik_public_url)
+            ),
             "keycast": _url(settings.apps_public_url),
             # Sign in with <domain> for web apps: OAuth code + PKCE, approved apps only (connect.py)
             "connect": {
@@ -469,8 +477,12 @@ def register(app: FastAPI) -> None:
     async def api_sessions(request: Request) -> JSONResponse:
         """The signed-in member's sessions (NIP-46 connections in the signer), NIP-98."""
         services: Services = request.app.state.services
-        _, token = await session_owner(request, "GET", SESSIONS, b"")
+        partner, token = await session_owner(request, "GET", SESSIONS, b"")
         rows = await run_in_threadpool(services.keycast.list_sessions, token)
+        from . import appsignin
+
+        # the sign-ins of apps that sign over HTTP only (no connection in the signer)
+        rows = await run_in_threadpool(appsignin.with_grants, services, partner, rows)
         keep = (
             "application_name",
             "redirect_origin",
@@ -490,13 +502,17 @@ def register(app: FastAPI) -> None:
     async def api_sessions_revoke(request: Request) -> JSONResponse:
         services: Services = request.app.state.services
         body = await request.body()
-        _, token = await session_owner(request, "POST", SESSIONS + "/revoke", body)
+        partner, token = await session_owner(request, "POST", SESSIONS + "/revoke", body)
         try:
             bunker = str(json.loads(body or b"{}").get("bunker_pubkey", ""))
         except ValueError:
             bunker = ""
         if not re.fullmatch(r"[0-9a-f]{64}", bunker):
             raise ApiError(422, "invalid", "bunker_pubkey: 64 hex characters")
+        from . import appsignin
+
+        # the app's sign-in first: it ends even when the signer does not answer
+        await run_in_threadpool(appsignin.session_revoked, services, partner, bunker)
         await run_in_threadpool(services.keycast.revoke_session, token, bunker)
         return JSONResponse({"state": "revoked"})
 
