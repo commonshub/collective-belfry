@@ -1,0 +1,37 @@
+[package]
+name = "belfry-signer"
+version = "0.1.0"
+edition = "2021"
+description = "Belfry's signer: holds the members' Nostr keys, signs for Belfry's services and answers NIP-46 as a bunker"
+license = "MIT"
+publish = false
+
+[dependencies]
+# The signer library: rust-nostr (keys, events, NIP-04, NIP-44, NIP-46 messages; relay client)
+nostr = { version = "0.45", default-features = false, features = ["std", "os-rng", "nip04", "nip44"] }
+nostr-sdk = { version = "0.45", default-features = false, features = ["rustls-tls-webpki-roots", "ring"] }
+# Keys at rest: AES-256-GCM, the same format as Keycast's master.key (nonce || ciphertext)
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+subtle = "2.6"
+zeroize = "1.8"
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+codegen-units = 4
+lto = "thin"
+strip = true
