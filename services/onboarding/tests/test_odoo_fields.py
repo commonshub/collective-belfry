@@ -45,3 +45,11 @@ def test_nothing_asks_odoo_for_a_field_only_the_register_has(services, odoo):
     core._suspend_unless_other_active(
         services, {"id": pass_id, "tier": "guest", "partner_id": [pid, "A"]}, "test"
     )
+
+
+def test_a_cohosts_kind_is_read_without_register_only_fields(services, odoo):
+    from belfry_onboarding import cohost
+
+    pid = odoo.add("res.partner", name="C", email="c@example.org")
+    odoo.add("belfry.pass", partner_id=pid, tier="full", state="active", keycast_pubkey=KEY)
+    assert cohost._member(services, KEY) == "member"

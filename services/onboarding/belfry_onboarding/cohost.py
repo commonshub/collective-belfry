@@ -36,7 +36,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import events
-from .core import Services, m2o_id
+from .core import Services, m2o_id, pass_fields
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ def _member(svc: Services, pubkey: str) -> str:
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
-        ["tier", "guest_agent"],
+        pass_fields(svc, "tier", "guest_agent"),  # Odoo has no guest_agent
     )
     if any(r.get("tier") == "agent" or r.get("guest_agent") for r in rows):
         return "agent"
