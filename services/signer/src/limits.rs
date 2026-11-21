@@ -236,21 +236,26 @@ pub fn forbidden(event: &Value, own: &Own) -> bool {
         _ => return true,
     };
     let hosts_of = |name: &str| tag_hosts(event, name);
+    // the belfry's domain or any host under it (git.<domain>, a private GRASP relay that admits
+    // members by AUTH, is in no list: the rule must not depend on one)
+    let under_domain = |h: &String| {
+        !own.domain.is_empty() && (*h == own.domain || h.ends_with(&format!(".{}", own.domain)))
+    };
     match kind {
         27235 => {
             let Some(hosts) = hosts_of("u") else {
                 return true;
             };
             hosts.is_empty()
-                || hosts.iter().any(|h| {
-                    h.is_empty()
-                        || own.api.contains(h)
-                        || (!own.domain.is_empty()
-                            && (*h == own.domain || h.ends_with(&format!(".{}", own.domain))))
-                })
+                || hosts
+                    .iter()
+                    .any(|h| h.is_empty() || own.api.contains(h) || under_domain(h))
         }
         22242 => hosts_of("relay").is_none_or(|hosts| {
-            hosts.is_empty() || hosts.iter().any(|h| h.is_empty() || own.relays.contains(h))
+            hosts.is_empty()
+                || hosts
+                    .iter()
+                    .any(|h| h.is_empty() || own.relays.contains(h) || under_domain(h))
         }),
         24133 => true,
         9000..=9009 | 9021 | 9022 => true,

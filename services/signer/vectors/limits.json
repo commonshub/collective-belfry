@@ -389,7 +389,85 @@
     ],
     "content": ""
    },
+   "refused": true
+  },
+  {
+   "name": "auth git relay of the belfry",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://git.belfry.test"
+     ],
+     [
+      "challenge",
+      "c"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth the belfry's domain itself",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://belfry.test/"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth a deeper host under the belfry",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://a.b.belfry.test:4443"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth a look-alike domain",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://notbelfry.test"
+     ]
+    ],
+    "content": ""
+   },
    "refused": false
+  },
+  {
+   "name": "auth one relay elsewhere and one under the belfry",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://relay.example.org"
+     ],
+     [
+      "relay",
+      "wss://git.belfry.test"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
   },
   {
    "name": "auth empty relay",

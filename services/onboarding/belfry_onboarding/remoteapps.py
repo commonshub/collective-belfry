@@ -314,7 +314,14 @@ def _forbidden(event: dict[str, Any], perms: list[str] | None, own: Own) -> bool
         return False
     if kind == 22242:  # NIP-42: never for the belfry's own relays (members only)
         hosts = [_host(r) for r in _tag(event, "relay")]
-        return not hosts or any(not h or h in own.relays for h in hosts)
+        # nor for any host under the belfry's domain, as for NIP-98: git.<domain> (a private
+        # GRASP relay that admits members by AUTH) is in no list of relays
+        return not hosts or any(
+            not h
+            or h in own.relays
+            or (own.domain and (h == own.domain or h.endswith("." + own.domain)))
+            for h in hosts
+        )
     if kind == KIND:
         return True
     if isinstance(kind, int) and (9000 <= kind <= 9009 or kind in (9021, 9022)):
