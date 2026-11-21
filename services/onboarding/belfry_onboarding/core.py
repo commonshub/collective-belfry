@@ -494,7 +494,11 @@ def preload_account(
     exist). So when the name is taken the account is made as ``member-<id>``, then as
     ``member-<id>0<four digits>``: names nobody can choose (usernames.DEFAULT), which
     ``usernames.give_default`` replaces with the person's own name right after."""
-    names = [username, f"member-{partner_id}", f"member-{partner_id}0{secrets.randbelow(10**4):04d}"]
+    names = [
+        username,
+        f"member-{partner_id}",
+        f"member-{partner_id}0{secrets.randbelow(10**4):04d}",
+    ]
     for i, name in enumerate(dict.fromkeys(names)):
         try:
             return svc.keycast.preload_user(

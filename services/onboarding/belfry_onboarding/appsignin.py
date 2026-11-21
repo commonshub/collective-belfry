@@ -478,7 +478,9 @@ def session_revoked(svc: Services, partner: int, bunker: str | None = None) -> i
     for g in st.live_of(int(partner), now):
         if (bunker is None or g["bunker"] == bunker) and st.revoke(g["id"], now):
             n += 1
-            log.info("appsignin: grant %s of %s ended: its session was signed out", g["id"][:8], g["uri"])
+            log.info(
+                "appsignin: grant %s of %s ended: its session was signed out", g["id"][:8], g["uri"]
+            )
     return n
 
 

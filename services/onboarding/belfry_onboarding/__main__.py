@@ -85,6 +85,42 @@ def main(argv: list[str] | None = None) -> int:
     rst.add_argument("--all-admins", action="store_true", help="remove every admin")
     rst.add_argument("--dry-run", action="store_true", help="only say what would be done")
     sub.add_parser("sales-status", help="whether this belfry can sell passes (no values)")
+    mig = sub.add_parser(
+        "signer-migrate",
+        help="move from Keycast to Belfry's own signer: plan (read-only), import, verify; the "
+        "rows of Keycast's database as JSON on stdin (infra/scripts/migrate-to-own-signer.sh)",
+    )
+    mig.add_argument("phase", choices=["plan", "import", "verify"])
+    mig.add_argument(
+        "--exclude",
+        action="append",
+        metavar="PUBKEY",
+        help="leave this Keycast account out on purpose (hex; may be repeated)",
+    )
+    mig.add_argument(
+        "--accept-lost-sessions",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N live sessions are signed out because another account keeps their "
+        "client key: seen and accepted",
+    )
+    mig.add_argument(
+        "--accept-missing-stewards",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N admins in Authentik have no person in the register: seen and accepted",
+    )
+    mig.add_argument(
+        "--no-stewards", action="store_true", help="Authentik is gone: leave the admins out"
+    )
+    mig.add_argument(
+        "--keys-only",
+        action="store_true",
+        help="verify after the switch: every key still equal; what moves on afterwards "
+        "(names, states, sessions, admins) is not compared",
+    )
     sub.add_parser(
         "has-people",
         help="yes or no: the register has, or ever had, a member (belfry config asks before "
@@ -163,6 +199,10 @@ def main(argv: list[str] | None = None) -> int:
 
         print(json.dumps(setup.reset(services, args.all_admins, args.dry_run)))
         return 0
+    elif args.command == "signer-migrate":
+        from . import migration
+
+        return migration.cli(args, services, settings, sys.stdin, sys.stdout, sys.stderr)
     elif args.command == "has-people":
         from . import signerguard
 
