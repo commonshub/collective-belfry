@@ -21,7 +21,7 @@ const shift = () => (new Date().getHours() < 10 ? 1 : 0)
 const at = (days: number, h: number, m: number) => { const d = new Date(); d.setDate(d.getDate() - days - shift()); d.setHours(h, m, 0, 0); return Math.min(+d, Date.now() - 60e3) }
 const s = (ms: number) => Math.floor(ms / 1000)
 
-export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: string; askKind?: DeviceKind; linked?: string } = {}) {
+export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: string; askKind?: DeviceKind; linked?: string; /** canvas v117: this browser is my only device */ only?: boolean } = {}) {
   if (!isLocalOnly()) return null
   const as = opts.as ?? 'old'
   const names = ['Lina Moreau', 'Ana Silva', 'Ben Okafor', 'Emma Lind', 'Dev Patel', 'Lou (neighbour)']
@@ -68,7 +68,7 @@ export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: 
   const phone = { id: 'd-iphone', name: 'iPhone', kind: 'phone' as const, added: new Date(new Date().getFullYear(), 7, 12).getTime(), active: Date.now() }
   const mac = { id: 'd-mac', name: 'Safari on Mac', kind: 'computer' as const, added: new Date(new Date().getFullYear(), 9, 2).getTime(), from: 'iPhone', active: Date.now() - 3 * DAY }
   const d: DemoSealed = {
-    mine: as === 'old' ? [{ ...phone, here: true }, mac] : [phone, { ...mac, here: true, added: Date.now() - 5 * 60e3, from: undefined, active: Date.now() }],
+    mine: opts.only ? [{ ...phone, here: true }] : as === 'old' ? [{ ...phone, here: true }, mac] : [phone, { ...mac, here: true, added: Date.now() - 5 * 60e3, from: undefined, active: Date.now() }],
     people: {
       [pk.lina]: { count: 2, change: { what: 'removed', at: at(0, 8, 2) } },
       [pk.ana]: { count: 3, change: { what: 'added', at: at(0, 7, 50) } },

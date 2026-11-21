@@ -29,12 +29,13 @@ function Face({ a }: { a: { name?: string; picture?: string; domain?: string; em
     : <span className="acct-face letter" aria-hidden="true">{letter}</span>
 }
 
-export function AccountsScreen() {
+/** LINK: opened from the only-device question (canvas v117): Link your phone at once. */
+export function AccountsScreen({ link = false }: { link?: boolean } = {}) {
   useVersion()
   const community = useCommunityName(NAME)
   const [adding, setAdding] = useState(false)
   const [scanning, setScanning] = useState(false)
-  const [linking, setLinking] = useState(false)
+  const [linking, setLinking] = useState(link && !!myUsername())
   const [switching, setSwitching] = useState('')
   const [, setTick] = useState(0)
   const cur = activeId()

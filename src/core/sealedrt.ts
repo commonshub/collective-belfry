@@ -357,6 +357,12 @@ export async function sendMode(conv: Conv, refresh = true): Promise<'sealed' | '
 export const acceptedSealed = (conv: Conv) => { if (active()) markSealed(conv) }
 
 const notInHead = () => { const c = chainOf(me()); return !!c && !!device && !C.headOf(c).devices.includes(device.pub) }
+/** canvas v117 messages/encryption-only-device: this device is the only one in my head and holds
+ *  its letterbox secret; signing out (or forgetting it) loses the sealed messages for good. */
+export function onlyDeviceHere(): boolean {
+  const c = chainOf(me())
+  return active() && deviceIn() && !!c && C.headOf(c).devices.length === 1
+}
 /** This device is in my head and holds its letterbox secret. */
 export function deviceIn(): boolean {
   const c = chainOf(me())

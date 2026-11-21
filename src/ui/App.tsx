@@ -35,9 +35,9 @@ import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
-import { AllowPrompt, DevicesScreen, EncryptionScreen, ShowHowScreen } from './Sealed'
+import { AllowPrompt, DevicesScreen, EncryptionScreen, OnlyDeviceAlert, ShowHowScreen } from './Sealed'
 import { askNow, testSignRoster, chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
-import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
+import { demoAsk, demoLinked, demoUnlockHere, onlyDevice } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen, eventPath } from './Calendar'
@@ -341,7 +341,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me' && a === 'privacy') view = <Privacy />
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
-  else if (section === 'accounts') view = <AccountsScreen />
+  else if (section === 'accounts') view = <AccountsScreen link={a === 'link'} />
   else if (section === 'about' && a === 'diagnostics') view = <Diagnostics />
   else if (section === 'about') view = <AboutBelfry />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
@@ -443,7 +443,9 @@ addEventListener('hashchange', () => {
   if (location.hash.startsWith('#/c/')) try { sessionStorage.setItem('osv-last-channel', location.hash) } catch { /* ignore */ }
 })
 
-function Me({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+function Me({ session, onSignOut }: { session: Session; onSignOut: () => void | Promise<void> }) {
+  // canvas v117: this browser is the only device for sealed conversations: asked first
+  const [onlyAsk, setOnlyAsk] = useState<'sign out' | 'forget' | null>(null)
   const m = session.membership
   const g = myGrant()
   const waiting = isAdmin() ? accessState().pending.length : 0
@@ -538,22 +540,29 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </div>
           <span className="hint" aria-hidden="true">›</span>
         </button>
-        <button className="link sign-out" onClick={onSignOut}>Sign out{accounts().filter((a) => a.pubkey).length > 1 ? ' of this account' : ''}</button>
+        <button className="link sign-out" onClick={() => (onlyDevice() ? setOnlyAsk('sign out') : void onSignOut())}>Sign out{accounts().filter((a) => a.pubkey).length > 1 ? ' of this account' : ''}</button>
         <Btn className="link sign-out forget-device" onClick={async () => {
+          if (onlyDevice()) { setOnlyAsk('forget'); return }
           if (!confirm('Sign out of every account on this browser and forget them all?')) return
-          // every account's session ends in the signer, each signed with its own key, then everything goes
-          stop()
-          for (const a of allAccounts()) {
-            const s = a.id === activeId() ? session : await readOf<Session>(a, 'session')
-            if (s) await revokeWith(s)
-          }
-          await forgetAll()
-          location.hash = ''
-          location.reload()
+          await forgetDeviceNow(session)
         }}>Forget this device</Btn>
+        {onlyAsk && <OnlyDeviceAlert verb={onlyAsk} onClose={() => setOnlyAsk(null)} onGo={async () => { if (onlyAsk === 'forget') await forgetDeviceNow(session); else await onSignOut() }} />}
       </div>
     </div>
   )
+}
+
+/** Forget this device: every account's session ends in the signer, each signed with its own key,
+ *  then everything goes (the letterbox keys too). */
+async function forgetDeviceNow(session: Session) {
+  stop()
+  for (const a of allAccounts()) {
+    const s = a.id === activeId() ? session : await readOf<Session>(a, 'session')
+    if (s) await revokeWith(s)
+  }
+  await forgetAll()
+  location.hash = ''
+  location.reload()
 }
 
 /** Demo only: someone joins CHANNEL as a guest invited by you (what Belfry publishes, guests.py). */

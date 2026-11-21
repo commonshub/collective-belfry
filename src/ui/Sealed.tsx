@@ -349,3 +349,24 @@ export function NotSealedMark() {
     </>
   )
 }
+
+/** Board messages/encryption-only-device (canvas v117): before this browser, my only device for
+ *  sealed conversations, signs out or is forgotten (its letterbox key goes with it). Link a device
+ *  opens Accounts → Link your phone; the red button locks and shows progress. */
+export function OnlyDeviceAlert({ verb, onGo, onClose }: { verb: 'sign out' | 'forget'; onGo: () => Promise<void>; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal() }, [])
+  const go2 = async () => { setBusy(true); try { await onGo() } finally { setBusy(false) } }
+  return (
+    <dialog ref={ref} className="seal-alert seal-only-device" role="alertdialog" aria-labelledby="seal-od-t" onCancel={(e) => { e.preventDefault(); if (!busy) onClose() }}>
+      <span className="seal-dvbig"><Ico size={30}><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M11 18.5h2" /></Ico></span>
+      <h2 id="seal-od-t">This is your only device for sealed conversations</h2>
+      <p>If you {verb === 'forget' ? 'forget this device' : 'sign out'}, your sealed messages can’t be opened again, here or on a new device. Only what the people you write with share again comes back.</p>
+      <p>To keep them, link another device first.</p>
+      <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={() => { onClose(); go('accounts/link') }}>Link a device</button>
+      <button className="btn seal-red" disabled={busy} aria-busy={busy || undefined} onClick={() => void go2()}>{busy ? <><Spin /> {verb === 'forget' ? 'Forgetting…' : 'Signing out…'}</> : verb === 'forget' ? 'Forget anyway' : 'Sign out anyway'}</button>
+      <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+    </dialog>
+  )
+}

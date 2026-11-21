@@ -14,6 +14,7 @@ import * as R from './sealedrt'
 import * as SC from './sealedcore'
 import { touch } from './store'
 import { me } from './sync'
+import { isGuest } from './invite'
 
 export type DeviceKind = 'phone' | 'tablet' | 'computer'
 
@@ -122,6 +123,9 @@ function realLines(conv: Conv): DeviceLine[] {
 export const isSealed = (conv: Conv) => (real() ? R.isSealedConv(conv) : state.sealed.has(conv))
 export const myDevices = () => (real() ? realMine() : state.mine)
 export const hasDevices = () => myDevices().length > 0
+/** canvas v117: this browser is my only device for sealed conversations (never for a guest; not
+ *  before a letterbox exists: then there is nothing to lose) */
+export const onlyDevice = () => !isGuest(me()) && (real() ? R.onlyDeviceHere() : state.mine.length === 1 && !!state.mine[0].here)
 export const theirDevices = (pk: string): TheirDevices | undefined => (real() ? realTheirs(pk) : state.people.get(pk))
 export const deviceLines = (conv: Conv) => (real() ? realLines(conv) : state.lines.get(conv) ?? [])
 /** §5.5: in my head without the head key: the composer of a sealed conversation waits. */
