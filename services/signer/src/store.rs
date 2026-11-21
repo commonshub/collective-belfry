@@ -562,8 +562,10 @@ impl Store {
     }
 
     /// Replaces the account's key and how it is held (the move to the member's own key; the
-    /// status and the username are kept), or inserts the account. Making an account that may
-    /// exist is `create_account`.
+    /// status and the username are kept), or inserts the account. A held key it replaces is
+    /// dropped (`put_account_archiving` keeps it). Making an account that may exist is
+    /// `create_account`. (Tests only: the signer itself says whether to archive.)
+    #[cfg(test)]
     pub fn put_account(
         &self,
         vine_id: &str,
@@ -572,17 +574,33 @@ impl Store {
         key_version: i64,
         sealed: Option<&[u8]>,
     ) -> rusqlite::Result<()> {
+        self.put_account_archiving(vine_id, pubkey, custody, key_version, sealed, false)
+    }
+
+    /// `put_account`; with `archive`, a held key it replaces is kept sealed in `archived_keys`
+    /// (the migration's window only: `Signer::move_to_own_key`).
+    pub fn put_account_archiving(
+        &self,
+        vine_id: &str,
+        pubkey: &str,
+        custody: Custody,
+        key_version: i64,
+        sealed: Option<&[u8]>,
+        archive: bool,
+    ) -> rusqlite::Result<()> {
         let t = now();
         let mut db = self.db();
         let tx = db.transaction()?;
-        // a held key that this replaces is archived, sealed as it was: never dropped silently
-        tx.execute(
-            "INSERT OR IGNORE INTO archived_keys
-                 (vine_id, pubkey, custody, key_version, sealed, archived_at)
-             SELECT vine_id, pubkey, custody, key_version, sealed, ?3 FROM accounts
-             WHERE vine_id = ?1 AND sealed IS NOT NULL AND pubkey <> ?2",
-            params![vine_id, pubkey, t],
-        )?;
+        if archive {
+            // a held key that this replaces is archived, sealed as it was
+            tx.execute(
+                "INSERT OR IGNORE INTO archived_keys
+                     (vine_id, pubkey, custody, key_version, sealed, archived_at)
+                 SELECT vine_id, pubkey, custody, key_version, sealed, ?3 FROM accounts
+                 WHERE vine_id = ?1 AND sealed IS NOT NULL AND pubkey <> ?2",
+                params![vine_id, pubkey, t],
+            )?;
+        }
         tx.execute(
             "INSERT INTO accounts (vine_id, pubkey, custody, key_version, sealed, status,
                                    created_at, updated_at)
@@ -594,13 +612,18 @@ impl Store {
         tx.commit()
     }
 
-    /// How many held keys were archived for the account (`put_account`).
+    /// How many held keys were archived for the account (`put_account_archiving`).
     pub fn archived_keys(&self, vine_id: &str) -> rusqlite::Result<i64> {
         self.db().query_row(
             "SELECT count(*) FROM archived_keys WHERE vine_id = ?1",
             params![vine_id],
             |r| r.get(0),
         )
+    }
+
+    /// Deletes every archived key (the migration's cleanup); how many there were.
+    pub fn delete_archived_keys(&self) -> rusqlite::Result<usize> {
+        self.db().execute("DELETE FROM archived_keys", [])
     }
 
     /// The sessions an import left out because their bunker key could not be derived:
@@ -762,10 +785,18 @@ impl Store {
         let tx = db.transaction()?;
         let (mut imported, mut existing, mut revoked, mut updated, mut released) = (0, 0, 0, 0, 0);
         for (i, c) in rows.iter().enumerate() {
-            type Have = (String, Option<String>, Option<i64>, String, String, String);
+            type Have = (
+                String,
+                Option<String>,
+                Option<i64>,
+                String,
+                String,
+                String,
+                bool,
+            );
             let holder: Option<Have> = tx
                 .query_row(
-                    "SELECT vine_id, client_pubkey, revoked_at, app, scope, origin
+                    "SELECT vine_id, client_pubkey, revoked_at, app, scope, origin, decrypt
                      FROM connections WHERE bunker_pubkey = ?1",
                     params![c.bunker_pubkey],
                     |r| {
@@ -776,17 +807,33 @@ impl Store {
                             r.get(3)?,
                             r.get(4)?,
                             r.get(5)?,
+                            r.get::<_, i64>(6)? != 0,
                         ))
                     },
                 )
                 .optional()?;
             match holder {
                 Some((h, ..)) if h != vine_id => return Ok(Imported::OtherAccount(i)),
-                Some((_, client, revoked_at, app, scope, origin)) => {
+                Some((_, client, revoked_at, app, scope, origin, decrypt)) => {
+                    // the sync never widens a connection: an outside app's row stays outside
+                    // (and keeps its consent) whatever the import says; own may become outside
+                    let (want_scope, want_decrypt) = if scope == SCOPE_OUTSIDE {
+                        (
+                            SCOPE_OUTSIDE,
+                            if c.scope == SCOPE_OUTSIDE {
+                                c.decrypt
+                            } else {
+                                decrypt
+                            },
+                        )
+                    } else {
+                        (c.scope.as_str(), c.decrypt)
+                    };
                     let same = client == c.client_pubkey
                         && revoked_at.is_some() == c.revoked_at.is_some()
                         && app == c.app
-                        && scope == c.scope
+                        && scope == want_scope
+                        && decrypt == want_decrypt
                         && origin == c.origin;
                     if !sync || same {
                         existing += 1;
@@ -803,18 +850,19 @@ impl Store {
                         "UPDATE connections SET app = ?2, label = ?3, scope = ?4, origin = ?5,
                              client_pubkey = ?6, revoked_at = ?7,
                              last_used_at = max(coalesce(last_used_at, 0), coalesce(?8, 0)),
-                             uses = max(uses, ?9)
+                             uses = max(uses, ?9), decrypt = ?10
                          WHERE bunker_pubkey = ?1",
                         params![
                             c.bunker_pubkey,
                             c.app,
                             c.label,
-                            c.scope,
+                            want_scope,
                             c.origin,
                             c.client_pubkey,
                             c.revoked_at.map(|t| revoked_at.unwrap_or(t)),
                             c.last_used_at,
                             c.uses,
+                            want_decrypt,
                         ],
                     )?;
                     updated += 1;
@@ -1540,12 +1588,18 @@ mod tests {
     }
 
     #[test]
-    fn a_held_key_replaced_by_an_own_key_is_archived_sealed() {
+    fn a_held_key_replaced_by_an_own_key_is_archived_sealed_only_when_asked() {
         let s = Store::in_memory().unwrap();
+        // outside the migration's window the held key is dropped
+        s.put_account("z", "held", Custody::Derived, 0, Some(b"sealed"))
+            .unwrap();
+        s.put_account("z", "own", Custody::Own, 0, None).unwrap();
+        assert_eq!(s.archived_keys("z").unwrap(), 0);
         s.put_account("a", "held", Custody::Imported, 0, Some(b"sealed"))
             .unwrap();
         assert_eq!(s.archived_keys("a").unwrap(), 0);
-        s.put_account("a", "own", Custody::Own, 0, None).unwrap();
+        s.put_account_archiving("a", "own", Custody::Own, 0, None, true)
+            .unwrap();
         assert_eq!(s.archived_keys("a").unwrap(), 1);
         let kept: Vec<u8> = s
             .db()
@@ -1557,7 +1611,39 @@ mod tests {
             .unwrap();
         assert_eq!(kept, b"sealed");
         // a second move (own to another own) has nothing held to archive
-        s.put_account("a", "own2", Custody::Own, 0, None).unwrap();
+        s.put_account_archiving("a", "own2", Custody::Own, 0, None, true)
+            .unwrap();
         assert_eq!(s.archived_keys("a").unwrap(), 1);
+        // the cleanup deletes the archive
+        assert_eq!(s.delete_archived_keys().unwrap(), 1);
+        assert_eq!(s.archived_keys("a").unwrap(), 0);
+    }
+
+    #[test]
+    fn the_sync_never_turns_an_outside_connection_into_an_own_one() {
+        let s = Store::in_memory().unwrap();
+        s.put_account("x", "x", Custody::Derived, 0, Some(b"k"))
+            .unwrap();
+        let mut outside = imp("b1", Some("c"), None);
+        outside.scope = "outside".into();
+        outside.decrypt = true;
+        let own = imp("b2", Some("d"), None);
+        s.import_connections("x", &[outside, own], true, &[])
+            .unwrap();
+        // the next import says own for b1 (approvals changed, a guess): b1 stays outside with
+        // its consent; b2 may become outside
+        let mut b1 = imp("b1", Some("c"), None);
+        b1.decrypt = false;
+        let mut b2 = imp("b2", Some("d"), None);
+        b2.scope = "outside".into();
+        b2.decrypt = true;
+        assert_eq!(
+            counts(s.import_connections("x", &[b1, b2], true, &[]).unwrap()),
+            (0, 1, 0, 1, 0)
+        );
+        let r1 = s.connection_by_bunker("b1").unwrap().unwrap();
+        assert_eq!((r1.scope.as_str(), r1.decrypt), ("outside", true));
+        let r2 = s.connection_by_bunker("b2").unwrap().unwrap();
+        assert_eq!((r2.scope.as_str(), r2.decrypt), ("outside", true));
     }
 }
