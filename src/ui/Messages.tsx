@@ -6,7 +6,7 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { cancelHeld, heldFailure, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { cancelHeld, heldFailure, heldFor, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, plainRefs, profiles } from '../core/model'
 import { useVersion } from '../core/store'
@@ -244,16 +244,22 @@ function DmReactions({ d, picking, setPicking }: { d: Dm; picking: boolean; setP
 function HeldState({ d }: { d: Dm }) {
   const now = useNow(15_000)
   const long = now * 1000 - heldSince(d.rid) > 60_000 // useNow: seconds
-  const [gone, setGone] = useState(false)
+  const [sent, setSent] = useState(false)
+  // canvas v98 messages/encryption-held: one grey line under the faded bubble, never a technical reason
+  const failed = heldFailure(d.rid), who = heldFor(d.rid)
+  const line = failed ? `Not sent: ${failed}`
+    : who ? `Not sent yet: ${displayName(who)}’s new device isn’t ready.`
+    : long ? 'Not sent yet: this device can’t reach the belfry to check how to lock it.'
+    : 'Saved · waiting for the connection'
+  if (sent) return <span className="dm-state">Already sent</span>
   return (
     <span className="dm-state queued">
-      {heldFailure(d.rid) ? `Not sent: ${heldFailure(d.rid)}` : long ? 'Not sent yet: this device can’t reach the belfry to check how to lock it.' : 'Saved · waiting for the connection'}
-      {' · '}<button className="link" onClick={async () => {
+      {line}{' · '}
+      <button className="link" onClick={async () => {
         const text = await cancelHeld(d.rid)
-        if (text === null) { setGone(true); return } // it went just before: already sent
+        if (text === null) { setSent(true); setTimeout(() => setSent(false), 2000); return } // the send won: "Already sent" for two seconds
         window.dispatchEvent(new CustomEvent('belfry-compose', { detail: { conv: d.conv, text } }))
       }}>Cancel</button>
-      {gone && <> · Already sent</>}
     </span>
   )
 }

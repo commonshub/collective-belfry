@@ -6,7 +6,7 @@ import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE, getBackend } from '../config'
 import type { Signer } from './auth'
 import { GUEST_MODE, askToJoin, reading } from './guestmode'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
-import { addEvents, all, dropOutbox, hasEvent, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
+import { heldEvent, addEvents, all, dropOutbox, hasEvent, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
 
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
@@ -461,7 +461,7 @@ export async function queryOnce(target: Target, filter: Filter, timeoutMs = 8000
 /** What the relay has for FILTERS, once it said that was all (EOSE). `null` when it never said
  *  so (no connection, a timeout, the subscription closed): then nothing is known, and an empty
  *  list would be a guess. */
-export async function queryComplete(target: Target, filters: Filter[], timeoutMs = 8000): Promise<NostrEvent[] | null> {
+export async function queryComplete(target: Target, filters: Filter[], timeoutMs = 8000, knownFromStore = false): Promise<NostrEvent[] | null> {
   if (localOnly || !signer) return null
   let r: Relay
   try { r = await within(relay(target), timeoutMs, 'no connection to the relay') } catch { return null }
@@ -476,7 +476,12 @@ export async function queryComplete(target: Target, filters: Filter[], timeoutMs
       resolve(v)
     }
     const timer = setTimeout(() => end(null), timeoutMs)
-    const sub = r.subscribe(filters, { onevent: (e) => out.push(e), oneose: () => end(out), onclose: () => end(null) })
+    // KNOWN_FROM_STORE: an event the store holds already is taken from it (its signature was checked
+    // when it came in), not checked again
+    const sub = r.subscribe(filters, {
+      onevent: (e) => out.push(e), oneose: () => end(out), onclose: () => end(null),
+      ...(knownFromStore ? { alreadyHaveEvent: (id: string) => { const e = heldEvent(id); if (e) out.push(e); return !!e } } : {}),
+    })
   })
 }
 
@@ -485,18 +490,30 @@ export async function queryComplete(target: Target, filters: Filter[], timeoutMs
  *  de-duplicated), stopping only on a page that brings nothing new (a short page proves nothing).
  *  null when any page went unanswered: then nothing is known. */
 export const PAGE = 300
-export async function queryPaged(target: Target, filters: Filter[], timeoutMs = 8000, maxPages = 100): Promise<NostrEvent[] | null> {
+export async function queryPaged(target: Target, filters: Filter[], timeoutMs = 8000, maxPages = 100, totalMs?: number): Promise<NostrEvent[] | null> {
   const out = new Map<string, NostrEvent>()
+  const deadline = totalMs ? Date.now() + totalMs : Infinity
   for (const f of filters) {
     let until: number | undefined
+    let complete = false
     for (let i = 0; i < maxPages; i++) {
-      const page = await queryComplete(target, [{ ...f, limit: PAGE, ...(until !== undefined ? { until } : {}) }], timeoutMs)
+      const left = deadline - Date.now()
+      if (left <= 0) return null // the whole read is bounded (§4: 3 s before a send)
+      const page = await queryComplete(target, [{ ...f, limit: PAGE, ...(until !== undefined ? { until } : {}) }], Math.min(timeoutMs, left), true)
       if (page === null) return null
       const fresh = page.filter((e) => !out.has(e.id))
-      if (!fresh.length) break
       for (const e of fresh) out.set(e.id, e)
-      until = Math.min(...page.map((e) => e.created_at))
+      const oldest = page.length ? Math.min(...page.map((e) => e.created_at)) : 0
+      if (!fresh.length) {
+        // a full page all in one second that brings nothing new: more than a page share that second;
+        // go on from the second before (the rest of that one second is lost) instead of stopping
+        if (page.length >= PAGE && page.every((e) => e.created_at === oldest) && oldest > 0) { until = oldest - 1; continue }
+        complete = true
+        break
+      }
+      until = oldest
     }
+    if (!complete) return null // past the page limit: can't tell
   }
   return [...out.values()]
 }
@@ -554,22 +571,29 @@ function moveMark(t: Target) {
 let extraMain: () => Filter[] = () => []
 export function setExtraMainFilters(f: () => Filter[]) { extraMain = f; resubscribe('main') }
 /** Read the gift wraps again from the start once (a device that just received keys, §4). */
-export function replayWraps() { wrapsFromZero = true; resubscribe('main') }
-let wrapsFromZero = false
+export function replayWraps() { setFromZero(true); void pageMain() }
+const ZERO = 'belfry-wraps-from-zero' // per account (accounts.ts keeps one copy per account)
+const fromZero = () => { try { return localStorage.getItem(ZERO) === '1' } catch { return false } }
+const setFromZero = (on: boolean) => { try { if (on) localStorage.setItem(ZERO, '1'); else localStorage.removeItem(ZERO) } catch { /* private mode */ } }
 let lastWrapsSince = 0
 let extraPaged: () => Filter[] = () => []
 /** sealedrt.ts: its filters that must be read whole (rosters, anchors, wraps to this device). */
 export function setPagedMainFilters(f: () => Filter[]) { extraPaged = f }
 /** After an EOSE on the community relay: the gift wraps since the catch-up mark (or from 0 after
  *  replayWraps) and the sealed filters, read page by page (a REQ gives at most PAGE per filter). */
-let paging = false
+let paging = false, pageAgain = false
 async function pageMain() {
-  if (paging || !signer || localOnly) return
+  if (!signer || localOnly) return
+  if (paging) { pageAgain = true; return } // asked during a read: run again after it
   paging = true
   try {
-    const p = signer.pubkey
-    const got = await queryPaged('main', [{ kinds: [1059], '#p': [p], since: lastWrapsSince }, ...extraPaged()])
-    if (got) addEvents(got)
+    do {
+      pageAgain = false
+      const p = signer.pubkey
+      const zero = fromZero()
+      const got = await queryPaged('main', [{ kinds: [1059], '#p': [p], since: zero ? 0 : lastWrapsSince }, ...extraPaged()])
+      if (got) { addEvents(got); if (zero) setFromZero(false) } // "from 0" done only once a read from 0 completed
+    } while (pageAgain && signer)
   } finally { paging = false }
 }
 
@@ -591,8 +615,7 @@ function filters(target: Target): Filter[] {
   // are back-dated up to two days (NIP-59), so they overlap by three
   const p = signer.pubkey
   const wrapsSince = Math.max(0, latestCreatedAt((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === p)) - 3 * 86400)
-  lastWrapsSince = wrapsFromZero ? 0 : wrapsSince
-  wrapsFromZero = false
+  lastWrapsSince = wrapsSince
   const oldSince = Math.max(0, latestCreatedAt((e) => e.kind === 4) - 3600)
   // members' tags and places (people.ts): one replaceable event each, members-only relay
   const extrasSince = Math.max(0, latestCreatedAt((e) => e.kind === 30078 && e.tags.some((t) => t[0] === 'd' && t[1] === 'belfry:profile')) - 3600)

@@ -8,7 +8,7 @@ import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
-import { NoHead, acceptedSealed, decryptForLb, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
+import { NoHead, TOO_LONG, acceptedSealed, decryptForLb, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
 
@@ -438,7 +438,7 @@ async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv
   if (mode === 'undecided') return hold({ rumor: rumor as unknown as Rumor, to, self, conv: conv! })
   let wraps: NostrEvent[]
   if (mode === 'sealed') {
-    try { wraps = sealedWrapsOf(rumor as unknown as Rumor, to, self, conv!) } catch (e) { if (e instanceof NoHead) return hold({ rumor: rumor as unknown as Rumor, to, self, conv: conv! }); throw e }
+    try { wraps = sealedWrapsOf(rumor as unknown as Rumor, to, self, conv!) } catch (e) { if (e instanceof Error && e.message === TOO_LONG) throw new Error('Not sent: ' + TOO_LONG); if (e instanceof NoHead) return hold({ rumor: rumor as unknown as Rumor, to, self, conv: conv!, who: e.message || undefined }); throw e }
   } else wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
   if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
   for (const w of wraps) await enqueueSigned('main', w, rumor.id)
@@ -453,7 +453,7 @@ function sealedWrapsOf(r: Rumor, to: string[], self: boolean, conv: Conv): Nostr
 
 // held: decided neither sealed nor old yet (§6), one kv entry each (this account's own database,
 // like the messages), sent at the first complete answer
-interface Held { rumor: Rumor; to: string[]; self: boolean; conv: Conv; failed?: string }
+interface Held { rumor: Rumor; to: string[]; self: boolean; conv: Conv; failed?: string; /** whose new device isn't ready (a locked conversation with nobody to lock it to) */ who?: string }
 const KV_HELD = 'dm-held:', KV_OUT = 'dm-out:'
 const held = new Map<string, Held>()
 /** Held on this device until it can be decided (shown as waiting). */
@@ -486,8 +486,9 @@ async function sendHeld(refresh = false) {
             wraps = mode === 'sealed' ? sealedWrapsOf(h.rumor, h.to, h.self, h.conv)
               : await Promise.all([...new Set([...h.to, ...(h.self ? [me()] : [])])].map((p) => giftWrap(h.rumor as unknown as NostrEvent, p)))
           } catch (e) {
-            if (e instanceof NoHead) return
-            h.failed = e instanceof Error ? e.message : String(e) // stays held, said why, Cancel still there
+            if (e instanceof NoHead) { if (h.who !== (e.message || undefined)) { h.who = e.message || undefined; await kvSet(KV_HELD + h.rumor.id, h).catch(() => {}) } return }
+            if (!(e instanceof Error) || e.message !== TOO_LONG) return // a passing failure (the signer away): tried again later
+            h.failed = TOO_LONG // can never go: stays held, said why (never a technical reason), Cancel still there
             await kvSet(KV_HELD + h.rumor.id, h).catch(() => {})
             return
           }
@@ -519,6 +520,8 @@ export async function cancelHeld(rid: string): Promise<string | null> {
 }
 /** Why a held message failed for good (it stays held until Cancel), or undefined. */
 export const heldFailure = (rid: string) => held.get(rid)?.failed
+/** Whose new device a held message waits for, if that is why (v98). */
+export const heldFor = (rid: string) => held.get(rid)?.who
 /** When it was held (ms; for "why" after a minute). */
 export const heldSince = (rid: string) => (held.has(rid) ? held.get(rid)!.rumor.created_at * 1000 : 0)
 

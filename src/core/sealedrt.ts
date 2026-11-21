@@ -157,7 +157,10 @@ export async function startSealed(clientSecret: string) {
     for (const path of await kvPrefix<NostrEvent[]>(KV_PATH).catch(() => [] as NostrEvent[][])) { const pk = path[0]?.tags.find((t) => t[0] === 'p')?.[1]; if (pk) pinPaths.set(pk, path) }
     await kvSet(KV_DEVICE, device.pub).catch(() => {})
     for (const p of await kvPrefix<C.Rumor>(KV_PACK).catch(() => [] as C.Rumor[])) packs.set(p.id, p)
-    for (const a of await kvPrefix<{ id: string }>(KV_ANSWERED).catch(() => [] as { id: string }[])) doneRequests.add(a.id)
+    for (const a of await kvPrefix<{ id: string; at?: number }>(KV_ANSWERED).catch(() => [] as { id: string; at?: number }[])) {
+      if (Date.now() - (a.at ?? 0) > 30 * 86400e3) { void kvDel(KV_ANSWERED + a.id).catch(() => {}); continue } // older than the 7-day request window, long since
+      doneRequests.add(a.id)
+    }
     for (const h of await kvPrefix<{ dev: string; at: number }>(KV_HANDED).catch(() => [] as { dev: string; at: number }[])) handedAt.set(h.dev, h.at)
     started = true
     try { channel = new BroadcastChannel('belfry-sealed-' + me()); channel.onmessage = () => void reloadFromKv() } catch { /* old browser: no other tabs told */ }
@@ -234,11 +237,11 @@ const answeredRecently = (pk: string, ms: number) => { const a = answeredAt.get(
 
 /** Ask the relay for these people's anchors and rosters, always without since (§3.3); at most
  *  WAIT ms, then what is known. True when it answered completely after AUTH. */
-async function fetchChains(people: string[], waitMs = 3000): Promise<boolean> {
+async function fetchChains(people: string[], waitMs = 3000, totalMs?: number): Promise<boolean> {
   if (!people.length) return true
   for (const p of people) triedAt.set(p, Date.now())
   const conn = connectionOf('main')
-  const got = await queryPaged('main', [{ kinds: [C.ANCHOR], authors: people, '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': people }] as Filter[], waitMs)
+  const got = await queryPaged('main', [{ kinds: [C.ANCHOR], authors: people, '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': people }] as Filter[], waitMs, 100, totalMs)
   if (got === null) return false
   addEvents(got)
   if (conn < 0 || connectionOf('main') !== conn) return false // asked before AUTH, or the socket changed
@@ -326,7 +329,7 @@ export async function ensureChains(conv: Conv) {
  *  rosters asked for again (they stay live too); at most 3 s, then what is known is used. */
 export async function refreshChains(conv: Conv, waitMs = 3000) {
   if (!active()) return
-  await fetchChains(peopleOf(conv), waitMs)
+  await fetchChains(peopleOf(conv), waitMs, waitMs) // the whole read within the 3 s (§4), every page included
 }
 
 /** §6: how a message to CONV goes. 'sealed': remembered sealed, or every participant has a ready
@@ -437,27 +440,30 @@ export function decryptForLb(lb: string, peer: string, content: string): string 
 
 // ---- sealing (dm.ts) ------------------------------------------------------------------------
 
+/** Canvas v98: a message that can never be sent sealed. */
+export const TOO_LONG = 'the message is too long to lock. Shorten it and send again.'
+
 /** Thrown when a sealed message has no head to go to yet: dm.ts holds it (never the old way). */
 export class NoHead extends Error {}
 
 /** The wraps of a sealed message: one per participant's head letterbox and one to mine, sealed by
  *  this device (no signer call). NoHead when a letterbox is unknown; an Error when too big. */
 export function sealWraps(rumor: C.Rumor, to: string[]): NostrEvent[] {
-  if (!device) throw new NoHead('no device key')
+  if (!device) throw new NoHead('')
   const r = C.withId(rumor)
-  if (!C.fits(r)) throw new Error('This message is too long to send sealed.')
+  if (!C.fits(r)) throw new Error(TOO_LONG)
   return [...new Set([...to, me()])].map((p) => {
     const lb = lbFor(p)
-    if (!lb) throw new NoHead('no letterbox')
+    if (!lb) throw new NoHead(p) // whose device isn't ready (v98: "‹Name›'s new device isn't ready")
     return C.sealToLetterbox(device!.secret, r, p, lb)
   })
 }
 
 /** §7 out: a mail to the belfry's key sealed by this device (wrap to the belfry, no lb). */
 export function sealMailOut(rumor: C.Rumor, belfry: string): NostrEvent {
-  if (!device) throw new NoHead('no device key')
+  if (!device) throw new NoHead('')
   const r = C.withId(rumor)
-  if (!C.fits(r)) throw new Error('This e-mail is too long to send sealed.')
+  if (!C.fits(r)) throw new Error(TOO_LONG)
   return C.sealToKey(device.secret, r, belfry, [['p', belfry]])
 }
 
@@ -681,7 +687,7 @@ let asking: Asking | undefined
 const doneRequests = new Set<string>()
 const KV_ANSWERED = 'sealed:answered:', KV_HANDED = 'sealed:handed:'
 const handedAt = new Map<string, number>() // device → my last hand-over to it (s), across restarts
-function requestDone(id: string) { doneRequests.add(id); void kvSet(KV_ANSWERED + id, { id }).catch(() => {}) }
+function requestDone(id: string) { doneRequests.add(id); void kvSet(KV_ANSWERED + id, { id, at: Date.now() }).catch(() => {}) }
 export const pendingAsk = () => asking
 let linked: string | undefined // Link a phone: the device that came in by scanning my code
 export const linkedName = () => linked

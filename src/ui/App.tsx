@@ -19,7 +19,7 @@ import { wipe } from '../core/db'
 import { accounts, activeId, allAccounts, discardActiveFor, dropActive, forgetAll, noteAccount, readOf } from '../core/accounts'
 import { roleBadge } from '../core/roles'
 import { replyRoot, archivedGroups, deletedGroup, group, groups, profiles, nameOf } from '../core/model'
-import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
+import { addEvents, hasEvent, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
@@ -195,7 +195,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
-          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk) } })
+          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk) } })
         }
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
