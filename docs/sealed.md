@@ -102,7 +102,11 @@ always without `since`.
   fresh start (§3.4: the amber notice in each conversation with that person), because the account
   key that signs anchors is held by the server. After a switch, a device of the new head that was
   not in the head this client held before is never answered without a prompt (§5.5): it goes
-  through Allow. (Two of a person's devices anchoring different rosters within seconds can cause
+  through Allow. The devices of the head held before the switch are the trusted ones; a device
+  becomes trusted when the person allows it on this device, or when a later roster of the followed
+  chain, signed by a trusted device, ADDS it (a roster that merely keeps it vouches for nothing:
+  devices publish rosters on their own, for `ready` or a gone session). A device the person removed
+  comes back untrusted. (Two of a person's devices anchoring different rosters within seconds can cause
   a false notice; rare, accepted.)
 - Anything else is ignored silently (wrong signature, unknown prev, signer not in the previous roster).
 
