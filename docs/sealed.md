@@ -68,7 +68,8 @@ It stops another member from publishing a roster "for" someone, and a removed de
 taking the chain back: only a live session of the account (or the server) can make it, and a
 removed device's session is revoked. Every device that publishes a roster publishes the anchor
 again together with it: the roster is signed locally, the anchor naming it is signed by the signer,
-and only then are both sent, in the same moment, the roster first. When the anchor cannot be signed,
+and only then are both sent: the roster first, the anchor the moment the relay accepted the roster
+(an anchor naming a roster the relay refused would un-anchor the standing head). When the anchor cannot be signed,
 neither is sent and the change is tried again later. A change counts as done only when the relay
 accepted both events; the device then reads its chain again from the relay and checks its roster is
 on the anchored path. When it is not (another branch was anchored, an event was refused), it does
