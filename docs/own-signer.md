@@ -198,10 +198,11 @@ reconnects and sends `connect` again keeps working.
 belfry's own apps: the chat, the phone apps, the suite; they sign anything for their account)
 or `outside` (every other app, approved or not). An outside connection is never given a
 signature for: NIP-98 (27235) whose `u` is the belfry's domain or any name under it, or has no
-`u`; NIP-42 AUTH (22242) for one of the belfry's relays, or without a relay; kind 24133;
+`u`; NIP-42 AUTH (22242) for one of the belfry's relays, the belfry's domain or any name
+under it (`git.<domain>`, a private GRASP relay, is in no list), or without a relay; kind 24133;
 NIP-29 moderation and joins (9000 to 9009, 9021, 9022); Blossom auth (24242) for the belfry's
 storage or for no server; kinds 0 and 3. That is `remoteapps._forbidden` with no perms; the
-signer's copy (`limits.rs`) and the service's are held to the same 50 vectors. The limit is in
+signer's copy (`limits.rs`) and the service's are held to the same vectors. The limit is in
 the signer because that is where a NIP-46 request arrives; the service applies the same
 function to `/api/nostr`. Chosen against a facade-only limit: an app holding a bunker URL never
 passes the service. A limit on `created_at` was considered and not added: outboxes and sealed
@@ -214,7 +215,7 @@ order, a channel's inbox and web settings), never a label in a `belfry/…` name
 1985: a pin, a proposal's status, a ticket checked in, a vouch, a button's press and answer),
 and decrypts (`nip44_decrypt`, `nip04_decrypt`) only when its connection carries a consent
 flag, as remote apps' connections do. Kind 5 stays allowed. One vector file for both sides:
-`services/signer/vectors/limits.json` (73 `cases`, 7 `methods`; `limits-next.json` is gone).
+`services/signer/vectors/limits.json` (78 `cases`, 7 `methods`; `limits-next.json` is gone).
 
 Decision to confirm: kinds 0 and 3 are refused to an approved outside app too (the rule of
 remote apps "only when the app said so" has no way to say so at `/connect`). An outside Nostr
@@ -480,7 +481,9 @@ How the rows go in:
   on `chat.<domain>`, earlier on the apex, the suite), `outside` when it is an outside app an
   admin approved (`apps.state`); nostr-login stores `nostrconnect://<client>` (`oauth.rs:5071`)
   and the OIDC path the authorize request's origin or the app origin (`oidc.rs`
-  `redirect_origin_for`). **Anything not known is carried `own` and counted as "scope guessed"**
+  `redirect_origin_for`). A plain `http://` origin (a test app on localhost, or an outside
+  app: no app of a belfry is served over HTTP) is carried `outside`, nothing to accept.
+  **Anything else not known is carried `own` and counted as "scope guessed"**
   (in every phase's counts, listed in the verify report) and **blocks verify unless
   `--accept-guessed N` names their exact number**: a chat session carried as outside would
   lock its member out of their sealed history, which is worse than an outside app keeping own
@@ -1073,3 +1076,27 @@ refused (422), not silently done as a plain import, so a misuse is seen. `DELETE
 Docker; the script's new calls (`close-window` in switch, `drop-archive` in cleanup) and the
 box guard ran only as unit tests of the functions; the usernames claim about the four boxes is
 reasoned, not read from them.
+
+## 14. Friedger's review of `1d15b53` (a real migration on belfry.tofauti.net)
+
+| # | Finding | Change |
+|---|---|---|
+| 1 | `guest_agent` read from Odoo (`migration._tiers`, `roles`, `admins`, `guests`): `Invalid field` on every Odoo belfry | `core.pass_fields` leaves `REGISTER_ONLY_PASS_FIELDS` out with Odoo (which has no guest or agent passes). The fake Odoo reads the add-on's models (`tests/fakes.py` `ADDON_FIELDS`) and refuses any other field on the add-on's own models and any `belfry_*` field the add-on does not add (read, search_read, domains, write, create); `tests/test_odoo_fields.py` |
+| 2 | The signer can't open its database on a new volume | `nocopy` on both mounts of `signer-data` (`docker-compose.signer.yml`; the import file extends it). Kept the Dockerfile's `USER 10001` and `/data`: a signer image run on its own stays non-root, and with `nocopy` its ownership never reaches the volume, so `signer-init`'s chown to `HOST_UID` holds on a fresh `--own-signer` install and in the migration alike |
+| 3 | `CONSOLE_URL` empty → the apps' sign-in 404 | `check` stops on an empty `CONSOLE_URL`; `belfry apply` (`legacy_settings`) fills `https://belfry.<domain>` on its own signer |
+| 3b | Admins with a lapsed pass locked out after the switch | On its own signer `apps.signin_member` (the console's e-mail code, the chat's `/login/*`, passkeys, `admin_pubkeys`) takes a person with `belfry_steward` and a key (`belfry_npub`, else the newest pass's) whatever their passes; `console.viewer` lets such an admin in. `check` lists who becomes an admin (Authentik's group, masked) and `check` / `verify` the admins without an active pass (information, not blocking: they can sign in). Such an admin is still off the relay whitelist (no chat) until a pass is active again |
+| 3c | `add-steward` with Odoo made a pass that ended with the event | `core.activate_pass`: a pass with `steward_pass` runs from today to `MEMBERSHIP_END` (2099-12-31), as the own register's `activate_free_pass`. No add-on change (the dates are the onboarding service's), so no version bump |
+| 4 | Rollback needed the unlocked seed; one long argument | `carry-back` skips the seed check (it only reads); `--skip-carry-back`; a failed carry-back starts the service again and stops; the list goes on stdin |
+| 5 | Outside apps could AUTH to `git.<domain>` | 22242: the belfry's domain or any host under it, as 27235 (`limits.rs`, `remoteapps._forbidden`); vectors in `vectors/limits.json` (the old "other subdomain" case is now refused) |
+| 6 | `/setup` could reopen | A `reset.json` without `open` counts as open only while no `first-admin.json` newer than its `at` exists; once one is seen, `"open": false` is written, so losing the file later does not reopen it |
+| 7 | Cleanup not resumable | `cleanup_started` marker before the first deletion; a rerun reuses the first run's verify report (`cleanup_verify`); container removal stops on error; refused without `opened_at` |
+| 8 | Keycast's own admin stops every migration | `--keycast-admin` (the script passes `KEYCAST_ADMIN_PUBKEY`): left out when it has no vine id, counted as `keycast_admin_excluded` |
+| — | Smaller | bunker permit taken inside the task (bounded queue of 1024); ids recorded after the rate limit (`Seen::contains` first); `keep` pruned only after the bunker listens (`Signer::prune`); an import with a configured but locked seed is refused (`seed_locked`), not labelled imported; an empty or non-string `connection` is 422; guests get their own `guest-<n>` slug, and a member may send back their own starting username; `/api/oauth/token`, `/revoke`, `/api/nostr` answer 502 `signer_unavailable` with CORS on any error underneath; `end_session` and `session_revoked` log write errors instead of raising; `belfry status` asks `nostr.json` for a real username and checks the key comes back; the sync's "there already" never subtracts more than pass 2 counted; `backup.sh` pauses the import signer by its container; `switch` asks `has-people` for a minute; `http://` origins are outside; `belfry apply` decides lean once and never `--build`s after `lean_build`, and runs `gen-secrets.sh` when a mounted secret is missing |
+
+**Left**: `--exclude` for an account with a vine id (the register expects that person in the
+signer: the start guard and verify would then refuse, so leaving one out is a decision about a
+member, not a flag); the sync following a username cleared or an account deleted in Keycast
+between import and switch (needs the signer to clear a username and delete an account on a
+sync, a new API surface: the verify reports the mismatch, and the operator re-runs after
+fixing it in Keycast).
+
