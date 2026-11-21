@@ -108,7 +108,9 @@ always without `since`.
 
 ### 3.4 Pinning and resets
 
-A client remembers, per person, the root it first accepted and the head it last accepted.
+A client remembers, per person, the root it first accepted and the head it last accepted (with
+enough of its path to recognise it, and which heads it saw anchored). This memory is durable: it
+survives restarts and is wiped only with the account. A pin a restart forgets protects nothing.
 When the anchor later names a root that is not the pinned one: the person started fresh.
 Accept the new chain, pin it, and show in each conversation with them, once:
 "‹Name› signed in on a new device that can't read earlier messages yet" (amber, opens Share history, §8).
