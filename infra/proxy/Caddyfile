@@ -410,16 +410,17 @@ chat.{$BELFRY_DOMAIN} {
 		redir @join /#/join/{re.join.1} 302
 		# "Link your phone" (the chat's Accounts screen shows it as a QR code): chat.<domain>/
 		# login/<username> opens the phone app, or the chat's own log-in, with that address
-		# filled in. It carries no secret: the 6-digit code mailed to the member is the proof.
-		@login path_regexp login ^/login/([a-z0-9][a-z0-9._-]{0,29})$
-		redir @login /#/login/{re.login.1} 302
+		# filled in. The page itself answers there (the chat reads the name from the path), never
+		# a redirect: a redirect's own #/login/… would replace the link's fragment, and sealed
+		# conversations put the device link's secret there (#l=…, docs/sealed.md), which must
+		# never reach a server or a log.
 		# an event (chat.<domain>/events/<link>, also the phone apps' link): the chat's event page
 		@event path_regexp event ^/events/([A-Za-z0-9_-]{1,80})/?$
 		redir @event /#/events/{re.event.1} 302
 		# a ticket's QR (checkin.py): the event, with the check-in card for those who check in
 		@ticket path_regexp ticket ^/events/([A-Za-z0-9_-]{1,80})/t/([a-z2-7]{16})/?$
 		redir @ticket /#/events/{re.ticket.1}/t/{re.ticket.2} 302
-		@fresh path / /index.html /sw.js
+		@fresh path / /index.html /sw.js /login/*
 		header @fresh Cache-Control "no-cache"
 		root * /srv/apps/chat
 		# a build's files have their hash in the name: they never change, and one that is gone
