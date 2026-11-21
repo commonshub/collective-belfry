@@ -14,6 +14,7 @@
 //! | `CUSTODY_SEED_FILE` | the custody seed (64 hex), read on every account creation |
 //! | `BUNKER_RELAYS` | relays the bunker listens on, comma-separated (`ws://bunker-relay:8080`) |
 //! | `BUNKER_PUBLIC_RELAYS` | the same relays as clients reach them, for bunker:// URLs |
+//! | `SIGNER_UNCLAIMED_SECONDS` | how long a connection made without a client key waits for its first `connect`, default 600 |
 //!
 //! `belfry-signer derive <vine_id> <version>` prints the public key the seed gives (a check
 //! without the service running).
@@ -100,12 +101,20 @@ fn main() {
     .unwrap_or_else(|e| fail(e.0));
     let store = store::Store::open(&PathBuf::from(env("SIGNER_DB", "/data/signer.sqlite3")))
         .unwrap_or_else(|e| fail(format!("SIGNER_DB: {e}")));
-    let signer = Arc::new(signer::Signer::new(
-        store,
-        vault,
-        seed_path,
-        list("BUNKER_PUBLIC_RELAYS"),
-    ));
+    let mut signer = signer::Signer::new(store, vault, seed_path, list("BUNKER_PUBLIC_RELAYS"));
+    signer.unclaimed_ttl = env("SIGNER_UNCLAIMED_SECONDS", "600")
+        .parse()
+        .ok()
+        .filter(|s| *s > 0)
+        .unwrap_or_else(|| fail("SIGNER_UNCLAIMED_SECONDS must be a number of seconds".into()));
+    // keys sealed the old way (no row binding) are bound to their rows once; one that does
+    // not open, or holds another key than its row names, stops the start
+    match signer.upgrade_seals() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(n, "sealed keys bound to their rows"),
+        Err(e) => fail(format!("sealed keys: {}", e.message())),
+    }
+    let signer = Arc::new(signer);
     let listen = env("SIGNER_LISTEN", "0.0.0.0:8200");
 
     let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(format!("runtime: {e}")));
