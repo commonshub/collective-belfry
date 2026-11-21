@@ -35,7 +35,7 @@ import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
 import { AllowPrompt, DevicesScreen, EncryptionScreen, ShowHowScreen } from './Sealed'
-import { chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
+import { askNow, chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
 import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
@@ -195,7 +195,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
-          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk) } })
+          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk) } })
         }
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()

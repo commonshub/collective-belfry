@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { convName, isMail, mailAddress, peers, type Conv } from '../core/dm'
 import { displayName, realName } from '../core/model'
 import { touch, useVersion } from '../core/store'
-import { FULL, active as sealedOn, mySessions } from '../core/sealedrt'
+import { FULL, PENDING_OTHER, active as sealedOn, mySessions } from '../core/sealedrt'
 import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
 import { canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
@@ -212,8 +212,11 @@ export function AllowPrompt() {
       <h2 id="seal-allow-t">Give your new device “{a.name}” access to your conversations?</h2>
       <p>It will read all your messages, including earlier ones.</p>
       <span className="seal-meta">Signed in as {realName(me()) || 'you'} · {ago(a.at)}</span>
-      {error && <div className="error">{error}</div>}
-      <button className="btn" disabled={!!busy} aria-busy={busy === 'allow' || undefined} onClick={run('allow', allowAsking)}>{busy === 'allow' ? <><Spin /> Allowing…</> : 'Allow'}</button>
+      {error && error !== PENDING_OTHER && <div className="error">{error}</div>}
+      {/* canvas v96 messages/encryption-allow-waiting: in another device's roster, not anchored yet */}
+      {error === PENDING_OTHER
+        ? <div className="seal-allow-waiting" role="status"><Spin /> {PENDING_OTHER}</div>
+        : <button className="btn" disabled={!!busy} aria-busy={busy === 'allow' || undefined} onClick={run('allow', allowAsking)}>{busy === 'allow' ? <><Spin /> Allowing…</> : 'Allow'}</button>}
       <button className="btn seal-red" disabled={!!busy} aria-busy={busy === 'no' || undefined} onClick={run('no', refuseAsking)}>{busy === 'no' ? <><Spin /> Removing…</> : 'Not me'}</button>
       <span className="seal-note">Not me removes that device and signs it out.</span>
       {error && <button className="link seal-close" onClick={dismissAsking}>Close</button>}

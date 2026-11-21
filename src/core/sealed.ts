@@ -124,6 +124,8 @@ export const myDevices = () => (real() ? realMine() : state.mine)
 export const hasDevices = () => myDevices().length > 0
 export const theirDevices = (pk: string): TheirDevices | undefined => (real() ? realTheirs(pk) : state.people.get(pk))
 export const deviceLines = (conv: Conv) => (real() ? realLines(conv) : state.lines.get(conv) ?? [])
+/** §5.5: in my head without the head key: the composer of a sealed conversation waits. */
+export const waitingForSibling = (conv: Conv) => real() && R.inHeadNoKey() && R.isSealedConv(conv)
 export const lockedHere = (conv: Conv) => (real() ? R.lockedConv(conv) : state.lockedHere.has(conv))
 export const anyLockedHere = () => (real() ? R.showBanner() : state.lockedHere.size > 0)
 export const sharedBy = (rid: string) => (real() ? R.sharedByOf(rid) : state.shared.get(rid))

@@ -6,7 +6,7 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { cancelHeld, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { cancelHeld, heldFailure, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, plainRefs, profiles } from '../core/model'
 import { useVersion } from '../core/store'
@@ -14,7 +14,7 @@ import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
-import { notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
+import { waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow } from './common'
 
@@ -157,7 +157,9 @@ export function MessageThread({ conv }: { conv: Conv }) {
           {locked && <LockedBlock since={sealedAt(conv) || Date.now()} />}
         </div>
       </div>
-      {locked ? <div className="seal-nocompose">You can write here once this device is allowed.</div> : <DmComposer conv={conv} needsSubject={isNewMail(conv)} />}
+      {locked ? <div className="seal-nocompose">You can write here once this device is allowed.</div>
+        : waitingForSibling(conv) ? <div className="seal-nocompose seal-waiting" role="status"><span className="spinner" aria-hidden="true" /> Waiting for another of your devices…</div>
+        : <DmComposer conv={conv} needsSubject={isNewMail(conv)} />}
       {sharing && <ShareHistorySheet conv={conv} l={sharing} onClose={() => setSharing(null)} />}
     </div>
   )
@@ -242,10 +244,16 @@ function DmReactions({ d, picking, setPicking }: { d: Dm; picking: boolean; setP
 function HeldState({ d }: { d: Dm }) {
   const now = useNow(15_000)
   const long = now * 1000 - heldSince(d.rid) > 60_000 // useNow: seconds
+  const [gone, setGone] = useState(false)
   return (
     <span className="dm-state queued">
-      {long ? 'Not sent yet: this device can’t reach the belfry to check how to lock it.' : 'Saved · waiting for the connection'}
-      {' · '}<button className="link" onClick={async () => { const text = await cancelHeld(d.rid); window.dispatchEvent(new CustomEvent('belfry-compose', { detail: { conv: d.conv, text } })) }}>Cancel</button>
+      {heldFailure(d.rid) ? `Not sent: ${heldFailure(d.rid)}` : long ? 'Not sent yet: this device can’t reach the belfry to check how to lock it.' : 'Saved · waiting for the connection'}
+      {' · '}<button className="link" onClick={async () => {
+        const text = await cancelHeld(d.rid)
+        if (text === null) { setGone(true); return } // it went just before: already sent
+        window.dispatchEvent(new CustomEvent('belfry-compose', { detail: { conv: d.conv, text } }))
+      }}>Cancel</button>
+      {gone && <> · Already sent</>}
     </span>
   )
 }

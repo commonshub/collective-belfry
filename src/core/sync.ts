@@ -480,6 +480,27 @@ export async function queryComplete(target: Target, filters: Filter[], timeoutMs
   })
 }
 
+/** The relay gives at most PAGE events per filter in one REQ (rnostr max_limit): every page of
+ *  FILTERS, newest first, stepping back with `until` (the oldest created_at seen, inclusive, ids
+ *  de-duplicated), stopping only on a page that brings nothing new (a short page proves nothing).
+ *  null when any page went unanswered: then nothing is known. */
+export const PAGE = 300
+export async function queryPaged(target: Target, filters: Filter[], timeoutMs = 8000, maxPages = 100): Promise<NostrEvent[] | null> {
+  const out = new Map<string, NostrEvent>()
+  for (const f of filters) {
+    let until: number | undefined
+    for (let i = 0; i < maxPages; i++) {
+      const page = await queryComplete(target, [{ ...f, limit: PAGE, ...(until !== undefined ? { until } : {}) }], timeoutMs)
+      if (page === null) return null
+      const fresh = page.filter((e) => !out.has(e.id))
+      if (!fresh.length) break
+      for (const e of fresh) out.set(e.id, e)
+      until = Math.min(...page.map((e) => e.created_at))
+    }
+  }
+  return [...out.values()]
+}
+
 /** Ask the relays again whether this key is in (after a request, an invite code or an approval). */
 export function recheckAccess() {
   for (const t of ['groups', 'main'] as Target[]) {
@@ -535,6 +556,22 @@ export function setExtraMainFilters(f: () => Filter[]) { extraMain = f; resubscr
 /** Read the gift wraps again from the start once (a device that just received keys, §4). */
 export function replayWraps() { wrapsFromZero = true; resubscribe('main') }
 let wrapsFromZero = false
+let lastWrapsSince = 0
+let extraPaged: () => Filter[] = () => []
+/** sealedrt.ts: its filters that must be read whole (rosters, anchors, wraps to this device). */
+export function setPagedMainFilters(f: () => Filter[]) { extraPaged = f }
+/** After an EOSE on the community relay: the gift wraps since the catch-up mark (or from 0 after
+ *  replayWraps) and the sealed filters, read page by page (a REQ gives at most PAGE per filter). */
+let paging = false
+async function pageMain() {
+  if (paging || !signer || localOnly) return
+  paging = true
+  try {
+    const p = signer.pubkey
+    const got = await queryPaged('main', [{ kinds: [1059], '#p': [p], since: lastWrapsSince }, ...extraPaged()])
+    if (got) addEvents(got)
+  } finally { paging = false }
+}
 
 function filters(target: Target): Filter[] {
   const kinds = target === 'groups' ? KINDS_GROUPS : KINDS_MAIN
@@ -553,7 +590,8 @@ function filters(target: Target): Filter[] {
   // direct messages and e-mail (dm.ts) on the community relay, my DM relay (10050): gift wraps
   // are back-dated up to two days (NIP-59), so they overlap by three
   const p = signer.pubkey
-  const wrapsSince = wrapsFromZero ? 0 : Math.max(0, latestCreatedAt((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === p)) - 3 * 86400)
+  const wrapsSince = Math.max(0, latestCreatedAt((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === p)) - 3 * 86400)
+  lastWrapsSince = wrapsFromZero ? 0 : wrapsSince
   wrapsFromZero = false
   const oldSince = Math.max(0, latestCreatedAt((e) => e.kind === 4) - 3600)
   // members' tags and places (people.ts): one replaceable event each, members-only relay
@@ -563,7 +601,7 @@ function filters(target: Target): Filter[] {
     { kinds: [30078], '#d': ['belfry:profile', 'belfry:channel-order'], since: extrasSince, limit: 2000 },
     // my read state (readstate.ts): one replaceable event, always the exact d
     { kinds: [30078], authors: [p], '#d': ['belfry:read'], limit: 5 },
-    { kinds: [1059], '#p': [p], since: wrapsSince, limit: 1000 },
+    { kinds: [1059], '#p': [p], since: wrapsSince, limit: PAGE }, // more than a page: pageWraps
     { kinds: [4], '#p': [p], since: oldSince, limit: 500 },
     { kinds: [4], authors: [p], since: oldSince, limit: 500 },
     ...extraMain(),
@@ -587,6 +625,7 @@ function resubscribe(target: Target) {
         groupsAnswered = true
       }
       eoseListeners.forEach((f) => f(target))
+      if (target === 'main' && relayAuthed('main')) void pageMain()
       if (target !== 'groups') return
       if (status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' })
       void firstChannel()

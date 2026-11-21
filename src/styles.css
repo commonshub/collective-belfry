@@ -2060,3 +2060,5 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .seal-notsealed { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 0; background: none; border: 0; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
 .dm.mine .seal-notsealed { color: inherit; opacity: .75; }
 .seal-close { margin-top: 8px; font-size: 14px; }
+.seal-waiting, .seal-allow-waiting { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
+.seal-allow-waiting { margin-top: 8px; font-size: 15px; min-height: 44px; }

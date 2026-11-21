@@ -453,7 +453,7 @@ function sealedWrapsOf(r: Rumor, to: string[], self: boolean, conv: Conv): Nostr
 
 // held: decided neither sealed nor old yet (§6), one kv entry each (this account's own database,
 // like the messages), sent at the first complete answer
-interface Held { rumor: Rumor; to: string[]; self: boolean; conv: Conv }
+interface Held { rumor: Rumor; to: string[]; self: boolean; conv: Conv; failed?: string }
 const KV_HELD = 'dm-held:', KV_OUT = 'dm-out:'
 const held = new Map<string, Held>()
 /** Held on this device until it can be decided (shown as waiting). */
@@ -474,18 +474,22 @@ async function sendHeld(refresh = false) {
     do {
       sendAgain = false
       for (const h of [...held.values()]) {
-        const mode = await sendMode(h.conv, fresh)
-        if (mode === 'undecided') continue
+        if (h.failed) continue // failed for good: stays held (Cancel gives the text back)
+        if ((await sendMode(h.conv, fresh)) === 'undecided') continue
         await withHeldLock(async () => {
-          // another tab of this device may have sent it meanwhile
+          // another tab of this device may have sent or cancelled it meanwhile
           if (!(await kvGet<Held>(KV_HELD + h.rumor.id).catch(() => undefined))) { held.delete(h.rumor.id); return }
+          const mode = await sendMode(h.conv, false) // decided again inside the lock
+          if (mode === 'undecided') return
           let wraps: NostrEvent[]
           try {
             wraps = mode === 'sealed' ? sealedWrapsOf(h.rumor, h.to, h.self, h.conv)
               : await Promise.all([...new Set([...h.to, ...(h.self ? [me()] : [])])].map((p) => giftWrap(h.rumor as unknown as NostrEvent, p)))
           } catch (e) {
             if (e instanceof NoHead) return
-            wraps = []; const it = items.get(h.rumor.id); if (it) { it.pending = false; it.failed = e instanceof Error ? e.message : String(e) }
+            h.failed = e instanceof Error ? e.message : String(e) // stays held, said why, Cancel still there
+            await kvSet(KV_HELD + h.rumor.id, h).catch(() => {})
+            return
           }
           for (const w of wraps) await enqueueSigned('main', w, h.rumor.id) // queued first …
           held.delete(h.rumor.id); await kvDel(KV_HELD + h.rumor.id).catch(() => {}) // … then no longer held
@@ -502,14 +506,19 @@ const withHeldLock = <T,>(f: () => Promise<T>): Promise<T> =>
   (navigator.locks?.request ? navigator.locks.request('belfry-held-' + me(), f) as Promise<T> : f())
 
 /** A held message's Cancel: it goes, and its text comes back (the composer takes it). */
-export async function cancelHeld(rid: string): Promise<string> {
-  const h = held.get(rid)
-  if (!h) return ''
-  held.delete(rid); await kvDel(KV_HELD + rid).catch(() => {})
-  const it = items.get(rid)
-  items.delete(rid); save()
-  return it?.text ?? h.rumor.content
+export async function cancelHeld(rid: string): Promise<string | null> {
+  // under the same lock as sending: either it is cancelled (text back) or it went already (null)
+  return withHeldLock(async () => {
+    const h = held.get(rid)
+    if (!h || !(await kvGet<Held>(KV_HELD + rid).catch(() => undefined))) { held.delete(rid); save(); return null }
+    held.delete(rid); await kvDel(KV_HELD + rid).catch(() => {})
+    const it = items.get(rid)
+    items.delete(rid); save()
+    return it?.text ?? h.rumor.content
+  })
 }
+/** Why a held message failed for good (it stays held until Cancel), or undefined. */
+export const heldFailure = (rid: string) => held.get(rid)?.failed
 /** When it was held (ms; for "why" after a minute). */
 export const heldSince = (rid: string) => (held.has(rid) ? held.get(rid)!.rumor.created_at * 1000 : 0)
 
