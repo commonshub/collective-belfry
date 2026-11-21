@@ -1120,6 +1120,8 @@ class FakeSigner(FakeKeycast):
     ):
         super().__init__(router, keycast_url)
         self.kind = "belfry"
+        # the signer's "no new accounts" switch (POST /settings; an import closes it)
+        self.no_new_accounts = False
         base = re.escape(base_url.rstrip("/"))
         acct = rf"{base}/accounts/(?P<acct>[^/]+)"
         # no named group here: tests swap this route's side effect for one that takes the
@@ -1135,6 +1137,12 @@ class FakeSigner(FakeKeycast):
         router.post(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connect)
         router.get(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connections)
         router.post(url__regex=rf"{acct}/connections/revoke$").mock(side_effect=self._s_revoke)
+        router.post(url__regex=rf"{acct}/connections/consent$").mock(side_effect=self._s_consent)
+        router.get(url__regex=rf"{base}/settings$").mock(
+            side_effect=lambda request: httpx.Response(
+                200, json={"no_new_accounts": self.no_new_accounts, "by_environment": False}
+            )
+        )
         router.get(url__regex=rf"{base}/names/(?P<name>[^/]+)$").mock(side_effect=self._s_name)
         router.post(url__regex=rf"{base}/pubkeys/(?P<pubkey>[^/]+)/status$").mock(
             side_effect=self._s_status
@@ -1185,6 +1193,8 @@ class FakeSigner(FakeKeycast):
         )
         own = body.get("own_pubkey")
         u = self.users.get(vine_id)
+        if u is None and self.no_new_accounts and not own and not body.get("expect_pubkey"):
+            return self._err(409, "no_new_accounts")  # nothing written
         if u is None:
             name = body.get("username")
             if name and any(
@@ -1331,9 +1341,15 @@ class FakeSigner(FakeKeycast):
                 "bunker_secret": key.secret,
                 "client_pubkey": client or None,
                 "scope": body.get("scope", "own"),
+                "decrypt": body.get("decrypt") is True,
+                "origin": str(body.get("origin") or ""),
+                "kind": body.get("kind", "nip46"),
             }
         )
-        if body.get("scope", "own") not in ("own", "outside"):
+        if body.get("scope", "own") not in ("own", "outside") or body.get("kind", "nip46") not in (
+            "nip46",
+            "http",
+        ):
             return self._err(422, "invalid")
         return httpx.Response(
             200,
@@ -1344,6 +1360,9 @@ class FakeSigner(FakeKeycast):
                 "bunker_pubkey": bunker_pk,
                 "pubkey": u["pubkey"],
                 "app": body["app"],
+                "kind": body.get("kind", "nip46"),
+                "decrypt": body.get("decrypt") is True,
+                "origin": str(body.get("origin") or ""),
                 "created_at": self.CREATED,
                 **({"client_pubkey": client} if client else {"expires_at": self.CREATED + 600}),
             },
@@ -1351,9 +1370,12 @@ class FakeSigner(FakeKeycast):
 
     def expire_unclaimed(self) -> int:
         """Ten minutes later (``SIGNER_UNCLAIMED_SECONDS``): a connection made without a client
-        key that nobody connected to is gone, as in the signer (store.rs ``expire_unclaimed``)."""
+        key that nobody connected to is gone, as in the signer (store.rs ``expire_unclaimed``);
+        one of kind ``http`` (an app's sign-in used over the API) stays."""
         n = 0
         for b in self.bunkers:
+            if b.get("kind") == "http":
+                continue
             if not b.get("revoked") and not b.get("client_pubkey"):
                 b["revoked"] = True
                 n += 1
@@ -1375,11 +1397,34 @@ class FakeSigner(FakeKeycast):
                 "last_used_at": None,
                 "uses": 0,
                 "expires_at": None,
+                "scope": b.get("scope", "own"),
+                "decrypt": bool(b.get("decrypt")),
+                "origin": b.get("origin", ""),
+                "kind": b.get("kind", "nip46"),
+                "revoked_at": None,
             }
             for i, b in enumerate(self.bunkers)
             if b["pubkey"] == u["pubkey"] and not b.get("revoked")
         ]
         return httpx.Response(200, json=rows)
+
+    def _s_consent(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        body = json.loads(request.content)
+        if not isinstance(body.get("decrypt"), bool):
+            return self._err(422, "invalid")
+        for b in self.bunkers:
+            if (
+                b["pubkey"] == u["pubkey"]
+                and not b.get("revoked")
+                and PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex()
+                == body.get("bunker_pubkey")
+            ):
+                b["decrypt"] = body["decrypt"]
+                return httpx.Response(200, json={"decrypt": body["decrypt"]})
+        return self._err(404, "not_found")
 
     def _s_revoke(self, request: httpx.Request, acct: str) -> httpx.Response:
         u = self._user(acct)

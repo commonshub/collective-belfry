@@ -34,13 +34,15 @@ What is Belfry's own here, on purpose (the review of PR #7's first version of th
   logout writes it down (``ended``), so a copied cookie is worth nothing afterwards.
 
 **A grant is not a NIP-46 connection.** The token exchange also opens a connection in the signer
-and hands the app its bunker URL; an app that told no client key has ten minutes to connect with
-it, and one that never does (the wallet signs only through ``/api/nostr``) loses that connection
-in the signer. Its sign-in stays: what decides is the table here. So the member's list of
-sessions is the signer's list **plus** the grants whose connection is not in it
-(:func:`with_grants`), under the same id (the connection's bunker key), and signing a session out
-ends the grant with it (:func:`session_revoked`): every place that lists or revokes sessions
-calls these two (discovery.py, console.py, sales.py).
+and hands the app its bunker URL. On Belfry's own signer that connection is of kind ``http``:
+an app may connect to it within ten minutes, and one that never does (the wallet signs only
+through ``/api/nostr``) keeps it all the same; only its secret ends. So the grant's session
+stays in the signer's list, with the app's origin, and the table here decides whether a token
+works. :func:`with_grants` still adds a grant whose connection the signer does not list (a
+sign-in made before connections had a kind, or a signer that dropped it), under the same id
+(the connection's bunker key), and signing a session out ends the grant with it
+(:func:`session_revoked`): every place that lists or revokes sessions calls these two
+(discovery.py, console.py, sales.py).
 """
 
 from __future__ import annotations
@@ -331,7 +333,8 @@ def exchange(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any
     if grant_type != "authorization_code":
         raise SignInError(400, "unsupported_grant_type")
     try:
-        c = connect.redeem(svc, body, ua)
+        # a sign-in used over /api/nostr: no NIP-46 connect is needed, and none is waited for
+        c = connect.redeem(svc, body, ua, kind="http")
     except connect.ConnectError as exc:
         if exc.message == "own_key":
             # Keycast patch 0012's words: the app then signs in with the member's own signer
@@ -424,8 +427,8 @@ def check_live(svc: Services, grant: dict[str, Any]) -> str:
     the app, by a refresh token used twice, or by the member signing the session out: the
     console's Devices list and the chat's Sessions call :func:`session_revoked`).
 
-    The grant's NIP-46 connection is not asked for: the signer drops one no client connected
-    to within ten minutes, and an app that signs only over ``/api/nostr`` never connects."""
+    The grant's connection in the signer is not asked for here (one more call on every
+    request); revoking it there ends the grant through :func:`session_revoked`."""
     if not apps.is_approved(svc, grant["uri"]):
         end_grant(svc, grant, "the app is no longer approved")
         raise SignInError(401, "invalid_token", "this sign-in has ended")
@@ -456,7 +459,7 @@ def with_grants(svc: Services, partner: int, rows: list[dict[str, Any]]) -> list
     more = [
         {
             "application_name": g.get("label") or apps.session_label(svc, g["uri"], g["client_id"]),
-            "redirect_origin": "",
+            "redirect_origin": apps.origin_of(g["uri"]),
             "bunker_pubkey": g["bunker"],
             "client_pubkey": None,
             "created_at": _iso(g["created"]),

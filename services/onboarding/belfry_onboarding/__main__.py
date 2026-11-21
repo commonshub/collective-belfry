@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         help="move from Keycast to Belfry's own signer: plan (read-only), import, verify; the "
         "rows of Keycast's database as JSON on stdin (infra/scripts/migrate-to-own-signer.sh)",
     )
-    mig.add_argument("phase", choices=["plan", "import", "verify"])
+    mig.add_argument("phase", choices=["plan", "import", "verify", "open"])
     mig.add_argument(
         "--exclude",
         action="append",

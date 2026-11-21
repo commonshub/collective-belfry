@@ -304,10 +304,11 @@ def test_the_two_clients_have_the_same_methods_and_arguments():
         }
 
     keycast, own = public(KeycastClient), public(SignerClient)
-    # the one method only the own signer has: a read that never creates (signerguard.py's
-    # check at start and the migration's verify; nothing in the product calls it)
-    assert "account" in own and "account" not in keycast
-    del own["account"]
+    # the methods only the own signer has: a read that never creates (signerguard.py's check at
+    # start and the migration's verify), its switches, and a connection's consent to decrypt
+    for only in ("account", "settings", "set_consent"):
+        assert only in own and only not in keycast
+        del own[only]
     assert set(keycast) == set(own)
     for name, sig in keycast.items():
         assert list(sig.parameters) == list(own[name].parameters), name
@@ -346,3 +347,57 @@ def test_the_status_page_checks_the_signer_that_is_in_use(settings):
     by_name = {c[0]: c[1] for c in console.checks(settings)}
     assert by_name["Signer"] == "http://signer:8200/health" and "Signer (Keycast)" not in by_name
     assert "Sign-in (Authentik)" not in by_name  # a belfry on its own signer has none
+
+
+def test_the_own_signers_client_sends_consent_origin_and_kind_and_hears_its_refusals():
+    """clients/signer.py with Belfry's own signer only: the fields Keycast does not have."""
+    from belfry_onboarding.clients.signer import NoNewAccounts
+
+    with respx.mock(assert_all_called=False) as router:
+        fake = FakeSigner(router, "http://signer.test", "http://keycast.test")
+        client = SignerClient("http://signer.test", "t" * 20, domain="belfry.test")
+        a = client.preload_user("odoo-partner-1", "ana", "Ana")
+        made = client.create_bunker(
+            a["token"],
+            "Notes",
+            scope="outside",
+            decrypt=True,
+            origin="https://notes.example.org",
+            kind="http",
+        )
+        assert made["origin"] == "https://notes.example.org"
+        b = fake.bunkers[-1]
+        assert (b["decrypt"], b["origin"], b["kind"]) == (True, "https://notes.example.org", "http")
+        plain = client.create_bunker(a["token"], "Notes", scope="outside", decrypt="yes")
+        assert fake.bunkers[-1]["decrypt"] is False, "only True is a yes"
+        assert plain["origin"] is None
+        with pytest.raises(ValueError):
+            client.create_bunker(a["token"], "Notes", kind="pigeon")
+        rows = client.list_sessions(a["token"])
+        assert sorted(r["redirect_origin"] for r in rows) == ["", "https://notes.example.org"]
+        assert client.set_consent(a["token"], made["bunker_pubkey"], False) is True
+        assert fake.bunkers[0]["decrypt"] is False
+        assert client.set_consent(a["token"], "f" * 64, True) is False
+        # an import is under way: the signer makes no account for a caller that names no key
+        assert client.settings() == {"no_new_accounts": False, "by_environment": False}
+        fake.no_new_accounts = True
+        with pytest.raises(NoNewAccounts):
+            client.preload_user("odoo-partner-2", "bob", "Bob")
+        assert "odoo-partner-2" not in fake.users
+        # with the key it must have, or the member's own, it is made
+        own = pub(PrivateKey())
+        assert client.preload_user("odoo-partner-3", "cy", "Cy", pubkey=own)["pubkey"] == own
+        assert client.preload_user("odoo-partner-1", "ana", "Ana")["pubkey"] == a["pubkey"]
+
+
+def test_keycasts_client_takes_the_new_arguments_and_sends_none_of_them():
+    with respx.mock(assert_all_called=False) as router:
+        fake = FakeKeycast(router, "http://keycast.test")
+        client = KeycastClient("http://keycast.test", "kc-admin", "kc-service")
+        a = client.preload_user("odoo-partner-1", "ana", "Ana")
+        client.create_bunker(
+            a["token"], "Notes", scope="outside", decrypt=True, origin="https://x", kind="http"
+        )
+        sent = __import__("json").loads(router.calls.last.request.content)
+        assert set(sent) == {"app_name"}
+        assert fake.bunkers[-1]["app_name"] == "Notes"

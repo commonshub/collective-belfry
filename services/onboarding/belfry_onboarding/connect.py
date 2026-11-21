@@ -232,7 +232,9 @@ def scope_of(svc: Services, uri: str) -> str:
     return "own" if apps.own_app(svc, uri) else "outside"
 
 
-def redeem(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
+def redeem(
+    svc: Services, body: dict[str, Any], ua: str = "", kind: str = "nip46"
+) -> dict[str, Any]:
     """Spend an authorization code (once, within CODE_SECONDS, with its PKCE verifier, client
     and return address) and open the signer session it stands for. Returns the code's record
     with ``bunker`` (the signer's answer), ``token`` (the member's signer token) and ``scope``.
@@ -273,6 +275,11 @@ def redeem(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
             device.name(apps.session_label(svc, c["uri"], c["client_id"]), ua),
             client or None,
             scope=scope,
+            # the member's word that this app may decrypt: nothing asks for it yet (the
+            # sign-in page has no such question), so it is False for every app
+            decrypt=c.get("decrypt") is True,
+            origin=apps.origin_of(c["uri"]),
+            kind=kind,
         )
     except ClientKeyTaken as exc:
         raise ConnectError(409, "key_taken") from exc

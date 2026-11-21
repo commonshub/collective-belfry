@@ -12,7 +12,12 @@ anything of theirs:
   usernames, suspended state, sessions with their bunker keys; the admins from Authentik's
   group into the register.
 - :func:`verify` (``signer-migrate verify``): every account, key, username, state, session
-  and admin compared; a report with counts and every difference. Anything off is a failure.
+  (the revoked ones too, read back with ``?all=true``) and admin compared, and no account in
+  the signer that Keycast did not have; a report with counts and every difference. Anything
+  off is a failure.
+- ``signer-migrate open``: the signer makes new accounts again. ``import`` closes that (the
+  signer's "no new accounts" switch) so that nothing but the import puts an account there
+  until the belfry runs on the signer; ``switch`` opens it once the verify after it is clean.
 
 **What is never printed or logged**: keys of any kind other than public keys, and those only
 shortened (the report file holds them shortened too); sealed keys; session secrets' hashes;
@@ -551,11 +556,38 @@ class SignerAdmin:
             return {"error": self._error(r)}
         return dict(r.json())
 
-    def connections(self, vine_id: str) -> list[dict[str, Any]]:
-        """The account's live connections."""
-        r = self._call("GET", self._path(vine_id) + "/connections")
+    def connections(self, vine_id: str, all: bool = False) -> list[dict[str, Any]]:
+        """The account's live connections; with ALL every one it ever had (``revoked_at`` set
+        on the revoked ones)."""
+        r = self._call("GET", self._path(vine_id) + "/connections" + ("?all=true" if all else ""))
         r.raise_for_status()
         return list(r.json() or [])
+
+    def list_accounts(self) -> list[dict[str, Any]] | None:
+        """Every account the signer has (``GET /accounts``, page by page), or None from a
+        signer that cannot list them."""
+        out: list[dict[str, Any]] = []
+        after = ""
+        while True:
+            r = self._call("GET", "/accounts?limit=1000" + (f"&after={after}" if after else ""))
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            data = r.json()
+            out.extend(data.get("accounts") or [])
+            after = str(data.get("next") or "")
+            if not after:
+                return out
+
+    def close_accounts(self, closed: bool) -> bool | None:
+        """The signer's "no new accounts" switch (``POST /settings``); returns it as it now
+        is, or None from a signer that has none."""
+        r = self._call("POST", "/settings", {"no_new_accounts": bool(closed)})
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise MigrationError(f"the signer refused the switch: {self._error(r)}")
+        return bool(r.json().get("no_new_accounts"))
 
 
 def batches(rows: list[dict[str, Any]], most: int) -> Iterable[list[dict[str, Any]]]:
@@ -586,6 +618,9 @@ def connection_row(s: Session) -> dict[str, Any]:
         row["client_pubkey"] = s.client
     if s.last_used_at is not None:
         row["last_used_at"] = s.last_used_at
+    if s.origin:
+        # Keycast's redirect_origin: the signer gives it back as the session's origin
+        row["origin"] = s.origin[:200]
     if s.state != "served":
         row["revoked_at"] = s.revoked_at or s.created_at
     return row
@@ -717,7 +752,14 @@ def verify(
             miss("session_lost", **lost)
         if not p.lost:
             miss("accept_lost_does_not_match", accepted=int(accept_lost), lost=0)
-    checked = {"accounts": 0, "keys_equal": 0, "usernames": 0, "live_sessions": 0}
+    checked = {
+        "accounts": 0,
+        "keys_equal": 0,
+        "usernames": 0,
+        "live_sessions": 0,
+        "revoked_sessions": 0,
+    }
+    unreadable = 0  # revoked rows of a signer that cannot list them
     by_user = p.by_user()
     for a in p.included():
         if not a.vine_id:
@@ -747,6 +789,25 @@ def verify(
             miss("status", vine_id=a.vine_id, keycast=a.status, signer=str(have.get("status")))
         want = {s.bunker: s for s in by_user.get(a.pubkey, []) if s.live and not a.own}
         live = {str(c.get("bunker_pubkey") or ""): c for c in signer.connections(a.vine_id)}
+        # the revoked and expired rows came in revoked: their client keys stay this account's
+        gone = {
+            s.bunker: s for s in by_user.get(a.pubkey, []) if s.carried and not s.live and not a.own
+        }
+        rows = signer.connections(a.vine_id, all=True) if gone else []
+        listed = {str(c.get("bunker_pubkey") or ""): c for c in rows}
+        if gone and not any("revoked_at" in c for c in rows) and rows:
+            unreadable += len(gone)  # an older signer: its list has no revoked rows
+            gone = {}
+        for bunker, s in gone.items():
+            c = listed.get(bunker)
+            if c is None:
+                miss("revoked_session_missing", vine_id=a.vine_id, bunker=short(bunker))
+            elif not c.get("revoked_at"):
+                miss("revoked_session_live", vine_id=a.vine_id, bunker=short(bunker))
+            elif s.client and str(c.get("client_pubkey") or "").lower() != s.client:
+                miss("session_client_key", vine_id=a.vine_id, bunker=short(bunker))
+            else:
+                checked["revoked_sessions"] += 1
         for bunker, s in want.items():
             c = live.get(bunker)
             if c is None:
@@ -759,6 +820,17 @@ def verify(
             # nothing may be live in the signer that Keycast did not serve (a session made on
             # the signer before the switch, or a revoked row that came in live)
             miss("session_unexpected", vine_id=a.vine_id, bunker=short(bunker))
+    # nothing in the signer that Keycast did not have (before the switch: nothing may have
+    # made an account there but the import; after it, people join, so keys only)
+    listing = signer.list_accounts() if hasattr(signer, "list_accounts") else None
+    if listing is not None and not keys_only:
+        known = {a.vine_id for a in p.accounts if a.vine_id}
+        for acct in listing:
+            vine = str(acct.get("vine_id") or "")
+            if vine not in known:
+                miss("account_unexpected", vine_id=vine, signer=short(acct.get("pubkey")))
+    if listing is not None:
+        checked["signer_accounts"] = len(listing)
     for vine, key in p.register.items():
         have = signer.account(vine)
         if have is None:
@@ -781,13 +853,10 @@ def verify(
             "mismatches": mismatches,
             "ok": not mismatches,
             "not_verifiable": {
-                # the signer lists live connections only: revoked rows are checked by the
-                # import's own answer (docs/own-signer.md, "For the Rust round")
-                "revoked_sessions": sum(
-                    1
-                    for s in p.sessions
-                    if s.state in ("revoked", "expired") and not _acct(p, s.user).excluded
-                ),
+                # revoked rows of a signer that cannot list them (before GET …?all=true)
+                "revoked_sessions": unreadable,
+                # whether the signer could list its accounts (GET /accounts)
+                "accounts_list": listing is None,
             },
         }
     )
@@ -847,7 +916,7 @@ def summary(c: dict[str, Any]) -> list[str]:
 
 
 def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> int:
-    """``python -m belfry_onboarding signer-migrate plan|import|verify`` with the rows on
+    """``python -m belfry_onboarding signer-migrate plan|import|verify|open`` with the rows on
     stdin. The report (JSON, one line) goes to stdout, what a person reads to stderr.
     Exit 0: clean; 1: problems or mismatches; 2: a source that does not answer."""
 
@@ -877,7 +946,7 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
     except (MigrationError, httpx.HTTPError) as exc:
         say(f"signer-migrate: the signer does not answer: {type(exc).__name__}")
         return 2
-    if not health.get("seed"):
+    if health.get("seed") not in (True, "unlocked"):
         say("signer-migrate: the signer has no custody seed (locked): unlock it first")
         return 2
     authentik = None
@@ -889,7 +958,23 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
             return 2
         authentik = AuthentikClient(settings.authentik_url, settings.authentik_token)
     try:
+        if args.phase == "open":
+            # the belfry runs on its signer and the verify after the switch is clean: people
+            # may join again (docs/own-signer.md, "Moving a belfry")
+            state = signer.close_accounts(False)
+            say("new accounts: " + ("the signer has no such switch" if state is None else "open"))
+            json.dump({"no_new_accounts": state}, out)
+            out.write("\n")
+            return 0
         if args.phase == "import":
+            # from the first import to the switch the signer makes no account but the ones
+            # the import names: a caller that forgot to say which key it expects cannot mint
+            # one in between (lifted by `open` after the switch)
+            closed = signer.close_accounts(True)
+            say(
+                "new accounts: "
+                + ("the signer has no such switch" if closed is None else "closed until the switch")
+            )
             res = run_import(p, signer)
             if authentik is not None:
                 res["stewards"] = import_stewards(svc, authentik)
@@ -933,8 +1018,9 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
     say(
         f"verified: {ch['accounts']} accounts, {ch['keys_equal']} keys equal in Keycast, the "
         f"signer and the register, {ch['usernames']} usernames, {ch['live_sessions']} live "
-        f"sessions; {report['not_verifiable']['revoked_sessions']} revoked rows not readable "
-        "from the signer"
+        f"sessions, {ch['revoked_sessions']} revoked ones; "
+        f"{report['not_verifiable']['revoked_sessions']} revoked rows not readable from the "
+        "signer"
     )
     for m in report["mismatches"][:100]:
         say("  MISMATCH: " + json.dumps(m, sort_keys=True))
