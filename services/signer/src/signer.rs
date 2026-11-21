@@ -18,7 +18,11 @@ use tokio::sync::{watch, Notify};
 use zeroize::Zeroizing;
 
 use crate::keys::{self, SeedError};
-use crate::store::{self, Account, Bind, ConnectionRow, Custody, Named, NewConnection, Store};
+use crate::limits::Own;
+use crate::store::{
+    self, Account, Bind, ConnectionRow, Custody, Imported, ImportedConnection, Named,
+    NewConnection, Store, SCOPE_OUTSIDE, SCOPE_OWN,
+};
 use crate::vault::Vault;
 
 #[derive(Debug)]
@@ -181,6 +185,58 @@ pub struct Signer {
     pub unclaimed_ttl: i64,
     pub bunker: BunkerState,
     pub limiter: Limiter,
+    /// The belfry's own names: what a connection of an outside app is never given a
+    /// signature for (`limits.rs`).
+    pub own: Own,
+}
+
+/// A session of Keycast's to carry over (`Signer::import_connections`).
+#[derive(Debug, Clone)]
+pub struct KeycastSession {
+    pub bunker_pubkey: String,
+    /// The row's stored `oauth_authorizations.secret_hash`, as text: the bunker key derives
+    /// from it.
+    pub keycast_secret_hash: String,
+    pub client_pubkey: Option<String>,
+    pub app: String,
+    pub label: String,
+    pub scope: Option<String>,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+    pub uses: i64,
+    pub revoked_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ImportCounts {
+    /// Live sessions written.
+    pub imported: usize,
+    /// Rows whose bunker key the account already had a connection for: left as they are.
+    pub existing: usize,
+    /// Revoked sessions written (as revoked rows: their client keys stay taken).
+    pub revoked: usize,
+}
+
+/// `own` when none is given; anything but `own` and `outside` is refused.
+pub fn valid_scope(scope: Option<&str>) -> Result<&'static str> {
+    match scope {
+        None | Some(SCOPE_OWN) => Ok(SCOPE_OWN),
+        Some(SCOPE_OUTSIDE) => Ok(SCOPE_OUTSIDE),
+        Some(other) => Err(Error::Invalid(format!(
+            "scope must be \"own\" or \"outside\", not {other:?}"
+        ))),
+    }
+}
+
+/// What a new connection is made with (`Signer::create_scoped`).
+pub struct ConnectionSpec<'a> {
+    pub app: &'a str,
+    pub label: &'a str,
+    pub derive: &'a [String],
+    pub keep: Option<usize>,
+    pub client_pubkey: Option<&'a str>,
+    /// `own` or `outside` (`valid_scope`).
+    pub scope: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,6 +246,7 @@ pub struct NewBunker {
     pub bunker_pubkey: String,
     pub pubkey: String,
     pub app: String,
+    pub scope: String,
     pub created_at: i64,
     /// The client key the connection is bound to, when the request named one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,6 +344,7 @@ impl Signer {
             unclaimed_ttl: 600,
             bunker: BunkerState::new(),
             limiter: Limiter::new(),
+            own: Own::default(),
         }
     }
 
@@ -692,6 +750,10 @@ impl Signer {
     /// - `keep`: revoke all but the newest `keep` connections of this app.
     ///
     /// Returns the bunker and the number of the change (`wait_subscribed`).
+    ///
+    /// This is the short form the tests use: an `own` connection (`create_scoped` is what the
+    /// API calls).
+    #[cfg(test)]
     pub fn create_connection(
         &self,
         vine_id: &str,
@@ -701,6 +763,35 @@ impl Signer {
         keep: Option<usize>,
         client_pubkey: Option<&str>,
     ) -> Result<(NewBunker, u64)> {
+        self.create_scoped(
+            vine_id,
+            &ConnectionSpec {
+                app,
+                label,
+                derive,
+                keep,
+                client_pubkey,
+                scope: None,
+            },
+        )
+    }
+
+    /// `create_connection` with a scope: `outside` for an outside app, whose `sign_event` is
+    /// held to the limits of `limits.rs`; `own` (the default) for the belfry's own apps.
+    pub fn create_scoped(
+        &self,
+        vine_id: &str,
+        spec: &ConnectionSpec<'_>,
+    ) -> Result<(NewBunker, u64)> {
+        let ConnectionSpec {
+            app,
+            label,
+            derive,
+            keep,
+            client_pubkey,
+            scope,
+        } = *spec;
+        let scope = valid_scope(scope)?;
         let account = self.account(vine_id)?;
         self.keys_of(&account)?;
         if app.is_empty() || app.chars().count() > 64 || label.chars().count() > 120 {
@@ -732,6 +823,7 @@ impl Signer {
             client_pubkey: client.as_deref(),
             derive,
             expires_at,
+            scope,
         })?;
         if !added {
             tracing::warn!(
@@ -750,7 +842,7 @@ impl Signer {
             url.push_str(&format!("relay={}&", urlencode(relay)));
         }
         url.push_str(&format!("secret={secret}"));
-        tracing::info!(vine_id, app, id = %id, bound = client.is_some(), "bunker connection created");
+        tracing::info!(vine_id, app, id = %id, bound = client.is_some(), scope, "bunker connection created");
         Ok((
             NewBunker {
                 id,
@@ -758,12 +850,127 @@ impl Signer {
                 bunker_pubkey: bunker.public_key().to_hex(),
                 pubkey: account.pubkey,
                 app: app.to_string(),
+                scope: scope.to_string(),
                 created_at: store::now(),
                 client_pubkey: client,
                 expires_at,
             },
             change,
         ))
+    }
+
+    /// Carries one account's Keycast sessions over (migration), all or none: nobody is signed
+    /// out, because each session keeps its bunker key and its client key.
+    ///
+    /// Keycast derived a session's bunker key from the account's key and the row's stored
+    /// `secret_hash` (`keys::keycast_bunker_keys`); the signer derives it again, checks it
+    /// against the row's `bunker_pubkey` (which is also the proof of the formula), and seals
+    /// it for the new connection row. A session comes in bound to its client key, with no
+    /// secret and no deadline; a revoked one comes in revoked (its key sealed all the same),
+    /// so its client key stays linked to the account.
+    ///
+    /// Errors, nothing written: `not_found`; `own_key`; `invalid` naming the row (a field, a
+    /// bunker key the formula does not give, a live row without a client key);
+    /// `client_key_taken`; `mismatch` when a bunker key is another account's connection.
+    /// A suspended account's sessions are carried too (they answer once it is active again).
+    /// Returns the counts and the number of the change (`wait_subscribed`).
+    pub fn import_connections(
+        &self,
+        vine_id: &str,
+        sessions: &[KeycastSession],
+    ) -> Result<(ImportCounts, u64)> {
+        let account = self.account(vine_id)?;
+        let sealed = account.sealed.as_deref().ok_or(Error::OwnKey)?;
+        let keys = self
+            .vault
+            .open_for(sealed, &account_aad(vine_id), &account.pubkey)
+            .map_err(|e| Error::Internal(format!("{vine_id}: {e}")))?;
+        let mut rows = Vec::with_capacity(sessions.len());
+        for (i, s) in sessions.iter().enumerate() {
+            let at = |e: Error| Error::Invalid(format!("connections[{i}]: {}", e.message()));
+            let bad = |what: &str| Error::Invalid(format!("connections[{i}]: {what}"));
+            let bunker_pubkey = parse_pubkey(&s.bunker_pubkey).map_err(at)?.to_hex();
+            let client = s
+                .client_pubkey
+                .as_deref()
+                .filter(|c| !c.is_empty())
+                .map(|c| parse_pubkey(c).map(|k| k.to_hex()))
+                .transpose()
+                .map_err(at)?;
+            let scope = valid_scope(s.scope.as_deref()).map_err(at)?;
+            if s.app.is_empty() || s.app.chars().count() > 64 || s.label.chars().count() > 120 {
+                return Err(bad("app must be 1 to 64 characters, label up to 120"));
+            }
+            if s.created_at <= 0
+                || s.uses < 0
+                || s.last_used_at.is_some_and(|t| t <= 0)
+                || s.revoked_at.is_some_and(|t| t <= 0)
+            {
+                return Err(bad("times are seconds since 1970 and uses is not negative"));
+            }
+            if client.is_none() && s.revoked_at.is_none() {
+                return Err(bad(
+                    "a session without a client key has nothing to carry (leave it out)",
+                ));
+            }
+            let bunker = keys::keycast_bunker_keys(&keys, &s.keycast_secret_hash);
+            if bunker.public_key().to_hex() != bunker_pubkey {
+                return Err(bad(&format!(
+                    "the bunker key derived from keycast_secret_hash is not {bunker_pubkey}"
+                )));
+            }
+            let id = random_hex(16);
+            rows.push(ImportedConnection {
+                bunker_sealed: self.vault.seal(&bunker, &connection_aad(&id)),
+                id,
+                app: s.app.clone(),
+                label: if s.label.is_empty() {
+                    s.app.clone()
+                } else {
+                    s.label.clone()
+                },
+                bunker_pubkey,
+                client_pubkey: client,
+                scope: scope.to_string(),
+                created_at: s.created_at,
+                last_used_at: s.last_used_at,
+                uses: s.uses,
+                revoked_at: s.revoked_at,
+            });
+        }
+        match self.store.import_connections(vine_id, &rows)? {
+            Imported::Done {
+                imported,
+                existing,
+                revoked,
+            } => {
+                let change = if imported > 0 {
+                    self.changed()
+                } else {
+                    self.bunker.changes()
+                };
+                tracing::info!(vine_id, imported, existing, revoked, "sessions imported");
+                Ok((
+                    ImportCounts {
+                        imported,
+                        existing,
+                        revoked,
+                    },
+                    change,
+                ))
+            }
+            Imported::ClientTaken(i) => {
+                tracing::warn!(
+                    vine_id,
+                    row = i,
+                    "session import refused: a client key is linked to another account"
+                );
+                Err(Error::ClientKeyTaken)
+            }
+            Imported::OtherAccount(i) => Err(Error::Mismatch(format!(
+                "connections[{i}]: this bunker key is a connection of another account"
+            ))),
+        }
     }
 
     /// Binds a connection to the client that presented its secret in `connect`.

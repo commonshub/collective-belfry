@@ -15,6 +15,8 @@
 //! | `BUNKER_RELAYS` | relays the bunker listens on, comma-separated (`ws://bunker-relay:8080`) |
 //! | `BUNKER_PUBLIC_RELAYS` | the same relays as clients reach them, for bunker:// URLs |
 //! | `SIGNER_UNCLAIMED_SECONDS` | how long a connection made without a client key waits for its first `connect`, default 600 |
+//! | `SIGNER_OWN_DOMAIN` | the belfry's domain: what an outside app's connection never signs for (`limits.rs`) |
+//! | `SIGNER_OWN_API_HOSTS`, `SIGNER_OWN_RELAY_HOSTS`, `SIGNER_OWN_BLOSSOM_HOSTS` | more of the belfry's own hosts or URLs, separated by commas or spaces |
 //!
 //! `belfry-signer derive <vine_id> <version>` prints the public key the seed gives (a check
 //! without the service running).
@@ -22,6 +24,7 @@
 mod api;
 mod bunker;
 mod keys;
+mod limits;
 mod signer;
 mod store;
 mod vault;
@@ -107,6 +110,18 @@ fn main() {
         .ok()
         .filter(|s| *s > 0)
         .unwrap_or_else(|| fail("SIGNER_UNCLAIMED_SECONDS must be a number of seconds".into()));
+    signer.own = limits::Own::from_config(
+        &env("SIGNER_OWN_DOMAIN", ""),
+        &env("SIGNER_OWN_API_HOSTS", ""),
+        &env("SIGNER_OWN_RELAY_HOSTS", ""),
+        &env("SIGNER_OWN_BLOSSOM_HOSTS", ""),
+    );
+    if signer.own.domain.is_empty() {
+        tracing::warn!(
+            "no SIGNER_OWN_DOMAIN: connections of outside apps are not kept from the belfry's \
+             own hosts under its domain (only from the hosts listed in SIGNER_OWN_*_HOSTS)"
+        );
+    }
     // keys sealed the old way (no row binding) are bound to their rows once; one that does
     // not open, or holds another key than its row names, stops the start
     match signer.upgrade_seals() {
