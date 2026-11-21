@@ -129,6 +129,13 @@ Plaintext (JSON, at most 2 KB before encryption; `body` cut to 180 characters):
   apart: a phone may get "New message" for a DM its owner just sent. Apps may stay quiet for a
   DM notification that arrives within a few seconds of sending one themselves.
 
+- *(built 2026-11-21)* cohost_invite: sent by the server when a host invites a member to co-host
+  an event (docs/checkin.md "Inviting a member to co-host"), not by the watcher. `title` =
+  "<Inviter> invited you to co-host", `body` = the event's title, `channel` = `ev-<d>`, `url` =
+  `https://chat.<domain>/#/events/<link>`, no `event` / `from`; `collapse` = the group id,
+  `urgent` true. Skipped when the person set that group to `off`. Other server-sent types:
+  `agent_request` (docs/agents.md), `membership_request` (docs/membership.md).
+
 ## 5. What triggers a notification (the belfry's watcher)
 
 A live subscription (reconnecting with backoff, 1 s to 5 min). *(built)* The groups relay is read

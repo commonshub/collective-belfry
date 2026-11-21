@@ -304,6 +304,18 @@ def preview_origin(settings: Any, origin: str | None, path: str) -> str | None:
     return origin if origin == f"https://preview.{domain}" else None
 
 
+def _chat_only(settings: Any, origin: str, path: str) -> bool:
+    """Writes the chat makes and the community's website never does (inviting to co-host,
+    cohost.py): no CORS for the apex (published sites run there) nor the previews."""
+    from .cohost import CHAT_ONLY
+
+    domain = getattr(settings, "nip05_domain", "") or ""
+    return bool(CHAT_ONLY.match(path)) and origin.rstrip("/") in (
+        f"https://{domain}",
+        f"https://preview.{domain}",
+    )
+
+
 def cors_headers(origin: str) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": origin,
@@ -363,6 +375,8 @@ def register(app: FastAPI) -> None:
                 allowed_origin, settings, request.headers.get("origin"), request.app.state.services
             )
             origin = origin or preview_origin(settings, request.headers.get("origin"), path)
+            if origin and _chat_only(settings, origin, path):
+                origin = None
         else:
             return await call_next(request)
         if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):

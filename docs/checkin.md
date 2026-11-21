@@ -92,6 +92,45 @@ applications (`/events/<d>/decide`, existing) and "Make co-host" (`/group-roles`
 accepting someone into a closed group (pod) by an admin by role: the web hides Accept / Decline
 for them (they can still vouch); the relay-level admins accept.
 
+### Inviting a member to co-host (2026-11-21)
+
+A host invites someone already in the community to co-host without sending a link
+(`cohost.py`). Co-host **links** (`POST /channel-invites {"channel": "ev-<d>", "role": "host"}`,
+guests.py) stay for people who aren't members yet: a guest is told to use one.
+
+All NIP-98, on belfry.<domain>/api/v1, the belfry's own register only (with Odoo 409
+`unsupported`). CORS: the chat's host (and approved apps) only, never the apex (published
+websites) nor preview.<domain> (`discovery._chat_only`).
+
+- `POST /events/<d>/cohost-invites {"pubkey": "<hex>"}` by a host: the creator, any admin of
+  `ev-<d>` (relay list or by role) or a belfry admin. A steward can't. → `{"invite": {"id",
+  "by": {"name", "slug", "picture"}, "at", "state": "pending"}}`; while that invitation is
+  pending, asking again answers the same one with `"already": true` (and sends no new push). A
+  declined, accepted-then-removed or lapsed invitation is replaced by a new one (new `id`).
+  The target needs an active pass that is not a guest's or an agent's. Errors: 403
+  `not_allowed`, 404 `unknown` (no such event), 409 `already_host` (the creator or a co-host
+  already, or yourself), 409 `not_member` (a guest: `"guest": true`, send a co-host link; an
+  agent; nobody known), 409 `event_over`, 409 `cancelled`, 409 `archived`, 422 `invalid`.
+- Push type `cohost_invite` to the invitee's phones (docs/push.md §4): title "<Inviter> invited
+  you to co-host", body = the event's title, `channel` = `ev-<d>`, `url` = the event in the chat.
+  Not sent when the person set `ev-<d>` to `off` in their notification settings. No e-mail.
+- `POST /events/<d>/cohost-invites/answer {"accept": true | false}` by the invitee. Accept →
+  `{"state": "accepted", "host": true}` after the same 9000 a co-host link publishes (by the
+  groups key: `["h", "ev-<d>"] ["p", <key>, "admin"] ["invited-by", <inviter>]`,
+  `guests._make_host`). Decline → `{"state": "declined"}`, nothing on the relay. Errors: 404
+  `no_invite` (nothing pending), 409 `event_over`; on accept also 409 `cancelled`, `archived`,
+  `not_member`, 503 `relay`. "Ignore" is the app's own: nothing is sent.
+- `POST /events/<d>/cohost-invites/withdraw {"pubkey"}` by a host → `{"withdrawn": true}` (the
+  invitation is deleted); 404 `no_invite`.
+- `GET /events/<link>`, in `me`: `cohost_invite` = `{"id", "by", "at"}` while the viewer has a
+  pending invitation, else null; for hosts also `cohost_invites` = `[{"pubkey", "person": {"name",
+  "slug", "picture"}, "by", "state": "pending" | "declined" | "accepted", "at"}]` (`at` = when
+  answered, else when sent; `pubkey` is for withdrawing, never to be shown).
+
+Storage: register table `cohost_invites`, one row per (event `d`, key). A pending invitation
+lapses when the event is over or 30 days after it was sent: it reads as gone (not listed, not
+answerable) and may be sent again.
+
 ## 2. Tickets and their QR
 
 Who holds a ticket: a 9000 with a `ticket` tag (not taken back by a later 9001); on an event that

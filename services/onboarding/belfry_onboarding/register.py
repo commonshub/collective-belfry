@@ -159,6 +159,10 @@ class Register(OdooApi):
             CREATE TABLE IF NOT EXISTS retries (
                 key TEXT PRIMARY KEY, at INTEGER NOT NULL, status INTEGER NOT NULL,
                 body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS cohost_invites (
+                d TEXT NOT NULL, pubkey TEXT NOT NULL, id TEXT NOT NULL, by TEXT NOT NULL,
+                at INTEGER NOT NULL, state TEXT NOT NULL, answered INTEGER,
+                PRIMARY KEY (d, pubkey));
             """
         )
         self._push_one_row_per_identity()
@@ -2458,6 +2462,53 @@ class Register(OdooApi):
                         "DELETE FROM push_devices WHERE pubkey = ?", (pubkey,)
                     ).rowcount
         return n
+
+    # ── invitations to co-host an event (cohost.py) ──────────────────────────────────────────
+    COHOST_FIELDS = ("d", "pubkey", "id", "by", "at", "state", "answered")
+
+    def cohost_get(self, d: str, pubkey: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {', '.join(self.COHOST_FIELDS)} FROM cohost_invites"
+                " WHERE d = ? AND pubkey = ?",
+                (d, pubkey),
+            ).fetchone()
+        return dict(zip(self.COHOST_FIELDS, row, strict=True)) if row else None
+
+    def cohost_list(self, d: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {', '.join(self.COHOST_FIELDS)} FROM cohost_invites WHERE d = ?"
+                " ORDER BY at, pubkey",
+                (d,),
+            ).fetchall()
+        return [dict(zip(self.COHOST_FIELDS, r, strict=True)) for r in rows]
+
+    def cohost_put(self, row: dict[str, Any]) -> None:
+        """One invitation per (event, person): a new one replaces what was there."""
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO cohost_invites (d, pubkey, id, by, at, state, answered)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                tuple(row.get(k) for k in self.COHOST_FIELDS),
+            )
+
+    def cohost_answer(self, d: str, pubkey: str, invite_id: str, state: str, at: int) -> bool:
+        """Pending → STATE, only for that invitation (a withdrawn or replaced one: False)."""
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE cohost_invites SET state = ?, answered = ?"
+                " WHERE d = ? AND pubkey = ? AND id = ? AND state = 'pending'",
+                (state, int(at), d, pubkey, invite_id),
+            )
+        return cur.rowcount == 1
+
+    def cohost_drop(self, d: str, pubkey: str) -> int:
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM cohost_invites WHERE d = ? AND pubkey = ?", (d, pubkey)
+            )
+        return cur.rowcount
 
     # ── answers kept for a client's retry (retries.py, ``client_id``) ────────────────────────
     def retry_get(self, key: str, since: int) -> tuple[int, str] | None:

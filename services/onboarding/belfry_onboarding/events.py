@@ -1027,6 +1027,10 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         from .checkin import viewer_fields
 
         me.update(viewer_fields(svc, ev, viewer, ppl))
+        from .cohost import viewer_fields as cohost_fields
+
+        # invitations to co-host (cohost.py): the viewer's own, and everyone's for hosts
+        me.update(cohost_fields(svc, ev, viewer))
     # what the checkout sells of it: places left, can_pay, checkout_url (docs/sales.md §10)
     sold = sale_fields(svc, ev, tks, ppl, viewer)
     return {
