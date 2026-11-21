@@ -286,3 +286,39 @@ def test_a_taken_member_number_does_not_stop_the_account(services, odoo, keycast
     assert name.startswith("member-40") and usernames.DEFAULT.fullmatch(name)
     # again: the account as it is
     assert core.preload_account(services, 2, "0002", "Second")["pubkey"] == made["pubkey"]
+
+
+def test_own_key_person_is_asked_once_per_request_and_never_kept_after(services, odoo):
+    from belfry_onboarding import signerguard as sg
+
+    key = "cd" * 32
+    partner = odoo.add("res.partner", name="Bot")
+    odoo.add(
+        "belfry.pass",
+        partner_id=partner,
+        tier="agent",
+        keycast_pubkey=key,
+        own_pubkey=key,
+        state="active",
+    )
+    asked = []
+    real = services.odoo.search_read
+
+    def counting(model, *a, **k):
+        if model == "belfry.pass":
+            asked.append(model)
+        return real(model, *a, **k)
+
+    services.odoo.search_read = counting
+    try:
+        token = sg.begin_request()
+        try:
+            assert sg.own_key_person_once(services, partner)
+            assert sg.own_key_person_once(services, partner)
+            assert len(asked) == 1
+        finally:
+            sg.end_request(token)
+        assert sg.own_key_person_once(services, partner) and len(asked) == 2
+        assert sg.own_key_person_once(services, partner) and len(asked) == 3, "no request: no memo"
+    finally:
+        services.odoo.search_read = real

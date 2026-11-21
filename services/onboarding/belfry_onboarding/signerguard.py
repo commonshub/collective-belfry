@@ -22,6 +22,7 @@ Three guards, all in this module:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -65,6 +66,35 @@ def own_key_person(svc: Services, partner_id: int) -> bool:
     newest = max(rows, key=lambda r: int(r.get("id") or 0))
     own = str(newest.get("own_pubkey") or "").lower()
     return bool(own) and own == str(newest.get("keycast_pubkey") or "").lower()
+
+
+# One answer of own_key_person per person and HTTP request (app.py's request_memo middleware
+# sets a fresh dict for each request; outside a request nothing is kept). The register search
+# behind it scans the person's passes: about 14 ms with 2000 passes in the own register
+# (measured 2026-11-21), and a page or an API call can ask member_token for the same person
+# several times. Kept no longer than the request: a pass written later is seen at once.
+_OWN_MEMO: contextvars.ContextVar[dict[tuple[int, int], bool] | None] = contextvars.ContextVar(
+    "belfry_own_key_memo", default=None
+)
+
+
+def begin_request() -> contextvars.Token:
+    return _OWN_MEMO.set({})
+
+
+def end_request(token: contextvars.Token) -> None:
+    _OWN_MEMO.reset(token)
+
+
+def own_key_person_once(svc: Services, partner_id: int) -> bool:
+    """:func:`own_key_person`, asked once per request (``_OWN_MEMO``)."""
+    memo = _OWN_MEMO.get()
+    if memo is None:
+        return own_key_person(svc, partner_id)
+    key = (id(svc.odoo), int(partner_id))
+    if key not in memo:
+        memo[key] = own_key_person(svc, partner_id)
+    return memo[key]
 
 
 def register_key(svc: Services, vine_id: str) -> str | None:

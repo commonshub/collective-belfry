@@ -117,7 +117,7 @@ def member_token(svc: Services, partner_id: int) -> tuple[str, str] | None:
         return None
     from . import signerguard
 
-    if signerguard.own_key_person(svc, partner_id):
+    if signerguard.own_key_person_once(svc, partner_id):
         # an agent (or a person) that joined with its own key: no account of the signer's.
         # Asking for one made Keycast mint a derived key for the agent's partner that signed
         # as somebody else; the own signer refuses it (KeyNotHeld). Nothing to sign with.

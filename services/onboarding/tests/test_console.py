@@ -9,7 +9,7 @@ import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import console, homepage, mypass
+from belfry_onboarding import console, homepage, mypass, setup
 from belfry_onboarding.app import create_app
 from belfry_onboarding.nip46check import sign_event
 
@@ -420,8 +420,9 @@ def test_logged_out_pages_use_the_full_width(web, belfry):
     assert '<div class="shell anon">' in page and ".shell.anon{display:block}" in page
 
 
-def test_placeholder_until_the_website_is_published(web, belfry, authentik):
+def test_placeholder_until_the_website_is_published(web, belfry, authentik, odoo, tmp_path):
     belfry.settings.homepage = "nsite"
+    belfry.settings.setup_dir = str(tmp_path)  # the setup can be opened (setup.open_for_anyone)
     web.app.state.homepage = homepage.Homepage(
         belfry.settings, homepage.parse_config(belfry.settings)
     )
@@ -434,6 +435,12 @@ def test_placeholder_until_the_website_is_published(web, belfry, authentik):
     assert "https://belfry.belfry.test/agents.md" in r.text
     assert "/theme/belfry/theme.css" in r.text and "will be here" not in r.text
     assert "evil" not in web.get("/?msg=evil", headers={"Host": "belfry.test"}).text
+    # a belfry with members and no admin on record: /setup is closed, so the homepage does not
+    # offer it either (the same rule, setup.has_admin)
+    member(odoo, "Mia")
+    assert setup.has_admin(belfry) and not setup.open_for_anyone(belfry)
+    r = web.get("/", headers={"Host": "belfry.test", "Accept": "text/html"})
+    assert "has no admin yet" not in r.text and "Set up this belfry" not in r.text
     make_admin(authentik, "boss@example.org")
     console._admins["at"] = 0.0
     r = web.get("/", headers={"Host": "belfry.test", "Accept": "text/html"})
