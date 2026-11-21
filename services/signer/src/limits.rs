@@ -12,7 +12,16 @@
 //! - NIP-29 moderation and joins (9000 to 9009, 9021, 9022);
 //! - Blossom authorization (24242) without a `server` tag or for the belfry's own storage;
 //! - the profile (0) and the contact list (3);
+//! - app data under the belfry's names (30078 with a `d` tag that starts `belfry:`, trimmed,
+//!   any case): the sealed conversations' anchor, the read state, the channel order, …;
+//! - a label in one of the belfry's namespaces (1985 with an `L` tag, or the mark of an `l`
+//!   tag, that is `belfry` or starts `belfry/`, trimmed, any case): a pin, a proposal's
+//!   status, a ticket checked in, a vouch, a button's press;
 //! - anything that is not an object with an integer `kind`.
+//!
+//! Kind 5 (a deletion) stays allowed. And an outside connection decrypts (`nip44_decrypt`,
+//! `nip04_decrypt`) only with the member's consent, a flag on the connection
+//! (`method_refused`); it always encrypts.
 //!
 //! `host` follows Python's `urllib.parse.urlsplit(...).hostname` as `_host` uses it. Where the
 //! two could differ this side answers "" (no host), which refuses: a bracketed host that is
@@ -162,22 +171,41 @@ pub fn host(value: &str) -> String {
     name.trim_end_matches('.').to_string()
 }
 
+/// The event's tags that are lists; None when the tags cannot be read at all.
+fn tags_of(event: &Value) -> Option<Vec<&Vec<Value>>> {
+    match event.get("tags") {
+        None | Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Array(tags)) => Some(tags.iter().filter_map(Value::as_array).collect()),
+        // Python reads nothing out of "", 0, false, {}, a text or an object; other values
+        // are an error there
+        Some(Value::String(_)) | Some(Value::Object(_)) => Some(Vec::new()),
+        Some(Value::Bool(false)) => Some(Vec::new()),
+        Some(Value::Number(n)) if n.as_f64() == Some(0.0) => Some(Vec::new()),
+        Some(_) => None,
+    }
+}
+
+/// `belfry` or `belfry/…`, trimmed, any case (`_belfry_label` in remoteapps.py). Only a text
+/// can be one: no number, list or object reads as such a name in Python either.
+fn belfry_label(namespace: &Value) -> bool {
+    namespace.as_str().is_some_and(|n| {
+        let n = py_strip(n).to_lowercase();
+        n == "belfry" || n.starts_with("belfry/")
+    })
+}
+
+/// Whether an outside app's connection is refused this method: decrypting without the
+/// member's consent (the connection's `decrypt` flag). Everything else is decided elsewhere
+/// (`forbidden` for `sign_event`).
+pub fn method_refused(method: &str, decrypt: bool) -> bool {
+    matches!(method, "nip44_decrypt" | "nip04_decrypt") && !decrypt
+}
+
 /// The values of the event's tags called `name`, each as `_host` would read it; None when
 /// the tags cannot be read at all.
 fn tag_hosts(event: &Value, name: &str) -> Option<Vec<String>> {
-    let tags = match event.get("tags") {
-        None | Some(Value::Null) => return Some(Vec::new()),
-        Some(Value::Array(tags)) => tags,
-        // Python reads nothing out of "", 0, false, {}, a text or an object; other values
-        // are an error there
-        Some(Value::String(_)) | Some(Value::Object(_)) => return Some(Vec::new()),
-        Some(Value::Bool(false)) => return Some(Vec::new()),
-        Some(Value::Number(n)) if n.as_f64() == Some(0.0) => return Some(Vec::new()),
-        Some(_) => return None,
-    };
     let mut out = Vec::new();
-    for tag in tags {
-        let Some(tag) = tag.as_array() else { continue };
+    for tag in tags_of(event)? {
         if tag.len() < 2 || tag[0].as_str() != Some(name) {
             continue;
         }
@@ -233,6 +261,24 @@ pub fn forbidden(event: &Value, own: &Own) -> bool {
                     .any(|h| h.is_empty() || own.blossom.contains(h))
         }),
         0 | 3 => true,
+        // app data under the belfry's own names is the belfry's protocol
+        30078 => tags_of(event).is_none_or(|tags| {
+            tags.iter().any(|t| {
+                t.len() > 1
+                    && t[0].as_str() == Some("d")
+                    && t[1]
+                        .as_str()
+                        .is_some_and(|d| py_strip(d).to_lowercase().starts_with("belfry:"))
+            })
+        }),
+        // labels in the belfry's namespaces are decisions here
+        1985 => tags_of(event).is_none_or(|tags| {
+            tags.iter().any(|t| {
+                (t.len() > 1 && t[0].as_str() == Some("L") && belfry_label(&t[1]))
+                    || (t.len() > 2 && t[0].as_str() == Some("l") && belfry_label(&t[2]))
+            })
+        }),
+        // kind 5 (a deletion) stays allowed: relays apply it to the author's own events only
         _ => false,
     }
 }
@@ -283,7 +329,7 @@ mod tests {
         let v: Value = serde_json::from_str(VECTORS).unwrap();
         let own = vector_own();
         let cases = v["cases"].as_array().unwrap();
-        assert_eq!(cases.len(), 50);
+        assert_eq!(cases.len(), 73);
         for case in cases {
             assert_eq!(
                 forbidden(&case["event"], &own),
@@ -291,6 +337,56 @@ mod tests {
                 "{}",
                 case["name"]
             );
+        }
+        // the decrypt consent: `decrypt` is the connection's flag
+        let methods = v["methods"].as_array().unwrap();
+        assert_eq!(methods.len(), 7);
+        for case in methods {
+            assert_eq!(
+                method_refused(
+                    case["method"].as_str().unwrap(),
+                    case["decrypt"].as_bool().unwrap()
+                ),
+                case["refused"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn the_belfrys_names_and_namespaces_are_told_as_python_tells_them() {
+        let own = vector_own();
+        let j = |v: Value| forbidden(&v, &own);
+        use serde_json::json;
+        // only a text names something; other values and short tags are passed over
+        assert!(!j(
+            json!({"kind": 30078, "tags": [["d"], ["d", 5], ["d", ["belfry:x"]], "d"]})
+        ));
+        assert!(j(
+            json!({"kind": 30078, "tags": [["d", "\u{a0}BELFRY:x "]]})
+        ));
+        assert!(!j(
+            json!({"kind": 30078, "tags": [["D", "belfry:x"], ["e", "belfry:x"]]})
+        ));
+        assert!(!j(json!({"kind": 30079, "tags": [["d", "belfry:x"]]})));
+        assert!(j(
+            json!({"kind": 1985, "tags": [["l", "x", " Belfry/pin\n"]]})
+        ));
+        assert!(!j(
+            json!({"kind": 1985, "tags": [["l", "belfry/pin"], ["L", null], ["l", "x", 7]]})
+        ));
+        assert!(!j(
+            json!({"kind": 1985, "tags": [["L", "belfry-ish"], ["L", "mybelfry/x"]]})
+        ));
+        assert!(!j(
+            json!({"kind": 5, "tags": [["e", "00"], ["d", "belfry:sealed"]]})
+        ));
+        // tags that cannot be read at all: refused, not guessed
+        for kind in [30078, 1985] {
+            assert!(j(json!({"kind": kind, "tags": 5})), "{kind}");
+            assert!(!j(json!({"kind": kind, "tags": "d"})), "{kind}");
+            assert!(!j(json!({"kind": kind})), "{kind}");
         }
     }
 

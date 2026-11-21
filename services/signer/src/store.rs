@@ -87,10 +87,34 @@ pub struct ConnectionRow {
     /// `own` (one of the belfry's own apps) or `outside` (an outside app: `sign_event` within
     /// the limits of `limits.rs`).
     pub scope: String,
+    /// The member let this app decrypt (read what was written to them). Only looked at for an
+    /// `outside` connection: an own one decrypts anyway.
+    pub decrypt: bool,
+    /// The address the session was opened from (the app's registered address), "" when none
+    /// was given: what Keycast called `redirect_origin`.
+    pub origin: String,
+    /// `nip46` (an app that talks to the bunker) or `http` (an app's sign-in that is used
+    /// through the API: it stays when nobody connects; only its secret ends at the deadline).
+    pub kind: String,
+    /// Only in the list of all rows (`Store::all_connections`): when it was revoked.
+    pub revoked_at: Option<i64>,
+}
+
+impl ConnectionRow {
+    /// Whether the bunker answers anybody on this connection: a client is bound, or the
+    /// secret's deadline has not passed.
+    pub fn listening(&self, now: i64) -> bool {
+        self.client_pubkey.is_some() || self.expires_at.is_none_or(|t| t > now)
+    }
 }
 
 pub const SCOPE_OWN: &str = "own";
 pub const SCOPE_OUTSIDE: &str = "outside";
+pub const KIND_NIP46: &str = "nip46";
+pub const KIND_HTTP: &str = "http";
+/// How long an unclaimed connection found without a deadline at start is given (a database of
+/// the signer's first version made them without one).
+const UNCLAIMED_GRACE: i64 = 600;
 
 pub struct Store {
     db: Mutex<Connection>,
@@ -124,9 +148,16 @@ CREATE TABLE IF NOT EXISTS connections (
     secret_hash   TEXT NOT NULL DEFAULT '',
     uses          INTEGER NOT NULL DEFAULT 0,
     expires_at    INTEGER,
-    scope         TEXT NOT NULL DEFAULT 'own'
+    scope         TEXT NOT NULL DEFAULT 'own',
+    decrypt       INTEGER NOT NULL DEFAULT 0,
+    origin        TEXT NOT NULL DEFAULT '',
+    kind          TEXT NOT NULL DEFAULT 'nip46'
 );
 CREATE INDEX IF NOT EXISTS connections_vine_id ON connections (vine_id);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 ";
 
 /// After the columns exist (a database made by the first version of the signer gets them in
@@ -154,10 +185,15 @@ fn account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
 const ACCOUNT_COLS: &str =
     "vine_id, pubkey, custody, key_version, sealed, status, created_at, updated_at, username";
 const CONNECTION_COLS: &str = "id, vine_id, app, label, bunker_pubkey, bunker_sealed, \
-     secret_hash, client_pubkey, derive, created_at, last_used_at, uses, expires_at, scope";
-/// A connection that exists: not revoked, and not an unclaimed one past its deadline.
-const LIVE: &str = "revoked_at IS NULL AND NOT (client_pubkey IS NULL AND expires_at IS NOT NULL \
-     AND expires_at <= ?1)";
+     secret_hash, client_pubkey, derive, created_at, last_used_at, uses, expires_at, scope, \
+     decrypt, origin, kind, revoked_at";
+/// A connection that exists: not revoked, and not an unclaimed NIP-46 one past its deadline
+/// (an `http` one stays: it is used through the API).
+const LIVE: &str = "revoked_at IS NULL AND NOT (kind <> 'http' AND client_pubkey IS NULL \
+     AND expires_at IS NOT NULL AND expires_at <= ?1)";
+/// A connection the bunker answers on: live, and bound or still within its secret's deadline.
+const LISTENING: &str = "revoked_at IS NULL AND NOT (client_pubkey IS NULL \
+     AND expires_at IS NOT NULL AND expires_at <= ?1)";
 
 fn connection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionRow> {
     let derive: String = row.get(8)?;
@@ -180,6 +216,10 @@ fn connection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionRo
         uses: row.get(11)?,
         expires_at: row.get(12)?,
         scope: row.get(13)?,
+        decrypt: row.get::<_, i64>(14)? != 0,
+        origin: row.get(15)?,
+        kind: row.get(16)?,
+        revoked_at: row.get(17)?,
     })
 }
 
@@ -196,6 +236,9 @@ pub struct NewConnection<'a> {
     pub derive: &'a [String],
     pub expires_at: Option<i64>,
     pub scope: &'a str,
+    pub decrypt: bool,
+    pub origin: &'a str,
+    pub kind: &'a str,
 }
 
 /// A session carried over from Keycast (`Store::import_connections`): bound to its client key
@@ -208,10 +251,22 @@ pub struct ImportedConnection {
     pub bunker_sealed: Vec<u8>,
     pub client_pubkey: Option<String>,
     pub scope: String,
+    pub decrypt: bool,
+    pub origin: String,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub uses: i64,
     pub revoked_at: Option<i64>,
+}
+
+/// What `Store::create_account` came to.
+#[derive(Debug)]
+pub enum Created {
+    Made(Account),
+    /// The account was there already: nothing was written, this is it.
+    Exists(Account),
+    /// Another account has the username: nothing was written.
+    UsernameTaken,
 }
 
 /// What an import of sessions came to. Anything but `Done` wrote nothing.
@@ -314,6 +369,15 @@ impl Store {
                 "ALTER TABLE connections ADD COLUMN scope TEXT NOT NULL DEFAULT 'own'",
             )?;
         }
+        for (name, ddl) in [
+            ("decrypt", "decrypt INTEGER NOT NULL DEFAULT 0"),
+            ("origin", "origin TEXT NOT NULL DEFAULT ''"),
+            ("kind", "kind TEXT NOT NULL DEFAULT 'nip46'"),
+        ] {
+            if !has(name) {
+                conn.execute_batch(&format!("ALTER TABLE connections ADD COLUMN {ddl}"))?;
+            }
+        }
         if has("secret") {
             let mut waiting: Vec<(String, String)> = Vec::new();
             {
@@ -327,13 +391,27 @@ impl Store {
                 }
             }
             for (id, secret) in waiting {
-                // they were made without a deadline; they keep none
+                // they were made without a deadline: they get one below
                 conn.execute(
                     "UPDATE connections SET secret_hash = ?2 WHERE id = ?1",
                     params![id, crate::signer::secret_hash(&secret)],
                 )?;
             }
             conn.execute_batch("ALTER TABLE connections DROP COLUMN secret")?;
+        }
+        // No connection waits for its first connect for ever: one found without a deadline
+        // (the first version made them so, and an earlier upgrade kept them so) gets ten
+        // minutes from this start. Nothing made since is without one.
+        let given = conn.execute(
+            "UPDATE connections SET expires_at = ?1
+             WHERE client_pubkey IS NULL AND revoked_at IS NULL AND expires_at IS NULL",
+            params![now() + UNCLAIMED_GRACE],
+        )?;
+        if given > 0 {
+            tracing::warn!(
+                given,
+                "unclaimed connections without a deadline: they end in ten minutes"
+            );
         }
         Ok(())
     }
@@ -373,8 +451,97 @@ impl Store {
             .optional()
     }
 
-    /// Inserts the account, or replaces it (the key and how it is held; the status and the
-    /// username are kept).
+    /// Makes the account unless it exists, in one transaction: two calls at once for one
+    /// `vine_id` end with one row, the first one's, and the second hears `Exists` with it
+    /// (never a replaced key). A username somebody else has: nothing is written.
+    pub fn create_account(
+        &self,
+        vine_id: &str,
+        pubkey: &str,
+        custody: Custody,
+        key_version: i64,
+        sealed: Option<&[u8]>,
+        username: Option<&str>,
+    ) -> rusqlite::Result<Created> {
+        let t = now();
+        let name = username.map(str::to_ascii_lowercase);
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let read = |tx: &rusqlite::Transaction<'_>| {
+            tx.query_row(
+                &format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE vine_id = ?1"),
+                params![vine_id],
+                account_from_row,
+            )
+            .optional()
+        };
+        if let Some(existing) = read(&tx)? {
+            return Ok(Created::Exists(existing));
+        }
+        if let Some(name) = &name {
+            let taken: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM accounts WHERE username = ?1)",
+                params![name],
+                |r| r.get(0),
+            )?;
+            if taken {
+                return Ok(Created::UsernameTaken);
+            }
+        }
+        // the primary key stands behind the check above: a row that is there is never touched
+        let n = tx.execute(
+            "INSERT INTO accounts (vine_id, pubkey, custody, key_version, sealed, status,
+                                   created_at, updated_at, username)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6, ?7)
+             ON CONFLICT (vine_id) DO NOTHING",
+            params![
+                vine_id,
+                pubkey,
+                custody.as_str(),
+                key_version,
+                sealed,
+                t,
+                name
+            ],
+        )?;
+        let row = read(&tx)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        tx.commit()?;
+        Ok(if n > 0 {
+            Created::Made(row)
+        } else {
+            Created::Exists(row)
+        })
+    }
+
+    /// Accounts in the order of their ids, after `after`, at most `limit`: all of them, or
+    /// those with this status.
+    pub fn list_accounts(
+        &self,
+        status: Option<&str>,
+        after: &str,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<Account>> {
+        let db = self.db();
+        let mut stmt = db.prepare(&format!(
+            "SELECT {ACCOUNT_COLS} FROM accounts
+             WHERE vine_id > ?1 AND (?2 IS NULL OR status = ?2) ORDER BY vine_id LIMIT ?3"
+        ))?;
+        let rows = stmt.query_map(params![after, status, limit as i64], account_from_row)?;
+        rows.collect()
+    }
+
+    /// (all accounts, suspended ones).
+    pub fn count_accounts(&self) -> rusqlite::Result<(i64, i64)> {
+        self.db().query_row(
+            "SELECT count(*), coalesce(sum(status = 'suspended'), 0) FROM accounts",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
+
+    /// Replaces the account's key and how it is held (the move to the member's own key; the
+    /// status and the username are kept), or inserts the account. Making an account that may
+    /// exist is `create_account`.
     pub fn put_account(
         &self,
         vine_id: &str,
@@ -460,6 +627,27 @@ impl Store {
         Ok(())
     }
 
+    // -- settings --------------------------------------------------------------------------
+
+    pub fn setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        self.db()
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        self.db().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = ?2",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     // -- connections -----------------------------------------------------------------------
 
     /// Adds the connection. With a client key: false, and nothing written, when that key is
@@ -474,8 +662,8 @@ impl Store {
         db.execute(
             "INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
                                       secret_hash, client_pubkey, derive, created_at, expires_at,
-                                      scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                      scope, decrypt, origin, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 c.id,
                 c.vine_id,
@@ -489,6 +677,9 @@ impl Store {
                 now(),
                 c.expires_at,
                 c.scope,
+                c.decrypt,
+                c.origin,
+                c.kind,
             ],
         )?;
         Ok(true)
@@ -530,8 +721,10 @@ impl Store {
             tx.execute(
                 "INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
                                           secret_hash, client_pubkey, derive, created_at,
-                                          last_used_at, revoked_at, uses, expires_at, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', ?7, '', ?8, ?9, ?10, ?11, NULL, ?12)",
+                                          last_used_at, revoked_at, uses, expires_at, scope,
+                                          decrypt, origin)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', ?7, '', ?8, ?9, ?10, ?11, NULL, ?12, ?13,
+                         ?14)",
                 params![
                     c.id,
                     vine_id,
@@ -545,6 +738,8 @@ impl Store {
                     c.revoked_at,
                     c.uses,
                     c.scope,
+                    c.decrypt,
+                    c.origin,
                 ],
             )?;
             if c.revoked_at.is_some() {
@@ -569,6 +764,38 @@ impl Store {
         ))?;
         let rows = stmt.query_map(params![now(), vine_id], connection_from_row)?;
         rows.collect()
+    }
+
+    /// Every connection the account ever had, revoked and expired ones too (`revoked_at`
+    /// says so; an unclaimed one past its deadline that housekeeping has not marked yet has
+    /// none and a past `expires_at`).
+    pub fn all_connections(&self, vine_id: &str) -> rusqlite::Result<Vec<ConnectionRow>> {
+        let db = self.db();
+        let mut stmt = db.prepare(&format!(
+            "SELECT {CONNECTION_COLS} FROM connections
+             WHERE vine_id = ?1 ORDER BY created_at DESC, rowid DESC"
+        ))?;
+        let rows = stmt.query_map(params![vine_id], connection_from_row)?;
+        rows.collect()
+    }
+
+    /// Sets the member's consent to decrypt on one live connection of the account (by id or
+    /// by bunker key); false when there is none.
+    pub fn set_decrypt(
+        &self,
+        vine_id: &str,
+        id: Option<&str>,
+        bunker_pubkey: Option<&str>,
+        decrypt: bool,
+    ) -> rusqlite::Result<bool> {
+        let n = self.db().execute(
+            &format!(
+                "UPDATE connections SET decrypt = ?5
+                 WHERE vine_id = ?2 AND (id = ?3 OR bunker_pubkey = ?4) AND {LIVE}"
+            ),
+            params![now(), vine_id, id, bunker_pubkey, decrypt],
+        )?;
+        Ok(n > 0)
     }
 
     pub fn connection(&self, id: &str) -> rusqlite::Result<Option<ConnectionRow>> {
@@ -597,11 +824,12 @@ impl Store {
             .optional()
     }
 
-    /// The bunker keys the relay subscription asks for: every live connection's.
+    /// The bunker keys the relay subscription asks for: every connection the bunker answers
+    /// on (not an `http` one whose secret nobody used in time).
     pub fn live_bunker_pubkeys(&self) -> rusqlite::Result<Vec<String>> {
         let db = self.db();
         let mut stmt = db.prepare(&format!(
-            "SELECT bunker_pubkey FROM connections WHERE {LIVE} ORDER BY bunker_pubkey"
+            "SELECT bunker_pubkey FROM connections WHERE {LISTENING} ORDER BY bunker_pubkey"
         ))?;
         let rows = stmt.query_map(params![now()], |r| r.get(0))?;
         rows.collect()
@@ -614,7 +842,9 @@ impl Store {
         let db = self.db();
         let row: Option<(String, Option<String>)> = db
             .query_row(
-                &format!("SELECT vine_id, client_pubkey FROM connections WHERE id = ?2 AND {LIVE}"),
+                &format!(
+                    "SELECT vine_id, client_pubkey FROM connections WHERE id = ?2 AND {LISTENING}"
+                ),
                 params![now(), id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -700,15 +930,24 @@ impl Store {
     }
 
     /// Marks unclaimed connections past their deadline as revoked (they were already treated
-    /// as gone); returns how many.
+    /// as gone); an `http` one stays and loses its secret instead (nobody can connect to it
+    /// any more). Returns how many changed.
     pub fn expire_unclaimed(&self) -> rusqlite::Result<usize> {
         let t = now();
-        self.db().execute(
+        let db = self.db();
+        let revoked = db.execute(
             "UPDATE connections SET revoked_at = ?1
              WHERE revoked_at IS NULL AND client_pubkey IS NULL AND expires_at IS NOT NULL
-               AND expires_at <= ?1",
+               AND expires_at <= ?1 AND kind <> 'http'",
             params![t],
-        )
+        )?;
+        let closed = db.execute(
+            "UPDATE connections SET secret_hash = ''
+             WHERE revoked_at IS NULL AND client_pubkey IS NULL AND expires_at IS NOT NULL
+               AND expires_at <= ?1 AND kind = 'http' AND secret_hash <> ''",
+            params![t],
+        )?;
+        Ok(revoked + closed)
     }
 
     #[cfg(test)]
@@ -739,6 +978,9 @@ mod tests {
             derive: &[],
             expires_at: None,
             scope: SCOPE_OWN,
+            decrypt: false,
+            origin: "",
+            kind: KIND_NIP46,
         }
     }
 
@@ -902,7 +1144,18 @@ mod tests {
             waiting.secret_hash,
             crate::signer::secret_hash("plain-secret")
         );
-        assert_eq!(waiting.expires_at, None);
+        let deadline = waiting
+            .expires_at
+            .expect("it waits ten minutes more, not for ever");
+        assert!(deadline > now() + 500 && deadline <= now() + UNCLAIMED_GRACE);
+        assert_eq!(
+            (
+                waiting.kind.as_str(),
+                waiting.decrypt,
+                waiting.origin.as_str()
+            ),
+            (KIND_NIP46, false, "")
+        );
         assert_eq!(
             waiting.scope, SCOPE_OWN,
             "connections made before scopes are own"
@@ -916,5 +1169,137 @@ mod tests {
             .unwrap()
             .contains(&"secret".to_string()));
         assert_eq!(s.set_username("a", "lina").unwrap(), Named::Set);
+        assert_eq!(bound.expires_at, None, "a bound one has no deadline");
+        // and once the ten minutes are over it is gone, like any unclaimed connection
+        s.set_expires_at("waiting", now() - 1);
+        assert!(s.connection("waiting").unwrap().is_none());
+        assert_eq!(s.expire_unclaimed().unwrap(), 1);
+    }
+
+    #[test]
+    fn an_unclaimed_connection_left_without_a_deadline_by_an_earlier_upgrade_gets_one() {
+        // the schema of today, with a row as the first upgrade left it: waiting, no deadline
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(
+            "INSERT INTO accounts VALUES ('a', 'pk', 'derived', 0, x'00', 'active', 1, 1, NULL);
+             INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
+                                      created_at, secret_hash)
+             VALUES ('waiting', 'a', 'app', 'App', 'b1', x'00', 1, 'h');
+             INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
+                                      created_at, client_pubkey)
+             VALUES ('bound', 'a', 'app', 'App', 'b2', x'00', 1, 'client');
+             INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
+                                      created_at, revoked_at)
+             VALUES ('revoked', 'a', 'app', 'App', 'b3', x'00', 1, 2);",
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        assert!(s
+            .connection("waiting")
+            .unwrap()
+            .unwrap()
+            .expires_at
+            .is_some());
+        assert_eq!(s.connection("bound").unwrap().unwrap().expires_at, None);
+        let all = s.all_connections("a").unwrap();
+        assert_eq!(all.len(), 3);
+        let revoked = all.iter().find(|c| c.id == "revoked").unwrap();
+        assert_eq!((revoked.revoked_at, revoked.expires_at), (Some(2), None));
+    }
+
+    #[test]
+    fn an_account_is_made_once_and_never_replaced() {
+        let s = Store::in_memory().unwrap();
+        let first = s
+            .create_account("a", "k1", Custody::Derived, 0, Some(b"one"), Some("Lina"))
+            .unwrap();
+        assert!(matches!(&first, Created::Made(a) if a.username.as_deref() == Some("lina")));
+        // the second call writes nothing, whatever it carries
+        match s
+            .create_account("a", "k2", Custody::Own, 3, None, Some("other"))
+            .unwrap()
+        {
+            Created::Exists(a) => {
+                assert_eq!((a.pubkey.as_str(), a.custody), ("k1", Custody::Derived));
+                assert_eq!(a.sealed.as_deref(), Some(&b"one"[..]));
+                assert_eq!(a.username.as_deref(), Some("lina"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(s.account_by_username("other").unwrap().is_none());
+        // a taken name makes nothing
+        assert!(matches!(
+            s.create_account("b", "k3", Custody::Derived, 0, Some(b"x"), Some("LINA"))
+                .unwrap(),
+            Created::UsernameTaken
+        ));
+        assert!(s.account("b").unwrap().is_none());
+        assert!(matches!(
+            s.create_account("b", "k3", Custody::Derived, 0, Some(b"x"), None)
+                .unwrap(),
+            Created::Made(_)
+        ));
+        s.set_status("b", "suspended").unwrap();
+        let ids = |rows: Vec<Account>| rows.into_iter().map(|a| a.vine_id).collect::<Vec<_>>();
+        assert_eq!(ids(s.list_accounts(None, "", 10).unwrap()), ["a", "b"]);
+        assert_eq!(ids(s.list_accounts(None, "a", 10).unwrap()), ["b"]);
+        assert_eq!(ids(s.list_accounts(None, "", 1).unwrap()), ["a"]);
+        assert_eq!(
+            ids(s.list_accounts(Some("suspended"), "", 10).unwrap()),
+            ["b"]
+        );
+        assert_eq!(s.count_accounts().unwrap(), (2, 1));
+        assert_eq!(s.setting("x").unwrap(), None);
+        s.set_setting("x", "1").unwrap();
+        s.set_setting("x", "0").unwrap();
+        assert_eq!(s.setting("x").unwrap().as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn a_sign_in_over_http_stays_when_nobody_connects_and_only_its_secret_ends() {
+        let s = Store::in_memory().unwrap();
+        s.put_account("a", "a", Custody::Derived, 0, Some(b"k"))
+            .unwrap();
+        let http = NewConnection {
+            kind: KIND_HTTP,
+            expires_at: Some(now() - 1),
+            origin: "https://wallet.belfry.test",
+            decrypt: true,
+            ..conn("h", "a", "b1")
+        };
+        s.add_connection(&http).unwrap();
+        s.add_connection(&NewConnection {
+            expires_at: Some(now() - 1),
+            ..conn("n", "a", "b2")
+        })
+        .unwrap();
+        // past the deadline: the NIP-46 one is gone, the HTTP one is there for the API…
+        assert!(s.connection("n").unwrap().is_none());
+        let row = s.connection("h").unwrap().unwrap();
+        assert_eq!(
+            (row.kind.as_str(), row.origin.as_str(), row.decrypt),
+            (KIND_HTTP, "https://wallet.belfry.test", true)
+        );
+        assert!(!row.listening(now()));
+        assert_eq!(s.connections("a").unwrap().len(), 1);
+        // …but the bunker does not listen for it and nobody can take it with the secret
+        assert!(s.live_bunker_pubkeys().unwrap().is_empty());
+        assert_eq!(s.bind_client("h", "client").unwrap(), Bind::Gone);
+        assert_eq!(s.expire_unclaimed().unwrap(), 2);
+        assert_eq!(s.expire_unclaimed().unwrap(), 0);
+        let row = s.connection("h").unwrap().unwrap();
+        assert_eq!(row.secret_hash, "", "the secret is closed");
+        assert_eq!(s.all_connections("a").unwrap().len(), 2);
+        // consent can be changed later, on a live connection of the account only
+        assert!(s.set_decrypt("a", Some("h"), None, false).unwrap());
+        assert!(!s.connection("h").unwrap().unwrap().decrypt);
+        assert!(s.set_decrypt("a", None, Some("b1"), true).unwrap());
+        assert!(s.connection("h").unwrap().unwrap().decrypt);
+        assert!(!s.set_decrypt("b", Some("h"), None, false).unwrap());
+        assert!(!s.set_decrypt("a", Some("n"), None, true).unwrap());
+        // revoked like any other
+        assert!(s.revoke_connection("a", "h").unwrap());
+        assert!(s.connection("h").unwrap().is_none());
     }
 }

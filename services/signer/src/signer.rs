@@ -20,8 +20,8 @@ use zeroize::Zeroizing;
 use crate::keys::{self, SeedError};
 use crate::limits::Own;
 use crate::store::{
-    self, Account, Bind, ConnectionRow, Custody, Imported, ImportedConnection, Named,
-    NewConnection, Store, SCOPE_OUTSIDE, SCOPE_OWN,
+    self, Account, Bind, ConnectionRow, Created, Custody, Imported, ImportedConnection, Named,
+    NewConnection, Store, KIND_HTTP, KIND_NIP46, SCOPE_OUTSIDE, SCOPE_OWN,
 };
 use crate::vault::Vault;
 
@@ -38,6 +38,13 @@ pub enum Error {
     /// The client key is linked to another account (one client key, one identity).
     ClientKeyTaken,
     UsernameTaken,
+    /// The signer makes no accounts for now (`Signer::accounts_closed`): nothing was created.
+    NoNewAccounts,
+    /// The bunker's relay subscription does not cover a connection that was just made: it was
+    /// taken back, the caller asks again.
+    BunkerUnavailable,
+    /// The request's body is larger than the route takes.
+    TooLarge(String),
     Invalid(String),
     Forbidden(String),
     Internal(String),
@@ -54,6 +61,9 @@ impl Error {
             Error::Mismatch(_) => "mismatch",
             Error::ClientKeyTaken => "client_key_taken",
             Error::UsernameTaken => "username_taken",
+            Error::NoNewAccounts => "no_new_accounts",
+            Error::BunkerUnavailable => "bunker_unavailable",
+            Error::TooLarge(_) => "too_large",
             Error::Invalid(_) => "invalid",
             Error::Forbidden(_) => "forbidden",
             Error::Internal(_) => "internal",
@@ -69,9 +79,17 @@ impl Error {
             Error::Suspended => "This account is suspended.".into(),
             Error::ClientKeyTaken => "This client key is already linked to another account.".into(),
             Error::UsernameTaken => "This username is taken.".into(),
-            Error::Mismatch(m) | Error::Invalid(m) | Error::Forbidden(m) | Error::Internal(m) => {
-                m.clone()
-            }
+            Error::NoNewAccounts => "This signer makes no new accounts for now (an import is \
+                 under way): name the key the account must have, or lift the switch."
+                .into(),
+            Error::BunkerUnavailable => "The bunker is not listening on its relay: the \
+                 connection was not made. Try again."
+                .into(),
+            Error::Mismatch(m)
+            | Error::TooLarge(m)
+            | Error::Invalid(m)
+            | Error::Forbidden(m)
+            | Error::Internal(m) => m.clone(),
         }
     }
 }
@@ -173,6 +191,9 @@ impl Limiter {
     }
 }
 
+/// The setting that closes the making of accounts (`Signer::accounts_closed`).
+const NO_NEW_ACCOUNTS: &str = "no_new_accounts";
+
 pub struct Signer {
     pub store: Store,
     vault: Vault,
@@ -188,6 +209,10 @@ pub struct Signer {
     /// The belfry's own names: what a connection of an outside app is never given a
     /// signature for (`limits.rs`).
     pub own: Own,
+    /// `SIGNER_NO_NEW_ACCOUNTS=1`: no accounts are made, whatever the stored switch says.
+    pub no_new_accounts_env: bool,
+    /// NIP-46 requests already answered (`bunker::respond`).
+    pub seen: crate::bunker::Seen,
 }
 
 /// A session of Keycast's to carry over (`Signer::import_connections`).
@@ -201,6 +226,10 @@ pub struct KeycastSession {
     pub app: String,
     pub label: String,
     pub scope: Option<String>,
+    /// The member's consent to decrypt, for a session of an outside app.
+    pub decrypt: bool,
+    /// Keycast's `redirect_origin`.
+    pub origin: String,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub uses: i64,
@@ -228,7 +257,30 @@ pub fn valid_scope(scope: Option<&str>) -> Result<&'static str> {
     }
 }
 
+/// `nip46` when none is given; anything but `nip46` and `http` is refused.
+pub fn valid_kind(kind: Option<&str>) -> Result<&'static str> {
+    match kind {
+        None | Some(KIND_NIP46) => Ok(KIND_NIP46),
+        Some(KIND_HTTP) => Ok(KIND_HTTP),
+        Some(other) => Err(Error::Invalid(format!(
+            "kind must be \"nip46\" or \"http\", not {other:?}"
+        ))),
+    }
+}
+
+/// An origin as it is kept: up to 200 characters, none of them a control character.
+pub fn valid_origin(origin: &str) -> Result<&str> {
+    let origin = origin.trim();
+    if origin.chars().count() > 200 || origin.chars().any(char::is_control) {
+        return Err(Error::Invalid(
+            "origin must be at most 200 characters, without control characters".into(),
+        ));
+    }
+    Ok(origin)
+}
+
 /// What a new connection is made with (`Signer::create_scoped`).
+#[derive(Clone, Copy, Default)]
 pub struct ConnectionSpec<'a> {
     pub app: &'a str,
     pub label: &'a str,
@@ -237,6 +289,12 @@ pub struct ConnectionSpec<'a> {
     pub client_pubkey: Option<&'a str>,
     /// `own` or `outside` (`valid_scope`).
     pub scope: Option<&'a str>,
+    /// The member's consent to decrypt (only looked at for `outside`).
+    pub decrypt: bool,
+    /// The address the session is opened from; "" for none.
+    pub origin: &'a str,
+    /// `nip46` or `http` (`valid_kind`).
+    pub kind: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -247,11 +305,15 @@ pub struct NewBunker {
     pub pubkey: String,
     pub app: String,
     pub scope: String,
+    pub kind: String,
+    pub decrypt: bool,
+    pub origin: String,
     pub created_at: i64,
     /// The client key the connection is bound to, when the request named one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_pubkey: Option<String>,
-    /// For a connection waiting for its first `connect`: when it stops existing.
+    /// For a connection waiting for its first `connect`: when it stops existing (`nip46`),
+    /// or when its secret stops opening it (`http`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
 }
@@ -345,7 +407,49 @@ impl Signer {
             bunker: BunkerState::new(),
             limiter: Limiter::new(),
             own: Own::default(),
+            no_new_accounts_env: false,
+            seen: crate::bunker::Seen::new(crate::bunker::SEEN_KEEP, crate::bunker::SEEN_FOR),
         }
+    }
+
+    /// Whether the signer makes no accounts for now: the stored switch (`close_accounts`), or
+    /// `SIGNER_NO_NEW_ACCOUNTS`. An import turns it on, so that nothing but the import puts an
+    /// account here (a caller that forgot to name the key it expects would get a new one);
+    /// the operator lifts it once the belfry runs on this signer.
+    pub fn accounts_closed(&self) -> Result<bool> {
+        Ok(
+            self.no_new_accounts_env
+                || self.store.setting(NO_NEW_ACCOUNTS)?.as_deref() == Some("1"),
+        )
+    }
+
+    /// Sets the stored switch. `Invalid` when asked to open while the environment closes.
+    pub fn close_accounts(&self, closed: bool) -> Result<()> {
+        if !closed && self.no_new_accounts_env {
+            return Err(Error::Invalid(
+                "SIGNER_NO_NEW_ACCOUNTS is set in the signer's environment: unset it there".into(),
+            ));
+        }
+        self.store
+            .set_setting(NO_NEW_ACCOUNTS, if closed { "1" } else { "0" })?;
+        tracing::warn!(closed, "the making of new accounts was switched");
+        Ok(())
+    }
+
+    /// Accounts in the order of their ids (`Store::list_accounts`), and (all, suspended).
+    pub fn list_accounts(
+        &self,
+        status: Option<&str>,
+        after: &str,
+        limit: usize,
+    ) -> Result<(Vec<Account>, (i64, i64))> {
+        if !matches!(status, None | Some("active") | Some("suspended")) {
+            return Err(Error::Invalid("status must be active or suspended".into()));
+        }
+        Ok((
+            self.store.list_accounts(status, after, limit)?,
+            self.store.count_accounts()?,
+        ))
     }
 
     pub fn seed_state(&self) -> &'static str {
@@ -365,16 +469,24 @@ impl Signer {
     }
 
     /// Waits (at most `timeout`) until the bunker's relay subscription covers change `n`, so a
-    /// client that connects the moment it gets its bunker URL is heard. Returns at once when
-    /// the bunker is off or not connected.
-    pub async fn wait_subscribed(&self, n: u64, timeout: Duration) {
-        if !self.bunker.enabled.load(Ordering::SeqCst)
-            || !self.bunker.connected.load(Ordering::SeqCst)
-        {
-            return;
+    /// client that connects the moment it gets its bunker URL is heard. `Ok` at once when the
+    /// bunker is off (no `BUNKER_RELAYS`: nobody is promised a listener). With a bunker that is
+    /// disconnected or whose subscription failed, the wait runs out: `BunkerUnavailable`,
+    /// never a success for a connection nobody listens on.
+    pub async fn wait_subscribed(&self, n: u64, timeout: Duration) -> Result<()> {
+        if !self.bunker.enabled.load(Ordering::SeqCst) {
+            return Ok(());
         }
         let mut rx = self.bunker.subscribed.subscribe();
-        let _ = tokio::time::timeout(timeout, rx.wait_for(|seen| *seen >= n)).await;
+        let covered = matches!(
+            tokio::time::timeout(timeout, rx.wait_for(|seen| *seen >= n)).await,
+            Ok(Ok(_))
+        );
+        if covered {
+            Ok(())
+        } else {
+            Err(Error::BunkerUnavailable)
+        }
     }
 
     /// One-time upgrade at start: keys still sealed in Keycast's format (no row binding; a
@@ -460,52 +572,59 @@ impl Signer {
                 return Err(mismatch(own, expected));
             }
         }
-        if let Some(a) = self.store.account(vine_id)? {
+        let existing = |a: Account| {
             for want in [&own, &expected].into_iter().flatten() {
                 if *want != a.pubkey {
                     return Err(mismatch(&a.pubkey, want));
                 }
             }
-            return Ok(a);
+            Ok(a)
+        };
+        if let Some(a) = self.store.account(vine_id)? {
+            return existing(a);
+        }
+        // closed: only an account whose key the caller names (its own, or the one it expects)
+        if own.is_none() && expected.is_none() && self.accounts_closed()? {
+            tracing::warn!(
+                vine_id,
+                "account not made: the signer makes no new accounts"
+            );
+            return Err(Error::NoNewAccounts);
         }
         let username = username.map(valid_username).transpose()?;
-        if let Some(name) = &username {
-            if self.store.account_by_username(name)?.is_some() {
-                return Err(Error::UsernameTaken);
-            }
-        }
-        if let Some(own) = own {
-            self.store
-                .put_account(vine_id, &own, Custody::Own, key_version.into(), None)?;
-            tracing::info!(vine_id, pubkey = %own, "account created (the member's own key)");
+        let (pubkey, custody, sealed) = if let Some(own) = &own {
+            (own.clone(), Custody::Own, None)
         } else {
             let seed = keys::read_seed(self.seed_path.as_deref())?;
             let keys = keys::derive_keys(&seed, vine_id, key_version);
             let pubkey = keys.public_key().to_hex();
-            if let Some(expected) = expected {
-                if expected != pubkey {
+            if let Some(expected) = &expected {
+                if *expected != pubkey {
                     return Err(Error::Mismatch(format!(
                         "the key derived for {vine_id} (version {key_version}) is not {expected}"
                     )));
                 }
             }
             let sealed = self.vault.seal(&keys, &account_aad(vine_id));
-            self.store.put_account(
-                vine_id,
-                &pubkey,
-                Custody::Derived,
-                key_version.into(),
-                Some(&sealed),
-            )?;
-            tracing::info!(vine_id, pubkey = %pubkey, "account created (derived key)");
-        }
-        if let Some(name) = &username {
-            // lost a race for the name: the account exists without it, and the caller hears 409
-            if self.store.set_username(vine_id, name)? != Named::Set {
-                return Err(Error::UsernameTaken);
+            (pubkey, Custody::Derived, Some(sealed))
+        };
+        // one statement decides: when another request made the account meanwhile, that one
+        // stands and this one is answered as for any account that exists
+        match self.store.create_account(
+            vine_id,
+            &pubkey,
+            custody,
+            key_version.into(),
+            sealed.as_deref(),
+            username.as_deref(),
+        )? {
+            Created::Made(a) => {
+                tracing::info!(vine_id, pubkey = %pubkey, custody = ?custody, "account created");
+                Ok(a)
             }
+            Created::Exists(a) => existing(a),
+            Created::UsernameTaken => Err(Error::UsernameTaken),
         }
-        self.account(vine_id)
     }
 
     /// Self-custody: the member's own key from now on. The held key is dropped and every
@@ -574,17 +693,26 @@ impl Signer {
             Some(v) => (Custody::Derived, v),
             None => (Custody::Imported, 0),
         };
-        self.store.put_account(
+        match self.store.create_account(
             vine_id,
             &pubkey,
             custody,
             version.into(),
             Some(&self.vault.seal(&keys, &account_aad(vine_id))),
-        )?;
-        Ok(match custody {
-            Custody::Derived => "derived",
-            _ => "imported",
-        })
+            None,
+        )? {
+            Created::Made(_) => Ok(match custody {
+                Custody::Derived => "derived",
+                _ => "imported",
+            }),
+            // made by another request since the look above
+            Created::Exists(a) if a.pubkey == pubkey => Ok("exists"),
+            Created::Exists(a) => Err(Error::Mismatch(format!(
+                "{vine_id}: the signer has this account with the key {}, not {pubkey}",
+                a.pubkey
+            ))),
+            Created::UsernameTaken => Err(Error::Internal("no username was asked for".into())),
+        }
     }
 
     pub fn set_status(&self, vine_id: &str, status: &str) -> Result<()> {
@@ -771,7 +899,7 @@ impl Signer {
                 derive,
                 keep,
                 client_pubkey,
-                scope: None,
+                ..Default::default()
             },
         )
     }
@@ -790,8 +918,13 @@ impl Signer {
             keep,
             client_pubkey,
             scope,
+            decrypt,
+            origin,
+            kind,
         } = *spec;
         let scope = valid_scope(scope)?;
+        let kind = valid_kind(kind)?;
+        let origin = valid_origin(origin)?;
         let account = self.account(vine_id)?;
         self.keys_of(&account)?;
         if app.is_empty() || app.chars().count() > 64 || label.chars().count() > 120 {
@@ -824,6 +957,9 @@ impl Signer {
             derive,
             expires_at,
             scope,
+            decrypt,
+            origin,
+            kind,
         })?;
         if !added {
             tracing::warn!(
@@ -842,7 +978,7 @@ impl Signer {
             url.push_str(&format!("relay={}&", urlencode(relay)));
         }
         url.push_str(&format!("secret={secret}"));
-        tracing::info!(vine_id, app, id = %id, bound = client.is_some(), scope, "bunker connection created");
+        tracing::info!(vine_id, app, id = %id, bound = client.is_some(), scope, kind, "bunker connection created");
         Ok((
             NewBunker {
                 id,
@@ -851,6 +987,9 @@ impl Signer {
                 pubkey: account.pubkey,
                 app: app.to_string(),
                 scope: scope.to_string(),
+                kind: kind.to_string(),
+                decrypt,
+                origin: origin.to_string(),
                 created_at: store::now(),
                 client_pubkey: client,
                 expires_at,
@@ -898,6 +1037,7 @@ impl Signer {
                 .transpose()
                 .map_err(at)?;
             let scope = valid_scope(s.scope.as_deref()).map_err(at)?;
+            let origin = valid_origin(&s.origin).map_err(at)?.to_string();
             if s.app.is_empty() || s.app.chars().count() > 64 || s.label.chars().count() > 120 {
                 return Err(bad("app must be 1 to 64 characters, label up to 120"));
             }
@@ -932,6 +1072,8 @@ impl Signer {
                 bunker_pubkey,
                 client_pubkey: client,
                 scope: scope.to_string(),
+                decrypt: s.decrypt,
+                origin,
                 created_at: s.created_at,
                 last_used_at: s.last_used_at,
                 uses: s.uses,
@@ -983,6 +1125,47 @@ impl Signer {
         Ok(self.store.connections(vine_id)?)
     }
 
+    /// Every connection the account ever had: revoked and expired ones too.
+    pub fn all_connections(&self, vine_id: &str) -> Result<Vec<ConnectionRow>> {
+        self.account(vine_id)?;
+        Ok(self.store.all_connections(vine_id)?)
+    }
+
+    /// The member's consent to decrypt, on one live connection (by id or bunker key).
+    pub fn set_decrypt(
+        &self,
+        vine_id: &str,
+        id: Option<&str>,
+        bunker_pubkey: Option<&str>,
+        decrypt: bool,
+    ) -> Result<()> {
+        self.account(vine_id)?;
+        let bunker = bunker_pubkey
+            .map(|b| parse_pubkey(b).map(|k| k.to_hex()))
+            .transpose()?;
+        if id.is_none() && bunker.is_none() {
+            return Err(Error::Invalid("say which: id or bunker_pubkey".into()));
+        }
+        if !self
+            .store
+            .set_decrypt(vine_id, id, bunker.as_deref(), decrypt)?
+        {
+            return Err(Error::NotFound);
+        }
+        tracing::info!(
+            vine_id,
+            decrypt,
+            "a connection's consent to decrypt was set"
+        );
+        Ok(())
+    }
+
+    /// Whether a decrypt asked through this connection is refused: an outside app's, without
+    /// the member's consent.
+    pub fn decrypt_refused(conn: &ConnectionRow) -> bool {
+        conn.scope == SCOPE_OUTSIDE && crate::limits::method_refused("nip44_decrypt", conn.decrypt)
+    }
+
     /// Revokes one connection (by `id` or by its bunker key), an app's, or all of them.
     pub fn revoke(
         &self,
@@ -1005,7 +1188,8 @@ impl Signer {
         Ok(n)
     }
 
-    /// Housekeeping, from the bunker loop: unclaimed connections past their deadline.
+    /// Housekeeping, from the bunker loop: unclaimed connections past their deadline (with the
+    /// bunker off nothing marks them; they are treated as gone all the same).
     pub fn expire_unclaimed(&self) -> usize {
         let n = self.store.expire_unclaimed().unwrap_or(0);
         if n > 0 {

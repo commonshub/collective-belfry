@@ -7,14 +7,22 @@
 //! connection's key; the answer goes back the same way. Methods: connect, get_public_key,
 //! sign_event, nip04/nip44 encrypt and decrypt, ping, get_relays, switch_relays, and Belfry's
 //! derive_secret for the purposes the connection was given. A connection of an outside app
-//! (scope `outside`) is refused `sign_event` for the events `limits.rs` names; everything else
-//! is the same for both scopes.
+//! (scope `outside`) is refused `sign_event` for the events `limits.rs` names, and decrypts only
+//! with the member's consent (the connection's `decrypt` flag); everything else is the same
+//! for both scopes.
+//!
+//! A request is taken once (by its event id), only when its signature is right and its
+//! `created_at` is within ten minutes of now (`FRESH`); which rate limit it counts against is
+//! decided after the signature is checked, so an event that only names a client's key spends
+//! nothing of that client's allowance.
 //!
 //! The loop (`run`) is supervised: when the relay client's notification stream ends or the
 //! loop panics it starts again with a growing pause and says so in the log. It asks the relay
 //! only for requests to the bunker keys of live connections (`#p`), again whenever the set
-//! changes; requests are answered concurrently, each connection within its rate limit, and one
-//! event is answered once.
+//! changes; a subscription that fails is tried again on the next tick, then with a growing
+//! pause, and the bunker says "not listening" meanwhile (`/health`, and the API does not hand
+//! out a new connection). Requests are answered concurrently, each connection within its rate
+//! limit.
 
 use std::collections::{HashSet, VecDeque};
 use std::future::Future;
@@ -48,6 +56,15 @@ const MAX_KEYS: usize = 5000;
 const LOOK_BACK: u64 = 60;
 /// The subscription is renewed this often, so its look-back never reaches far.
 const RENEW: Duration = Duration::from_secs(300);
+/// A request is taken when its `created_at` is at most this far from the signer's clock, either
+/// way (seconds). Wider than the look-back, so everything a renewed subscription brings back is
+/// still fresh; a client whose clock is further off gets no answer.
+pub const FRESH: i64 = 600;
+/// How long a request's id is remembered: longer than it could be replayed (an event stamped
+/// `FRESH` ahead stays fresh for twice `FRESH`).
+pub const SEEN_FOR: i64 = 2 * FRESH + 60;
+/// The most ids remembered (32 bytes each, twice); beyond it the oldest go first.
+pub const SEEN_KEEP: usize = 200_000;
 
 /// The largest request the bunker decrypts (NIP-44 allows far more; nothing Belfry signs is
 /// near this).
@@ -114,6 +131,10 @@ pub fn handle(
             }
             Some(_) => Err(OTHER.into()),
             None => {
+                // an HTTP sign-in nobody connected to in time: its secret has ended
+                if !conn.listening(store::now()) {
+                    return Err("unauthorized: this connection has ended".into());
+                }
                 let secret = params.get(1).and_then(Value::as_str).unwrap_or("");
                 let given = secret_hash(secret);
                 let right = !secret.is_empty()
@@ -177,6 +198,16 @@ pub fn handle(
             } else {
                 Scheme::Nip04
             };
+            // reading what was written to the member: an outside app needs their word for it
+            if conn.scope == store::SCOPE_OUTSIDE && limits::method_refused(method, conn.decrypt) {
+                tracing::warn!(
+                    connection = %conn.id,
+                    app = %conn.app,
+                    method,
+                    "decrypt refused: no consent for this outside app"
+                );
+                return Err(limits::REFUSAL.into());
+            }
             let (peer, text) = (param(params, 0)?, param(params, 1)?);
             if method.ends_with("encrypt") {
                 signer
@@ -200,22 +231,36 @@ pub fn handle(
     }
 }
 
-/// Turns one kind-24133 event into the response event, or None when it is not for a live
-/// connection, over the connection's rate limit, or cannot be read. A request for a bunker
-/// key the signer does not have is dropped on the store lookup alone: before its signature
-/// is checked and before anything is decrypted.
+/// Turns one kind-24133 event into the response event, or None when it is not for a
+/// connection the bunker answers on, not signed by who it says, not from now, a repeat, over
+/// the connection's rate limit, or cannot be read. A request for a bunker key the signer does
+/// not have is dropped on the store lookup alone: before its signature is checked and before
+/// anything is decrypted. The order matters: the signature first, then freshness and the
+/// repeat check, and only then the rate limit of the sender the signature proved.
 pub fn respond(signer: &Signer, event: &Event) -> Option<Event> {
     if event.kind != Kind::NostrConnect {
         return None;
     }
     let bunker_hex = event.tags.public_keys().next()?.to_hex();
     let conn = signer.store.connection_by_bunker(&bunker_hex).ok()??;
+    let now = store::now();
+    if !conn.listening(now) {
+        return None;
+    }
+    event.verify().ok()?;
+    let stamped = i64::try_from(event.created_at.as_secs()).unwrap_or(i64::MAX);
+    if stamped.saturating_sub(now).abs() > FRESH {
+        tracing::debug!(connection = %conn.id, stamped, "bunker request not from now: dropped");
+        return None;
+    }
+    if !signer.seen.first(event.id, now) {
+        return None;
+    }
     let is_client = conn.client_pubkey.as_deref() == Some(event.pubkey.to_hex().as_str());
     if !signer.limiter.allow(&conn.id, is_client) {
         tracing::debug!(connection = %conn.id, is_client, "bunker request over the rate limit: dropped");
         return None;
     }
-    event.verify().ok()?;
     let bunker = match signer.bunker_keys(&conn) {
         Ok(keys) => keys,
         Err(e) => {
@@ -246,34 +291,99 @@ pub fn respond(signer: &Signer, event: &Event) -> Option<Event> {
         .ok()
 }
 
-/// The events already taken in: a request is answered once, however often a relay sends it
-/// (after a reconnect, a renewed subscription, or from two relays).
+/// The ids, and the order they came in with the second each was seen.
+type SeenIds = (HashSet<EventId>, VecDeque<(EventId, i64)>);
+
+/// The requests already taken in, by event id: a request is answered once, however often it
+/// arrives (after a reconnect, a renewed subscription, from two relays, or replayed by
+/// somebody who recorded it). An id is kept for `ttl` seconds, which is longer than the event
+/// stays fresh, so a replay is either remembered or too old; `keep` bounds the memory.
 pub struct Seen {
-    inner: Mutex<(HashSet<EventId>, VecDeque<EventId>)>,
+    inner: Mutex<SeenIds>,
     keep: usize,
+    ttl: i64,
 }
 
 impl Seen {
-    pub fn new(keep: usize) -> Self {
+    pub fn new(keep: usize, ttl: i64) -> Self {
         Self {
             inner: Mutex::new((HashSet::new(), VecDeque::new())),
             keep,
+            ttl,
         }
     }
 
-    /// True the first time `id` is seen.
-    pub fn first(&self, id: EventId) -> bool {
+    /// True the first time `id` is seen (`now`: seconds).
+    pub fn first(&self, id: EventId, now: i64) -> bool {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        while inner.1.front().is_some_and(|(_, at)| at + self.ttl <= now) {
+            if let Some((old, _)) = inner.1.pop_front() {
+                inner.0.remove(&old);
+            }
+        }
         if !inner.0.insert(id) {
             return false;
         }
-        inner.1.push_back(id);
+        inner.1.push_back((id, now));
         while inner.1.len() > self.keep {
-            if let Some(old) = inner.1.pop_front() {
+            if let Some((old, _)) = inner.1.pop_front() {
                 inner.0.remove(&old);
             }
         }
         true
+    }
+}
+
+/// When the relay subscription is made again: every `RENEW` while it stands; after a failure
+/// on the next tick, then after 5, 10, 20, 40 and 60 seconds. While it does not stand the
+/// bunker is not listening for new connections, and says so.
+struct Renewal {
+    subscribed: bool,
+    failures: u32,
+    next_try: Instant,
+    renew_at: Instant,
+}
+
+impl Renewal {
+    fn new(now: Instant) -> Self {
+        Self {
+            subscribed: false,
+            failures: 0,
+            next_try: now,
+            renew_at: now + RENEW,
+        }
+    }
+
+    fn pause(failures: u32) -> Duration {
+        match failures {
+            0 | 1 => Duration::ZERO,
+            n => Duration::from_secs((5u64 << (n - 2).min(4)).min(60)),
+        }
+    }
+
+    /// What a round came to.
+    fn record(&mut self, took: bool, now: Instant) {
+        if took {
+            self.subscribed = true;
+            self.failures = 0;
+            self.renew_at = now + RENEW;
+        } else {
+            // the subscription there was may still stand at the relay, but it does not cover
+            // the connections of today: not subscribed
+            self.subscribed = false;
+            self.failures += 1;
+            self.next_try = now + Self::pause(self.failures);
+        }
+    }
+
+    /// Whether a tick should try now.
+    fn due(&self, now: Instant, connected: bool) -> bool {
+        connected
+            && if self.subscribed {
+                now >= self.renew_at
+            } else {
+                now >= self.next_try
+            }
     }
 }
 
@@ -339,12 +449,8 @@ pub async fn run(signer: Arc<Signer>, relays: Vec<String>) {
         return;
     }
     signer.bunker.enabled.store(true, Ordering::SeqCst);
-    let seen = Arc::new(Seen::new(50_000));
     let s = signer.clone();
-    supervise(signer, move || {
-        session(s.clone(), relays.clone(), seen.clone())
-    })
-    .await;
+    supervise(signer, move || session(s.clone(), relays.clone())).await;
 }
 
 /// The bunker's relay subscription. It is replaced, never edited (the relay client refuses a
@@ -415,7 +521,7 @@ async fn any_connected(client: &Client) -> bool {
 
 /// One life of the bunker: a relay client, its subscription, and the requests it answers.
 /// Returns why it ended.
-async fn session(signer: Arc<Signer>, relays: Vec<String>, seen: Arc<Seen>) -> &'static str {
+async fn session(signer: Arc<Signer>, relays: Vec<String>) -> &'static str {
     let client = Client::default();
     for relay in &relays {
         if let Err(e) = client.add_relay(relay.as_str()).await {
@@ -425,9 +531,10 @@ async fn session(signer: Arc<Signer>, relays: Vec<String>, seen: Arc<Seen>) -> &
     let mut notifications = client.notifications();
     client.connect().and_wait(Duration::from_secs(5)).await;
     let mut subscription = Subscription::new();
-    let mut subscribed = subscription.renew(&signer, &client).await;
-    let mut renew_at = Instant::now() + RENEW;
-    if subscribed {
+    let mut renewal = Renewal::new(Instant::now());
+    let took = subscription.renew(&signer, &client).await;
+    renewal.record(took, Instant::now());
+    if took {
         tracing::info!(
             ?relays,
             keys = signer.bunker.keys.load(Ordering::SeqCst),
@@ -445,7 +552,8 @@ async fn session(signer: Arc<Signer>, relays: Vec<String>, seen: Arc<Seen>) -> &
                     Some(ClientNotification::Event { event, .. }) => event,
                     Some(_) => continue,
                 };
-                if event.kind != Kind::NostrConnect || !seen.first(event.id) {
+                // a repeat is told in `respond`, once the signature is checked
+                if event.kind != Kind::NostrConnect {
                     continue;
                 }
                 signer.bunker.last_event_at.store(store::now(), Ordering::SeqCst);
@@ -469,22 +577,28 @@ async fn session(signer: Arc<Signer>, relays: Vec<String>, seen: Arc<Seen>) -> &
                 });
             }
             _ = signer.connections_changed.notified() => {
-                // a failed round keeps the subscription there was
-                subscribed = subscription.renew(&signer, &client).await || subscribed;
-                renew_at = Instant::now() + RENEW;
+                // a change is asked for at once, whatever the pause: somebody waits for it
+                let took = subscription.renew(&signer, &client).await;
+                renewal.record(took, Instant::now());
+                if !took {
+                    signer.bunker.connected.store(false, Ordering::SeqCst);
+                }
             }
             _ = tick.tick() => {
                 signer.expire_unclaimed();
                 let connected = any_connected(&client).await;
-                signer.bunker.connected.store(connected && subscribed, Ordering::SeqCst);
-                if connected && (!subscribed || Instant::now() >= renew_at) {
-                    let was = subscribed;
-                    subscribed = subscription.renew(&signer, &client).await || subscribed;
-                    renew_at = Instant::now() + RENEW;
-                    if subscribed && !was {
+                if renewal.due(Instant::now(), connected) {
+                    let was = renewal.subscribed;
+                    let took = subscription.renew(&signer, &client).await;
+                    renewal.record(took, Instant::now());
+                    if took && !was {
                         tracing::info!(?relays, "bunker listening");
                     }
                 }
+                signer
+                    .bunker
+                    .connected
+                    .store(connected && renewal.subscribed, Ordering::SeqCst);
             }
         }
     }
@@ -844,6 +958,7 @@ mod tests {
                         keep: None,
                         client_pubkey: Some(&hex),
                         scope: Some(scope),
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -928,6 +1043,7 @@ mod tests {
                     keep: None,
                     client_pubkey: None,
                     scope: Some("everything"),
+                    ..Default::default()
                 },
             ),
             Err(Error::Invalid(_))
@@ -1021,13 +1137,367 @@ mod tests {
 
     #[test]
     fn an_event_is_taken_in_once() {
-        let seen = Seen::new(2);
+        let seen = Seen::new(2, 100);
         let id = |n: u8| EventId::from_slice(&[n; 32]).unwrap();
-        assert!(seen.first(id(1)));
-        assert!(!seen.first(id(1)));
-        assert!(seen.first(id(2)) && seen.first(id(3)));
-        assert!(!seen.first(id(3)) && !seen.first(id(2)));
-        assert!(seen.first(id(1)), "only the last ones are remembered");
+        assert!(seen.first(id(1), 0));
+        assert!(!seen.first(id(1), 0));
+        assert!(seen.first(id(2), 0) && seen.first(id(3), 0));
+        assert!(!seen.first(id(3), 0) && !seen.first(id(2), 0));
+        assert!(seen.first(id(1), 0), "only the last ones are remembered");
+        // and only for as long as a request could come again
+        let seen = Seen::new(10, 100);
+        assert!(seen.first(id(1), 1000) && seen.first(id(2), 1050));
+        assert!(!seen.first(id(1), 1099));
+        assert!(seen.first(id(1), 1100), "forgotten after its time");
+        assert!(!seen.first(id(2), 1149));
+        assert!(seen.first(id(2), 1150));
+    }
+
+    /// A request as `client` would send it, stamped `created_at`.
+    fn request_at(bunker_pk: &PublicKey, client: &Keys, body: Value, created_at: u64) -> Event {
+        let content = nip44::encrypt(
+            client.secret_key(),
+            bunker_pk,
+            body.to_string(),
+            nip44::Version::V2,
+        )
+        .unwrap();
+        EventBuilder::new(Kind::NostrConnect, content)
+            .tag(Tag::public_key(*bunker_pk))
+            .custom_created_at(Timestamp::from_secs(created_at))
+            .finalize(client)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_request_is_answered_once_and_only_when_it_is_from_now() {
+        let s = two_accounts("fresh");
+        let client = Keys::generate();
+        let (c, _) = s
+            .create_connection(
+                "odoo-partner-1",
+                "Chat",
+                "",
+                &[],
+                None,
+                Some(&client.public_key().to_hex()),
+            )
+            .unwrap();
+        let bunker_pk = PublicKey::from_hex(&c.bunker_pubkey).unwrap();
+        let ping = json!({"id": "1", "method": "ping", "params": []});
+        // the same event again (a relay that sends it twice, or somebody who recorded it)
+        let once = request(&bunker_pk, &client, ping.clone());
+        assert!(respond(&s, &once).is_some());
+        assert!(
+            respond(&s, &once).is_none(),
+            "a repeat gets no second answer"
+        );
+        let before = s.store.connection(&c.id).unwrap().unwrap().uses;
+        assert!(respond(&s, &once).is_none());
+        assert_eq!(s.store.connection(&c.id).unwrap().unwrap().uses, before);
+        // stamped too long ago, or too far ahead: no answer, and nothing remembered or spent
+        let now = store::now() as u64;
+        for at in [now - FRESH as u64 - 5, now + FRESH as u64 + 5, 0] {
+            let stale = request_at(&bunker_pk, &client, ping.clone(), at);
+            stale.verify().unwrap();
+            assert!(respond(&s, &stale).is_none(), "{at}");
+        }
+        // within the window, either way, it is answered: once
+        for at in [now - FRESH as u64 + 30, now + FRESH as u64 - 30] {
+            let near = request_at(&bunker_pk, &client, ping.clone(), at);
+            assert!(respond(&s, &near).is_some(), "{at}");
+            assert!(respond(&s, &near).is_none(), "{at}");
+        }
+        // what the look-back of a renewed subscription brings is always within the window
+        const { assert!((LOOK_BACK as i64) < FRESH && SEEN_FOR > 2 * FRESH) };
+    }
+
+    #[test]
+    fn a_forged_request_spends_nothing_of_the_clients_allowance() {
+        let mut s = two_accounts("forged-rate");
+        s.limiter.client = (2.0, 0.0);
+        s.limiter.others = (1.0, 0.0);
+        let client = Keys::generate();
+        let (c, _) = s
+            .create_connection(
+                "odoo-partner-1",
+                "Chat",
+                "",
+                &[],
+                None,
+                Some(&client.public_key().to_hex()),
+            )
+            .unwrap();
+        let bunker_pk = PublicKey::from_hex(&c.bunker_pubkey).unwrap();
+        // events that name the client as their author, with a signature that is not theirs
+        let borrowed = request(&bunker_pk, &client, json!({"id": "s", "method": "ping"}));
+        for n in 0..10 {
+            let good = request(
+                &bunker_pk,
+                &client,
+                json!({"id": n.to_string(), "method": "ping"}),
+            );
+            let mut forged: Value = serde_json::from_str(&good.as_json()).unwrap();
+            forged["sig"] = json!(borrowed.sig.to_string());
+            let forged = Event::from_json(forged.to_string()).unwrap();
+            assert!(respond(&s, &forged).is_none());
+            // not remembered either: the real request with that id is still answered
+            if n == 0 {
+                assert!(respond(&s, &good).is_some());
+            }
+        }
+        // the client still has the rest of its allowance (2, one used above)
+        let ping = |n: u32| {
+            respond(
+                &s,
+                &request(
+                    &bunker_pk,
+                    &client,
+                    json!({"id": format!("c{n}"), "method": "ping"}),
+                ),
+            )
+        };
+        assert!(ping(1).is_some(), "ten forgeries spent nothing");
+        assert!(ping(2).is_none(), "its own requests did");
+    }
+
+    #[test]
+    fn an_outside_app_decrypts_only_with_the_members_consent() {
+        use crate::signer::ConnectionSpec;
+        let s = two_accounts("consent");
+        let account = s.keys("odoo-partner-1").unwrap();
+        let peer = Keys::generate();
+        let nip44_text = nip44::encrypt(
+            peer.secret_key(),
+            &account.public_key(),
+            "for the member",
+            nip44::Version::V2,
+        )
+        .unwrap();
+        let nip04_text =
+            nip04::encrypt(peer.secret_key(), &account.public_key(), "for the member").unwrap();
+        let connect = |scope: &'static str, decrypt: bool| {
+            let client = Keys::generate();
+            let hex = client.public_key().to_hex();
+            let (c, _) = s
+                .create_scoped(
+                    "odoo-partner-1",
+                    &ConnectionSpec {
+                        app: "Notes",
+                        client_pubkey: Some(&hex),
+                        scope: Some(scope),
+                        decrypt,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(c.decrypt, decrypt);
+            (c, client)
+        };
+        let peer_hex = peer.public_key().to_hex();
+        let read = |c: &crate::signer::NewBunker, client: &Keys| {
+            [
+                ("nip44_decrypt", &nip44_text),
+                ("nip04_decrypt", &nip04_text),
+            ]
+            .map(|(m, text)| ask(&s, &c.bunker_pubkey, client, m, json!([peer_hex, text])))
+        };
+        // an outside app without the member's word: it writes, it does not read
+        let (outside, app) = connect("outside", false);
+        for r in read(&outside, &app) {
+            assert_eq!(
+                (r["result"].as_str(), r["error"].as_str()),
+                (Some(""), Some("not allowed for this app"))
+            );
+        }
+        for method in ["nip44_encrypt", "nip04_encrypt"] {
+            let r = ask(
+                &s,
+                &outside.bunker_pubkey,
+                &app,
+                method,
+                json!([peer_hex, "hi"]),
+            );
+            assert!(r.get("error").is_none(), "{method}: {r}");
+        }
+        // the member says yes later (the API's consent call), and no again
+        s.set_decrypt("odoo-partner-1", Some(&outside.id), None, true)
+            .unwrap();
+        for r in read(&outside, &app) {
+            assert_eq!(r["result"], "for the member", "{r}");
+        }
+        s.set_decrypt("odoo-partner-1", None, Some(&outside.bunker_pubkey), false)
+            .unwrap();
+        assert_eq!(read(&outside, &app)[0]["error"], "not allowed for this app");
+        assert!(matches!(
+            s.set_decrypt("guest-2", Some(&outside.id), None, true),
+            Err(Error::NotFound)
+        ));
+        assert!(matches!(
+            s.set_decrypt("odoo-partner-1", None, None, true),
+            Err(Error::Invalid(_))
+        ));
+        // consent given when the connection is made; an own app needs none
+        let (allowed, app2) = connect("outside", true);
+        let (own, chat) = connect("own", false);
+        for (c, client) in [(&allowed, &app2), (&own, &chat)] {
+            for r in read(c, client) {
+                assert_eq!(r["result"], "for the member", "{r}");
+            }
+        }
+        // and the belfry's own names stay out of an outside app's reach, consent or not
+        for template in [
+            json!({"kind": 30078, "content": "", "tags": [["d", "belfry:sealed"]]}),
+            json!({"kind": 1985, "content": "", "tags": [["L", "belfry/pin"], ["l", "pinned", "belfry/pin"]]}),
+        ] {
+            let r = ask(
+                &s,
+                &allowed.bunker_pubkey,
+                &app2,
+                "sign_event",
+                json!([template.to_string()]),
+            );
+            assert_eq!(r["error"], "not allowed for this app", "{template}");
+            let r = ask(
+                &s,
+                &own.bunker_pubkey,
+                &chat,
+                "sign_event",
+                json!([template.to_string()]),
+            );
+            assert!(r.get("error").is_none(), "{template}: {r}");
+        }
+        for template in [
+            json!({"kind": 30078, "content": "", "tags": [["d", "notes:settings"]]}),
+            json!({"kind": 5, "content": "", "tags": [["e", "00".repeat(32)]]}),
+        ] {
+            let r = ask(
+                &s,
+                &allowed.bunker_pubkey,
+                &app2,
+                "sign_event",
+                json!([template.to_string()]),
+            );
+            assert!(r.get("error").is_none(), "{template}: {r}");
+        }
+    }
+
+    #[test]
+    fn a_sign_in_over_http_takes_a_client_in_time_and_none_after() {
+        use crate::signer::ConnectionSpec;
+        let s = two_accounts("http");
+        let make = || {
+            s.create_scoped(
+                "odoo-partner-1",
+                &ConnectionSpec {
+                    app: "Wallet",
+                    kind: Some("http"),
+                    origin: "https://wallet.belfry.test",
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .0
+        };
+        let c = make();
+        assert_eq!(
+            (c.kind.as_str(), c.origin.as_str()),
+            ("http", "https://wallet.belfry.test")
+        );
+        assert!(c.expires_at.is_some(), "its secret has a deadline");
+        let secret = |c: &crate::signer::NewBunker| {
+            c.bunker_url.split("secret=").nth(1).unwrap().to_string()
+        };
+        // in time: an app that does talk NIP-46 connects as on any connection
+        let app = Keys::generate();
+        let r = ask(
+            &s,
+            &c.bunker_pubkey,
+            &app,
+            "connect",
+            json!(["", secret(&c)]),
+        );
+        assert_eq!(r["result"], "ack");
+        assert_eq!(
+            ask(&s, &c.bunker_pubkey, &app, "ping", json!([]))["result"],
+            "pong"
+        );
+        // nobody connected in time: the sign-in stays (the API signs through it), the bunker
+        // is silent on it and its secret opens nothing
+        let c = make();
+        s.store.set_expires_at(&c.id, store::now() - 1);
+        let bunker_pk = PublicKey::from_hex(&c.bunker_pubkey).unwrap();
+        let body = json!({"id": "1", "method": "connect", "params": ["", secret(&c)]});
+        assert!(respond(&s, &request(&bunker_pk, &app, body)).is_none());
+        let row = s.store.connection(&c.id).unwrap().expect("still there");
+        assert!(row.client_pubkey.is_none());
+        assert_eq!(
+            handle(
+                &s,
+                &row,
+                &app.public_key(),
+                "connect",
+                &[json!(""), json!(secret(&c))]
+            ),
+            Err("unauthorized: this connection has ended".to_string())
+        );
+        assert!(!s
+            .store
+            .live_bunker_pubkeys()
+            .unwrap()
+            .contains(&c.bunker_pubkey));
+        assert_eq!(s.expire_unclaimed(), 1);
+        assert_eq!(s.connections("odoo-partner-1").unwrap().len(), 2);
+        let (keys, via) = s.keys_via("odoo-partner-1", Some(&c.id)).unwrap();
+        assert_eq!(via.unwrap().kind, "http");
+        s.sign(&keys, &json!({"kind": 1, "content": "over http"}))
+            .unwrap();
+        // an unknown kind is refused
+        assert!(matches!(
+            s.create_scoped(
+                "odoo-partner-1",
+                &ConnectionSpec {
+                    app: "Wallet",
+                    kind: Some("carrier-pigeon"),
+                    ..Default::default()
+                },
+            ),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn a_failed_subscription_is_tried_again_soon_and_then_with_a_growing_pause() {
+        let t0 = Instant::now();
+        let secs = Duration::from_secs;
+        let mut r = Renewal::new(t0);
+        assert!(!r.subscribed && r.due(t0, true), "the first round is due");
+        assert!(!r.due(t0, false), "not without a relay");
+        // it took: next in five minutes
+        r.record(true, t0);
+        assert!(r.subscribed);
+        assert!(!r.due(t0 + secs(299), true) && r.due(t0 + RENEW, true));
+        // a round fails: not subscribed from that moment, and the next tick tries again
+        r.record(false, t0);
+        assert!(!r.subscribed, "a failed round is not a subscription");
+        assert!(r.due(t0, true));
+        // then 5, 10, 20, 40, 60, 60 seconds
+        let mut at = t0;
+        for pause in [5, 10, 20, 40, 60, 60] {
+            r.record(false, at);
+            assert!(!r.subscribed);
+            assert!(!r.due(at + secs(pause - 1), true), "{pause}");
+            assert!(r.due(at + secs(pause), true), "{pause}");
+            at += secs(pause);
+        }
+        // one that takes starts over
+        r.record(true, at);
+        assert!(r.subscribed && !r.due(at + secs(60), true));
+        r.record(false, at);
+        assert!(
+            r.due(at, true),
+            "the first failure after a success: the next tick"
+        );
     }
 
     #[test]
@@ -1097,7 +1567,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_connection_waits_for_the_subscription_that_covers_it() {
         let s = Arc::new(two_accounts("wait"));
-        // bunker off: no waiting
+        // bunker off: no waiting, and nobody was promised a listener
         let (_, n) = s
             .create_connection("guest-2", "Notes", "", &[], None, None)
             .unwrap();
@@ -1106,8 +1576,18 @@ mod tests {
             s.wait_subscribed(n, Duration::from_secs(30)),
         )
         .await
-        .expect("returns at once without a bunker");
+        .expect("returns at once without a bunker")
+        .expect("and that is fine");
         s.bunker.enabled.store(true, Ordering::SeqCst);
+        // a bunker that is not connected: the wait is bounded and ends in an error, never in
+        // "made" for a connection nobody listens on
+        let down = tokio::time::timeout(
+            Duration::from_secs(2),
+            s.wait_subscribed(n, Duration::from_millis(50)),
+        )
+        .await
+        .expect("bounded");
+        assert!(matches!(down, Err(Error::BunkerUnavailable)));
         s.bunker.connected.store(true, Ordering::SeqCst);
         let waiter = {
             let s = s.clone();
@@ -1119,14 +1599,24 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), waiter)
             .await
             .expect("woken by the subscription")
-            .unwrap();
-        // and it gives up after its timeout
-        tokio::time::timeout(
+            .unwrap()
+            .expect("covered");
+        // it comes back while the wait runs (the relay reconnects): heard, not an error
+        let late = {
+            let s = s.clone();
+            tokio::spawn(async move { s.wait_subscribed(n + 1, Duration::from_secs(30)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        s.bunker.subscribed.send_replace(n + 1);
+        assert!(late.await.unwrap().is_ok());
+        // and a subscription that never covers it: an error after the timeout
+        let never = tokio::time::timeout(
             Duration::from_secs(2),
-            s.wait_subscribed(n + 1, Duration::from_millis(50)),
+            s.wait_subscribed(n + 2, Duration::from_millis(50)),
         )
         .await
         .expect("gives up");
+        assert!(matches!(never, Err(Error::BunkerUnavailable)));
     }
 
     /// The whole loop against a real relay. Not part of `cargo test`: run it with a relay
@@ -1211,7 +1701,9 @@ mod tests {
         let (c1, n) = s
             .create_connection("odoo-partner-1", "Chat", "", &[], None, Some(&hex))
             .unwrap();
-        s.wait_subscribed(n, Duration::from_millis(1500)).await;
+        s.wait_subscribed(n, Duration::from_millis(1500))
+            .await
+            .expect("the subscription covers it");
         assert!(
             *s.bunker.subscribed.borrow() >= n,
             "the subscription covers it"
@@ -1246,7 +1738,9 @@ mod tests {
         let (c2, n) = s
             .create_connection("odoo-partner-1", "Notes", "", &[], None, None)
             .unwrap();
-        s.wait_subscribed(n, Duration::from_millis(1500)).await;
+        s.wait_subscribed(n, Duration::from_millis(1500))
+            .await
+            .expect("the subscription covers it");
         let secret = c2.bunker_url.split("secret=").nth(1).unwrap().to_string();
         let r = call(
             &app,
