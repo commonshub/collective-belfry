@@ -72,7 +72,8 @@ and only then are both sent, in the same moment, the roster first. When the anch
 neither is sent and the change is tried again later. A change counts as done only when the relay
 accepted both events; the device then reads its chain again from the relay and checks its roster is
 on the anchored path. When it is not (another branch was anchored, an event was refused), it does
-the change again on the new head, and until then shows the action as not done, with `head` = that roster (and the same `root`). `head` absent = the root.
+the change again on the new head, and until then shows the action as not done. A device that finds a roster of its own past the anchored end (the
+anchor was refused, the app closed in between) anchors it at its next start and at each upkeep, with `head` = that roster (and the same `root`). `head` absent = the root.
 
 ### 3.3 Valid chain
 
@@ -202,8 +203,9 @@ An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}
    otherwise ignore it. The prompt's device name comes from that session.
 2. With a valid `link` for a code this device showed in the last 15 minutes: allow at once.
    Otherwise ask: Allow / Not me.
-3. Allow: when the roster already has 20 devices, refuse and say so. Else send the keys (5.5) to the
-   new device, then publish roster n+1 = same `lb`, devices + the new one, then the anchor.
+3. Allow: when the roster already has 20 devices, refuse and say so. Else publish roster n+1 = same `lb`, devices + the new one, with its anchor; only when that
+   change is done (§3.2: accepted and on the anchored path) send the keys (5.5) to the new device.
+   Never the keys first: a device that ends in no roster must not hold them.
 4. Not me: `POST /api/me/sessions/revoke` for that session. No roster change.
 
 "Link a phone or tablet": the QR becomes `https://chat.<domain>/login/<username>#l=<64 hex>`
@@ -249,13 +251,18 @@ accepts when the seal's signer is a device of any roster of its own account's ch
 or, after a fresh start, the previous pinned one), checks each secret against its `lb`, merges,
 and reads its wraps again from 0.
 
+A device that IS in the head but lacks the head letterbox's secret (a hand-over was lost) publishes
+its 8562 as well; a device of the head that holds the secret answers it with the keys at once,
+without a prompt (the device is already allowed), after checking its live chat session.
+
 ### 5.6 A device leaves
 
 - Removed from the list by the user, or its session is gone from `/api/me/sessions` (a well-formed
   answer that lists this device's own session; an empty or odd answer removes nobody; checked at
   start and every 6 h by each device; wait a random 0–60 s, re-read the head, skip if done):
   make a new letterbox, send keys (5.5) with the new secret to each remaining device, publish
-  roster n+1 with the new `lb` and without the device; each device rewrites its name (§3.5) when it sees the new head.
+  roster n+1 with the new `lb` and without the device (when the session list cannot be read, do
+  nothing: never publish a new letterbox whose secret was handed to nobody); each device rewrites its name (§3.5) when it sees the new head.
   A user's removal revokes the session FIRST and changes nothing when that fails (a removed device
   with a live session could still have an anchor signed); keys go only to devices that stay AND have
   a live session.
