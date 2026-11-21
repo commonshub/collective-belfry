@@ -166,6 +166,7 @@ class Register(OdooApi):
             """
         )
         self._push_one_row_per_identity()
+        self._profile_visibility_once()
 
     # ── storage ──────────────────────────────────────────────────────────────────────────────
     def _all(self, model: str) -> list[dict[str, Any]]:
@@ -2360,6 +2361,38 @@ class Register(OdooApi):
                 {"sent_until": max(f.get("sent_until") or 0, int(until)), "last_sent_at": stamp()},
             )
         return f["id"] if sent else False
+
+    # ── who sees a profile page (villagers.py) ──────────────────────────────────────────────
+    VISIBILITY_MIGRATED = "belfry.profile_visibility_migrated"
+
+    def _profile_visibility_once(self) -> None:
+        """Profile pages had two levels (public, villagers: the default) until 2026-11-21; now
+        three, and nothing stored reads as ``listed`` (name, picture and headline for anyone).
+        Everyone who was here before keeps what they were promised: each contact with nothing
+        stored becomes ``private`` (the old ``villagers``), once (VISIBILITY_MIGRATED)."""
+        with self._lock:
+            if self.param(self.VISIBILITY_MIGRATED):
+                return
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                n = self._private_profiles()
+                self.set_param(self.VISIBILITY_MIGRATED, stamp())
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+        if n:
+            log.info("register: %d profile pages made private (they were villagers only)", n)
+
+    def _private_profiles(self) -> int:
+        """Every contact with no visibility stored gets ``private``; how many (no transaction of
+        its own: register_import.py calls it inside its own)."""
+        n = 0
+        for rec in self._all("res.partner"):
+            if not rec.get("belfry_profile_visibility"):
+                self._put("res.partner", {**rec, "belfry_profile_visibility": "private"})
+                n += 1
+        return n
 
     # ── phone devices for push notifications (push.py) ──────────────────────────────────────
     PUSH_FIELDS = ("id", "token", "platform", "env", "key", "app", "name", "pubkey", "partner_id")

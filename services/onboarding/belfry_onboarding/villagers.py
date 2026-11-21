@@ -13,12 +13,21 @@ Slugs and usernames are one set of names: a guest's slug is never a username, an
 slug, a reserved name or a channel's name, and nobody gets a username that is another
 contact's slug (usernames.py asks ``guest_holder``).
 
-Who sees a profile is the account's own choice (``belfry_profile_visibility`` on the contact):
-``public`` (anyone) or ``villagers`` (``DEFAULT_VISIBILITY``): members, admins, and guests who
-hold a ticket of an event (``sitesessions.has_ticket``). The owner and admins always see it.
+Who sees a profile is the account's own choice (``belfry_profile_visibility`` on the contact),
+one of three levels. Villagers are members, admins, and guests who hold a ticket of an event
+(``is_villager``, ``sitesessions.has_ticket``); the owner always sees everything:
+
+- ``listed`` (``DEFAULT_VISIBILITY``, also what nothing stored means): name, picture, headline,
+  slug and role for anyone; about, links and tags for villagers;
+- ``private``: everything for villagers only (``villagers``, the word before 2026-11-21, is
+  read and accepted as ``private``);
+- ``public``: everything for anyone.
+
+Contacts that existed when the three levels came were made ``private`` once (what
+``villagers`` promised them; register.Register._profile_visibility_once).
 
 - ``GET /api/villagers/<slug>`` (NIP-98 optional; a site session reads as its account).
-- ``GET /api/villagers``: the public profiles.
+- ``GET /api/villagers``: the public and listed profiles (a listed one with its public part).
 
 Needs the belfry's own register (409 ``unsupported`` otherwise).
 """
@@ -43,16 +52,18 @@ from .holder_invites import ApiError, authenticate
 log = logging.getLogger(__name__)
 
 API = "/api/villagers"
-DEFAULT_VISIBILITY = "villagers"
-VISIBILITIES = ("public", "villagers")
+DEFAULT_VISIBILITY = "listed"
+VISIBILITIES = ("listed", "private", "public")
+SYNONYMS = {"villagers": "private"}  # the word older site code sends
 LIST_SECONDS = 60  # how long the list of public profiles is kept
 LIST_MAX = 500
 NAME_SECONDS = 5  # how long "this username is that key" (or nobody's) is believed
-PUBLIC_SECONDS = 60  # how long an unsigned answer about a public profile may be cached
+PUBLIC_SECONDS = 60  # how long an unsigned answer about a public or listed profile may be cached
 NOBODY = "Somebody"
 PLACEHOLDER = re.compile(r"^guest-\d+(?:-\d+)?$")  # a slug made for someone without a name
 READS = Limiter(120, 60)  # reads a minute per address of the network
 NO_STORE = {"Cache-Control": "no-store"}
+VARY = {"Vary": "Authorization"}  # a kept unsigned answer is never one for someone signed
 _lock = threading.RLock()
 _names: dict[str, tuple[float, str]] = {}
 _list: dict[str, Any] = {"at": 0.0, "rows": None}
@@ -76,7 +87,7 @@ def _contact(svc: Services, partner: int) -> dict[str, Any]:
         svc.odoo.read_one(
             "res.partner",
             int(partner),
-            ["belfry_slug", "belfry_slug_auto", "belfry_profile_visibility", "belfry_tags"],
+            ["belfry_slug", "belfry_slug_auto", "belfry_profile_visibility"],
         )
         or {}
     )
@@ -84,6 +95,7 @@ def _contact(svc: Services, partner: int) -> dict[str, Any]:
 
 def visibility_of(row: dict[str, Any]) -> str:
     v = row.get("belfry_profile_visibility")
+    v = SYNONYMS.get(v, v) if isinstance(v, str) else v
     return v if v in VISIBILITIES else DEFAULT_VISIBILITY
 
 
@@ -347,33 +359,56 @@ def _shown(profile: dict[str, Any], acct: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+PARTIAL = ("slug", "name", "picture", "headline", "role")  # what anyone sees of a listed one
+
+
 def profile(
-    svc: Services, acct: dict[str, Any], slug: str, viewer: dict[str, Any] | None
+    svc: Services,
+    acct: dict[str, Any],
+    slug: str,
+    viewer: dict[str, Any] | None,
+    partial: bool = False,
 ) -> dict[str, Any]:
-    """The page of an account: never its address, its key or its nip05."""
+    """The page of an account: never its address, its key or its nip05. PARTIAL: only what a
+    ``listed`` profile shows to anyone (``PARTIAL``)."""
     from . import sitesessions
 
     content, _at = sitesessions._profile(svc, acct)
     try:
-        tags = sitesessions.tags_of(svc, acct)
+        extras = sitesessions.extras_of(svc, acct)
     except Exception as exc:  # noqa: BLE001 — the rest still answers
         retries.soft(exc)  # but a relay that can't be read: 503 relay
         log.info("villagers: tags not read: %s", type(exc).__name__)
-        tags = []
+        extras = {"tags": [], "headline": None, "links": []}
+    shown = _shown(content, acct)
+    if partial:
+        return {
+            "slug": slug,
+            "name": shown["name"],
+            "picture": shown["picture"],
+            "headline": extras["headline"],
+            "role": acct["role"],
+            "visibility": "listed",
+            "partial": True,
+        }
     return {
         "slug": slug,
-        **_shown(content, acct),
-        "tags": tags,
+        **shown,
+        "headline": extras["headline"],
+        "tags": extras["tags"],
+        "links": extras["links"],
         "role": acct["role"],
         "visibility": visibility_of(_contact(svc, acct["partner"])),
         "self": viewer is not None and viewer["partner"] == acct["partner"],
+        "partial": False,
     }
 
 
 def answer(svc: Services, slug: str, key: str | None) -> dict[str, Any]:
-    """``GET /villagers/<slug>`` for whoever signed (KEY, or nobody). Someone who is not a
-    villager is told the same thing about a villagers-only profile and about no profile:
-    403 ``villagers_only``."""
+    """``GET /villagers/<slug>`` for whoever signed (KEY, or nobody). A villager and the owner
+    see everything; anyone else sees a public profile, the public part of a listed one, and
+    is told the same thing about a private profile and about no profile: 403
+    ``villagers_only``."""
     viewer = caller(svc, key)
     villager = is_villager(svc, viewer)
     acct = find(svc, slug)
@@ -381,11 +416,12 @@ def answer(svc: Services, slug: str, key: str | None) -> dict[str, Any]:
         if villager:
             raise ApiError(404, "unknown", "Nobody here has that name.")
         raise ApiError(403, "villagers_only", "Only villagers see this profile.")
-    row = _contact(svc, acct["partner"])
+    level = visibility_of(_contact(svc, acct["partner"]))
     mine = viewer is not None and viewer["partner"] == acct["partner"]
-    if visibility_of(row) != "public" and not (villager or mine):
+    full = villager or mine or level == "public"
+    if not full and level != "listed":
         raise ApiError(403, "villagers_only", "Only villagers see this profile.")
-    return profile(svc, acct, slug.lower(), viewer)
+    return profile(svc, acct, slug.lower(), viewer, partial=not full)
 
 
 # ── the public list ─────────────────────────────────────────────────────────────────────────
@@ -411,18 +447,49 @@ def _latest(found: list[dict[str, Any]], kind: int) -> dict[str, dict[str, Any]]
     return out
 
 
+def _listed_accounts(svc: Services) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """(account, contact) of everyone who has a page (``find`` answers for them) and shows up
+    in the list: a public or listed profile (nothing stored is listed), an active pass that is
+    not an agent's; a guest with a slug (not ``guest-<n>``, made for someone without a name),
+    or who chose public or listed on the website (their slug is made then, as before); a member
+    whatever theirs (their username, read later)."""
+    from . import sitesessions
+
+    partners: list[int] = []
+    for r in svc.odoo.search_read(
+        "belfry.pass", [["state", "=", "active"]], ["partner_id", "tier", "keycast_pubkey"]
+    ):
+        pid = m2o_id(r.get("partner_id"))
+        if pid and r.get("tier") != "agent" and r.get("keycast_pubkey") and pid not in partners:
+            partners.append(int(pid))
+    if not partners:
+        return []
+    fields = ["belfry_slug", "belfry_slug_auto", "belfry_profile_visibility"]
+    fields += sitesessions.GUEST_FIELDS
+    out = []
+    for row in svc.odoo.read("res.partner", sorted(partners), fields):
+        if visibility_of(row) == "private":
+            continue
+        acct = sitesessions.account(svc, int(row["id"]))
+        if acct is None:
+            continue
+        if acct["role"] == "guest":
+            slug = str(row.get("belfry_slug") or "")
+            chosen = row.get("belfry_profile_visibility") in VISIBILITIES  # set on the website
+            if not slug and not chosen:
+                continue  # no page yet, and never asked for one: not made by a list
+            if slug and row.get("belfry_slug_auto") and PLACEHOLDER.match(slug):
+                continue
+        out.append((acct, row))
+        if len(out) >= LIST_MAX:
+            break
+    return out
+
+
 def _build(svc: Services) -> list[dict[str, Any]]:
     from . import community, events, sitesessions
 
-    accts = []
-    for r in svc.odoo.search_read(
-        "res.partner", [["belfry_profile_visibility", "=", "public"]], ["id", "belfry_tags"]
-    ):
-        acct = sitesessions.account(svc, int(r["id"]))
-        if acct is not None:
-            accts.append((acct, r))
-        if len(accts) >= LIST_MAX:
-            break
+    accts = _listed_accounts(svc)
     if not accts:
         return []
     keys = [a["pubkey"] for a, _ in accts]
@@ -459,29 +526,33 @@ def _build(svc: Services) -> list[dict[str, Any]]:
         except Exception as exc:  # noqa: BLE001 — one account's failure leaves the others
             log.info("villagers: a slug was not read: %s", type(exc).__name__)
             slug = None
-        if not slug:
-            continue
+        if not slug or (acct["role"] == "guest" and PLACEHOLDER.match(slug)):
+            continue  # a guest-<n> is someone without a name: never listed
         shown = _shown(profiles.get(acct["pubkey"], {}), acct)
-        raw = (
-            r.get("belfry_tags")
+        more = (
+            sitesessions.contact_extras(r)
             if acct["role"] == "guest"
-            else extras.get(acct["pubkey"], {}).get("tags")
+            else sitesessions.content_extras(extras.get(acct["pubkey"], {}))
         )
-        rows.append(
-            {
-                "slug": slug,
-                "name": shown["name"],
-                "picture": shown["picture"],
-                "tags": sitesessions.clean_tags(raw),
-                "role": acct["role"],
-            }
-        )
+        row: dict[str, Any] = {
+            "slug": slug,
+            "name": shown["name"],
+            "picture": shown["picture"],
+            "headline": more["headline"],
+            "role": acct["role"],
+        }
+        if visibility_of(r) == "public":
+            row.update(tags=more["tags"], links=more["links"], partial=False)
+        else:
+            row["partial"] = True
+        rows.append(row)
     rows.sort(key=lambda v: (v["name"].casefold(), v["slug"]))
     return rows
 
 
 def listing(svc: Services) -> list[dict[str, Any]]:
-    """The public profiles, by name; read again every LIST_SECONDS and after a change."""
+    """The public and listed profiles, by name; read again every LIST_SECONDS and after a
+    change."""
     now = time.monotonic()
     rows = _list["rows"]
     if rows is not None and now - _list["at"] < LIST_SECONDS:
@@ -495,6 +566,10 @@ def listing(svc: Services) -> list[dict[str, Any]]:
 def register(app: FastAPI) -> None:
     from . import sitesessions
     from .sales import client_ip
+
+    services = getattr(app.state, "services", None)
+    if services is not None and not sitesessions.own(services):
+        log.info("villagers: profile visibility not migrated (Odoo is the register: no pages)")
 
     def ready(request: Request) -> Services:
         s: Services = request.app.state.services
@@ -511,7 +586,7 @@ def register(app: FastAPI) -> None:
         rows = await retries.run(listing, s)
         signed = bool(request.headers.get("authorization"))
         cache = "no-store" if signed else f"public, max-age={LIST_SECONDS}"
-        return JSONResponse({"villagers": rows}, headers={"Cache-Control": cache})
+        return JSONResponse({"villagers": rows}, headers={"Cache-Control": cache, **VARY})
 
     @app.get(API + "/{slug}")
     async def villager(request: Request, slug: str) -> JSONResponse:
@@ -521,9 +596,12 @@ def register(app: FastAPI) -> None:
         if auth:  # optional; one that is sent must be right
             key = authenticate(s, request.app.state.api_seen, auth, "GET", f"{API}/{slug}", b"")
         out = await retries.run(answer, s, slug, key)
-        if key is None and out["visibility"] == "public":
-            return JSONResponse(out, headers={"Cache-Control": f"public, max-age={PUBLIC_SECONDS}"})
-        return JSONResponse(out, headers=NO_STORE)
+        # an unsigned answer (public, or a listed one's public part) may be kept a moment; one
+        # for someone signed never, and Vary keeps a kept one from a signed request
+        if key is None and out["visibility"] in ("public", "listed"):
+            cache = {"Cache-Control": f"public, max-age={PUBLIC_SECONDS}"}
+            return JSONResponse(out, headers={**cache, **VARY})
+        return JSONResponse(out, headers={**NO_STORE, **VARY})
 
 
 __all__ = ["register", "DEFAULT_VISIBILITY", "find", "slug_of", "guest_holder", "forget"]

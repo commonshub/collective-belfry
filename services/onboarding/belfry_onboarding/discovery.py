@@ -385,7 +385,11 @@ def register(app: FastAPI) -> None:
             return Response(status_code=204, headers=cors_headers(origin))
         response = await call_next(request)
         if origin:
+            had = [v.strip() for v in response.headers.get("vary", "").split(",") if v.strip()]
             response.headers.update(cors_headers(origin))
+            if had:  # what the answer varies on already stays (villagers.py: Authorization)
+                vary = list(dict.fromkeys(had + ["Origin"]))
+                response.headers["Vary"] = ", ".join(vary)
         return response
 
     @app.get(WELL_KNOWN)

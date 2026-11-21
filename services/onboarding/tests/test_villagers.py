@@ -86,8 +86,8 @@ def test_a_guest_gets_a_slug_from_their_name(vsite):
     with TestClient(create_app(rsvc)) as c:
         kim = guest(c)
         got = me(c, kim)
-        assert got["slug"] == "kim-cook" and got["visibility"] == "villagers"
-        assert villagers.DEFAULT_VISIBILITY == "villagers"
+        assert got["slug"] == "kim-cook" and got["visibility"] == "listed"
+        assert villagers.DEFAULT_VISIBILITY == "listed"
         row = rsvc.odoo.read_one("res.partner", acct_of(rsvc, kim)["partner"], ["belfry_slug"])
         assert row["belfry_slug"] == "kim-cook"
         assert me(c, kim)["slug"] == "kim-cook"  # kept, not made again
@@ -119,7 +119,7 @@ def test_a_guest_gets_a_slug_from_their_name(vsite):
         k = PrivateKey()
         assert login(c, k, "admin@belfry.test").json()["role"] == "admin"
         got = me(c, k)
-        assert got["slug"] == got["username"] == "ada" and got["visibility"] == "villagers"
+        assert got["slug"] == got["username"] == "ada" and got["visibility"] == "listed"
 
 
 def test_a_guest_changes_their_slug(vsite):
@@ -232,7 +232,21 @@ def test_a_guest_who_left_keeps_their_name(vsite):
 
 
 # ── who sees a profile ──────────────────────────────────────────────────────────────────────
-PROFILE = {"slug", "name", "picture", "about", "tags", "role", "visibility", "self"}
+PROFILE = {
+    "slug",
+    "name",
+    "picture",
+    "headline",
+    "about",
+    "tags",
+    "links",
+    "role",
+    "visibility",
+    "self",
+    "partial",
+}
+PARTIAL = {"slug", "name", "picture", "headline", "role", "visibility", "partial"}
+LINKS = [{"url": "https://kim.example/bread", "label": "My bread"}]
 
 
 def test_who_sees_a_profile(vsite):
@@ -247,7 +261,13 @@ def test_who_sees_a_profile(vsite):
             c,
             kim,
             "/site/profile",
-            {"about": "I bake.", "picture": "https://x.test/k.jpg", "tags": ["bread"]},
+            {
+                "about": "I bake.",
+                "picture": "https://x.test/k.jpg",
+                "tags": ["bread"],
+                "headline": "Baker at the village",
+                "links": LINKS,
+            },
         )
         assert r.status_code == 200, r.text
         assert me(c, kim)["slug"] == "kim-cook"
@@ -259,6 +279,7 @@ def test_who_sees_a_profile(vsite):
         assert login(c, ada_site, "admin@belfry.test").json()["role"] == "admin"
         stranger = PrivateKey()
         secrets = (KIM, acct_of(rsvc, kim)["pubkey"], "npub1", "nip05", "pubkey", "email")
+        hidden = ("I bake.", "bread", "kim.example")  # about, tags, links
 
         def allowed(key, mine=False):
             r = see(c, "kim-cook", key)
@@ -269,13 +290,33 @@ def test_who_sees_a_profile(vsite):
                 "slug": "kim-cook",
                 "name": "Kim Cook",
                 "picture": "https://x.test/k.jpg",
+                "headline": "Baker at the village",
                 "about": "I bake.",
                 "tags": ["bread"],
+                "links": LINKS,
                 "role": "guest",
                 "visibility": got["visibility"],
                 "self": mine,
+                "partial": False,
             }
             assert not any(s in r.text for s in secrets)
+            assert r.headers["vary"].startswith("Authorization")
+            return r
+
+        def partial(key):
+            r = see(c, "kim-cook", key)
+            assert r.status_code == 200, r.text
+            assert r.json() == {
+                "slug": "kim-cook",
+                "name": "Kim Cook",
+                "picture": "https://x.test/k.jpg",
+                "headline": "Baker at the village",
+                "role": "guest",
+                "visibility": "listed",
+                "partial": True,
+            }
+            assert not any(s in r.text for s in secrets + hidden)
+            assert r.headers["vary"].startswith("Authorization")
             return r
 
         def refused(slug, key):
@@ -285,17 +326,20 @@ def test_who_sees_a_profile(vsite):
             assert r.headers["cache-control"] == "no-store"
             return r
 
-        # villagers only (the default): not for someone unsigned, a guest without a ticket, a
-        # key nobody knows; and a name nobody has reads the same to them
+        # listed (the default): someone unsigned, a guest without a ticket, a key nobody knows
+        # see the public part; the unsigned answer may be kept a moment, a signed one never
+        assert partial(None).headers["cache-control"] == "public, max-age=60"
+        for key in (leo, stranger):
+            assert partial(key).headers["cache-control"] == "no-store"
+        # …and a name nobody has is refused to them as before
         for key in (None, leo, stranger):
-            a, b = refused("kim-cook", key), refused("nobody-here", key)
-            assert a.json() == b.json()
+            refused("nobody-here", key)
             refused("not a slug!", key)
         # villagers: a guest with a ticket, a member (their own key, or a site session), an
-        # admin; and the owner
+        # admin see everything; and the owner
         for key in (tia, bob, bob_site, ada, ada_site):
             r = allowed(key)
-            assert r.json()["visibility"] == "villagers"
+            assert r.json()["visibility"] == "listed"
             assert r.headers["cache-control"] == "no-store"
             r = see(c, "nobody-here", key)
             assert r.status_code == 404 and r.json()["error"] == "unknown"
@@ -303,10 +347,22 @@ def test_who_sees_a_profile(vsite):
         # a signature that is sent must be right
         r = c.get("/api/v1/villagers/kim-cook", headers={**H, "Authorization": "Nostr nope"})
         assert r.status_code == 401 and r.json()["error"] == "unauthorized"
-        # public: anyone; only the unsigned answer may be kept a moment
-        for bad in ("friends", "", None, True):
+        # private: villagers only; the same 403 as for a name nobody has
+        for bad in ("friends", "", None, True, "Private"):
             r = call(c, kim, "/site/profile", {"visibility": bad})
             assert r.status_code == 422 and r.json()["error"] == "invalid", bad
+            assert r.json()["message"] == "visibility: listed, private or public."
+        assert call(c, kim, "/site/profile", {"visibility": "listed"}).json()["changed"] is False
+        r = call(c, kim, "/site/profile", {"visibility": "private"})
+        assert r.json() == {"ok": True, "changed": True}
+        assert me(c, kim)["visibility"] == "private"
+        for key in (None, leo, stranger):
+            a, b = refused("kim-cook", key), refused("nobody-here", key)
+            assert a.json() == b.json()
+        for key in (tia, bob, ada_site):
+            assert allowed(key).json()["visibility"] == "private"
+        allowed(kim, mine=True)
+        # public: anyone; only the unsigned answer may be kept a moment
         r = call(c, kim, "/site/profile", {"visibility": "public"})
         assert r.json() == {"ok": True, "changed": True}
         assert call(c, kim, "/site/profile", {"visibility": "public"}).json()["changed"] is False
@@ -321,9 +377,11 @@ def test_who_sees_a_profile(vsite):
         # an unknown name still says nothing to someone who is not a villager
         for key in (None, leo, stranger):
             refused("nobody-here", key)
-        # a member's page, by their username; theirs is villagers only too
-        refused("bob", None)
-        refused("bob", leo)
+        # a member's page, by their username; listed by default
+        r = see(c, "bob", None)
+        assert r.status_code == 200 and set(r.json()) == PARTIAL
+        assert (r.json()["name"], r.json()["role"]) == ("Bob", "member")
+        assert set(see(c, "bob", leo).json()) == PARTIAL
         r = see(c, "bob", tia)
         assert r.status_code == 200 and set(r.json()) == PROFILE
         assert (r.json()["name"], r.json()["role"], r.json()["self"]) == ("Bob", "member", False)
@@ -333,8 +391,23 @@ def test_who_sees_a_profile(vsite):
         # a guest's name in the signer (guest-<n>) is not their page
         refused(me(c, kim)["username"], None)
         assert see(c, me(c, kim)["username"], bob).status_code == 404
-        # back to villagers only
+        # "villagers" (older site code) is private, and reads as private
         assert call(c, kim, "/site/profile", {"visibility": "villagers"}).json()["changed"]
+        assert me(c, kim)["visibility"] == "private"
+        row = rsvc.odoo.read_one(
+            "res.partner", acct_of(rsvc, kim)["partner"], ["belfry_profile_visibility"]
+        )
+        assert row["belfry_profile_visibility"] == "private"
+        assert call(c, kim, "/site/profile", {"visibility": "villagers"}).json()["changed"] is False
+        refused("kim-cook", None)
+        # a stored "villagers" (written before the three levels) reads as private
+        rsvc.odoo.write(
+            "res.partner",
+            [acct_of(rsvc, kim)["partner"]],
+            {"belfry_profile_visibility": "villagers"},
+        )
+        assert me(c, kim)["visibility"] == "private"
+        assert see(c, "kim-cook", bob).json()["visibility"] == "private"
         refused("kim-cook", None)
         # no pass any more: no page
         for p in acct_of(rsvc, kim)["passes"]:
@@ -349,10 +422,13 @@ def test_a_ticket_makes_a_guest_a_villager(vsite):
         kim = guest(c)
         leo = guest(c, LEO, "Leo Lee")
         assert me(c, kim)["slug"] == "kim-cook"
+        assert see(c, "kim-cook", leo).json()["partial"] is True  # listed: the public part
+        assert call(c, kim, "/site/profile", {"visibility": "private"}).status_code == 200
         assert see(c, "kim-cook", leo).status_code == 403
         admit(w, acct_of(rsvc, leo)["pubkey"])
         sitesessions._ticket.clear()  # believed for two minutes otherwise
         assert see(c, "kim-cook", leo).status_code == 200
+        assert see(c, "kim-cook", leo).json()["partial"] is False
         # a guest's own key (the chat's) reads as the account too
         assert villagers.is_villager(rsvc, villagers.caller(rsvc, acct_of(rsvc, leo)["pubkey"]))
         assert not villagers.is_villager(rsvc, villagers.caller(rsvc, pk(PrivateKey())))
@@ -368,50 +444,102 @@ def test_needs_the_own_register(vsite, monkeypatch):
 
 
 # ── the list ────────────────────────────────────────────────────────────────────────────────
-def test_the_list_has_the_public_profiles_only(vsite):
-    rsvc, _w, ada, keycast = vsite
-    named(rsvc, keycast, ada, "ada")
+def test_the_list_has_the_public_and_listed_profiles(vsite, monkeypatch):
+    rsvc, w, ada, keycast = vsite
+    monkeypatch.setattr(community, "query", lambda svc, f: w.comm.query(f, None))
+    ada_pid = named(rsvc, keycast, ada, "ada")
     bob, _ = person(rsvc, "bob@belfry.test", "Bob")
     named(rsvc, keycast, bob, "bob")
     with TestClient(create_app(rsvc)) as c:
+        # the members are listed by default (their username is their page)
         r = c.get("/api/v1/villagers", headers=H)
-        assert r.status_code == 200 and r.json() == {"villagers": []}
+        assert r.status_code == 200
         assert r.headers["cache-control"] == "public, max-age=60"
-        kim = guest(c)
-        leo = guest(c, LEO, "Leo Lee")
-        assert me(c, leo)["slug"] == "leo-lee"
-        r = call(c, kim, "/site/profile", {"visibility": "public", "tags": ["bread"]})
-        assert r.status_code == 200, r.text
-        bob_site = PrivateKey()
-        login(c, bob_site, "bob@belfry.test")
-        r = call(c, bob_site, "/site/profile", {"visibility": "public"})
-        assert r.status_code == 200, r.text
-        r = c.get("/api/v1/villagers", headers=H)
+        assert r.headers["vary"].startswith("Authorization")
         assert r.json() == {
             "villagers": [
-                {"slug": "bob", "name": "Bob", "picture": None, "tags": [], "role": "member"},
                 {
-                    "slug": "kim-cook",
-                    "name": "Kim Cook",
+                    "slug": "ada",
+                    "name": "Ada Admin",
                     "picture": None,
-                    "tags": ["bread"],
-                    "role": "guest",
+                    "headline": None,
+                    "role": "admin",
+                    "partial": True,
+                },
+                {
+                    "slug": "bob",
+                    "name": "Bob",
+                    "picture": None,
+                    "headline": None,
+                    "role": "member",
+                    "partial": True,
                 },
             ]
         }
+        rsvc.odoo.write("res.partner", [ada_pid], {"belfry_profile_visibility": "private"})
+        kim = guest(c)
+        leo = guest(c, LEO, "Leo Lee")
+        nameless = guest(c, "noname@example.org", "Guest")
+        assert me(c, leo)["slug"] == "leo-lee"
+        assert me(c, nameless)["slug"].startswith("guest-")  # never in the list
+        guest(c, "tom@example.org", "Tom")  # no slug made yet: not in the list either
+        r = call(
+            c,
+            kim,
+            "/site/profile",
+            {
+                "visibility": "public",
+                "tags": ["bread"],
+                "headline": "Baker",
+                "links": LINKS,
+                "about": "I bake.",
+            },
+        )
+        assert r.status_code == 200, r.text
+        bob_site = PrivateKey()
+        login(c, bob_site, "bob@belfry.test")
+        r = call(c, bob_site, "/site/profile", {"headline": "Builds roofs", "tags": ["roofs"]})
+        assert r.status_code == 200, r.text
+        villagers.forget()
+        r = c.get("/api/v1/villagers", headers=H)
+        rows = {v["slug"]: v for v in r.json()["villagers"]}
+        assert rows["kim-cook"] == {
+            "slug": "kim-cook",
+            "name": "Kim Cook",
+            "picture": None,
+            "headline": "Baker",
+            "tags": ["bread"],
+            "links": LINKS,
+            "role": "guest",
+            "partial": False,
+        }
+        # listed: only the public part (no tags, no links)
+        assert rows["bob"] == {
+            "slug": "bob",
+            "name": "Bob",
+            "picture": None,
+            "headline": "Builds roofs",
+            "role": "member",
+            "partial": True,
+        }
+        assert rows["leo-lee"]["partial"] is True
+        assert not any(v.startswith("guest-") or v == "tom" for v in rows)
+        assert "I bake." not in r.text  # about is never in the list
         for s in (KIM, "bob@belfry.test", pk(bob), acct_of(rsvc, kim)["pubkey"], "npub1"):
             assert s not in r.text
-        # the same for someone signed (a villager too): villagers-only profiles never appear
+        # the same for someone signed (a villager too): private profiles never appear
         r2 = call(c, bob, "/villagers", method="GET")
         assert r2.json() == r.json() and r2.headers["cache-control"] == "no-store"
         # a change through this API empties the list at once
         assert call(c, kim, "/site/profile", {"slug": "baker"}).status_code == 200
         assert call(c, kim, "/site/profile", {"name": "Kim the Baker"}).status_code == 200
         got = c.get("/api/v1/villagers", headers=H).json()["villagers"]
-        assert [(v["slug"], v["name"]) for v in got] == [("bob", "Bob"), ("baker", "Kim the Baker")]
-        assert call(c, bob_site, "/site/profile", {"visibility": "villagers"}).status_code == 200
+        assert ("baker", "Kim the Baker") in [(v["slug"], v["name"]) for v in got]
+        assert call(c, bob_site, "/site/profile", {"visibility": "private"}).status_code == 200
+        assert call(c, leo, "/site/profile", {"visibility": "villagers"}).status_code == 200
         got = c.get("/api/v1/villagers", headers=H).json()["villagers"]
-        assert [v["slug"] for v in got] == ["baker"]
+        assert "bob" not in [v["slug"] for v in got] and "leo-lee" not in [v["slug"] for v in got]
+        assert "baker" in [v["slug"] for v in got]
 
 
 # ── CORS ────────────────────────────────────────────────────────────────────────────────────

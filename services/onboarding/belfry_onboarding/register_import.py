@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from .clients.odoo import OdooApi
-from .register import Register
+from .register import Register, stamp
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +103,11 @@ def run(odoo: OdooApi, reg: Register, force: bool = False) -> dict[str, int]:
                     ("id:" + model, top),
                 )
                 log.info("register-import: %s %d", model, len(rows))
+            # the people brought over were here before profile pages had three levels: theirs
+            # is private (villagers only), as for everyone already in a register
+            # (Register._profile_visibility_once)
+            reg._private_profiles()
+            reg.set_param(reg.VISIBILITY_MIGRATED, stamp())
         except BaseException:
             reg._db.execute("ROLLBACK")
             raise
