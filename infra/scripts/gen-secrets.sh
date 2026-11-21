@@ -67,6 +67,9 @@ SECRETS = {
     "KEYCAST_ADMIN_PASSWORD": rand(16),
     "KEYCAST_SERVICE_TOKEN": rand(32),
     "KEYCAST_ADMIN_TOKEN": None,               # bootstrap
+    # Belfry's own signer (services/signer, SIGNER=belfry): the onboarding service at its API.
+    # Its master key (secrets/signer_master_key) is made below, from Keycast's where there is one.
+    "SIGNER_TOKEN": rand(32),
     "HOOK_TOKEN": rand(32),                    # Odoo's and Keycast's webhooks
     "PASS_INFO_TOKEN": rand(32),               # Keycast and the apps at /admin/*
     "MINT_SEED": rand(32),                     # the token mint's keys; back it up
@@ -167,6 +170,19 @@ else
   openssl rand 32 | base64 | tr -d '\n' > "$MASTER_KEY"
   chmod 600 "$MASTER_KEY"
   echo "wrote $MASTER_KEY"
+fi
+
+# Belfry's own signer seals its stored keys with the same key Keycast did (32 bytes, base64): it
+# takes Keycast's master.key over, so the keys imported from Keycast's database open
+# (docs/own-signer.md §6). Never replaced once it exists: the signer's database opens with no
+# other key.
+SIGNER_MASTER_KEY="$SECRETS_DIR/signer_master_key"
+if [[ -s "$SIGNER_MASTER_KEY" ]]; then
+  cmp -s "$SIGNER_MASTER_KEY" "$MASTER_KEY" \
+    || echo "note: $SIGNER_MASTER_KEY differs from $MASTER_KEY; keeping both as they are."
+else
+  install -m 640 "$MASTER_KEY" "$SIGNER_MASTER_KEY"
+  echo "wrote $SIGNER_MASTER_KEY (the same key as $MASTER_KEY)"
 fi
 
 # Odoo config (odoo.conf is gitignored). It carries only a PBKDF2 hash of the master password,
