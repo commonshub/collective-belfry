@@ -2714,9 +2714,60 @@ def public_channels(svc: Services) -> list[dict[str, str]]:
 
 OFFER_KINDS = ("in_kind", "sponsored")
 
+# What a request is (docs/requests.md, 2026-11-21). The last two ask for a pass or a ticket
+# (an offer: percent, approval, code); the others are plain requests: a thread that is open or
+# closed, nothing to approve.
+PLAIN_TYPES = ("enquiry", "sponsoring", "talk", "meetup")
+REQUEST_TYPES = (*PLAIN_TYPES, "in_kind", "sponsored_ticket")
+TYPE_NAMES = {
+    "enquiry": "General enquiry",
+    "sponsoring": "Sponsoring",
+    "talk": "Talk or workshop",
+    "meetup": "Meetup",
+    "in_kind": "Offer in kind",
+    "sponsored_ticket": "Sponsored ticket",
+}
+TYPE_TAG = "request-type"  # on the thread's message: the type survives without the register
+CLOSE_ACTION = "belfry:request-close"
+
 
 def offer_kind(f: dict[str, Any]) -> str:
     return f.get("kind") or "in_kind"
+
+
+def offer_type(f: dict[str, Any]) -> str:
+    """An offer record's type; one made before types existed says it by its kind."""
+    t = f.get("type")
+    if t in REQUEST_TYPES:
+        return t
+    return "sponsored_ticket" if offer_kind(f) == "sponsored" else "in_kind"
+
+
+def plain_offer(f: dict[str, Any] | None) -> bool:
+    """A plain request (an enquiry, sponsoring, a talk, a meetup): nothing to approve."""
+    return bool(f) and offer_type(f) in PLAIN_TYPES
+
+
+def message_type(e: dict[str, Any], f: dict[str, Any] | None = None) -> str:
+    """The type of a thread in the requests channel, by its message E and its offer record F
+    (None: no record). The record says it; without one (the register is gone) the message's
+    own tags do; a thread that is no offer at all (one started in the chat) is an enquiry,
+    unless it names one of the plain types itself."""
+    if f:
+        return offer_type(f)
+    tags = [t for t in e.get("tags", []) if isinstance(t, list) and len(t) > 1]
+    named = next((t[1] for t in tags if t[0] == TYPE_TAG), "")
+    if any(t[0] == "offer" for t in tags):
+        if named in REQUEST_TYPES:
+            return named
+        kind = next((t[1] for t in tags if t[0] == "offer-kind"), "")
+        return "sponsored_ticket" if kind == "sponsored" else "in_kind"
+    return named if named in PLAIN_TYPES else "enquiry"
+
+
+def type_line(rtype: str) -> str:
+    """The line under a plain request's title in the chat: the type's plain name."""
+    return f"_{TYPE_NAMES[rtype]}_" if rtype in PLAIN_TYPES else ""
 
 
 def offer_what(f: dict[str, Any]) -> str:
@@ -2728,10 +2779,18 @@ def offer_what(f: dict[str, Any]) -> str:
 
 
 def offer_answer(svc: Services, f: dict[str, Any], mine: bool = False) -> dict[str, Any]:
+    plain = plain_offer(f)
+    state = f["state"]
+    if plain and state == "open" and f.get("card"):
+        # a plain request is open or closed: the latest label on its thread says which
+        from . import webthreads
+
+        state = webthreads._states(svc, f["channel"]).get(f["card"], "open")
     out: dict[str, Any] = {
         "offer": f["id"],
-        "state": f["state"],
-        "kind": offer_kind(f),
+        "type": offer_type(f),
+        "state": state,
+        "kind": None if plain else offer_kind(f),
         "product": f.get("product"),
         "erase_after_event": bool(f.get("erase_after_event")),
         "public_name": bool(f.get("public_name")),
@@ -2750,9 +2809,16 @@ def offer_answer(svc: Services, f: dict[str, Any], mine: bool = False) -> dict[s
         out["url"] = f["url"]
     if mine and f.get("my_url"):
         out["my_url"] = f["my_url"]
-    if f["state"] in ("accepted", "declined"):
+    if plain:
+        out["percent"] = None  # nothing is asked, nothing approved: null, never 0
+    elif f["state"] in ("accepted", "declined"):
         out["percent"] = f.get("decided_percent") or 0
     return out
+
+
+def close_button() -> list[list[str]]:
+    """On a plain request's card: an admin closes it (docs/actions.md)."""
+    return [["button", "close", "Close", "", CLOSE_ACTION]]
 
 
 def offer_buttons() -> list[list[str]]:
@@ -2852,10 +2918,29 @@ def make_offer(
     if found is None:
         raise ApiError(409, "no_requests_channel", "This belfry takes no offers in kind yet.")
     slug, page = found
+    rtype = data.get("type")
+    if rtype is not None and (not isinstance(rtype, str) or rtype not in REQUEST_TYPES):
+        raise ApiError(422, "invalid", "type: " + ", ".join(REQUEST_TYPES) + ".")
+    plain = rtype in PLAIN_TYPES
+    if plain:
+        for field in ("product", "ticket", "percent", "kind", "label"):
+            if data.get(field) is not None:
+                raise ApiError(
+                    422, "invalid", f"{field}: not for a request of type {rtype} (leave it out)."
+                )
+    elif rtype is not None:
+        implied = "sponsored" if rtype == "sponsored_ticket" else "in_kind"
+        if data.get("kind") is not None and data["kind"] != implied:
+            raise ApiError(422, "invalid", f"kind: {implied} for type {rtype} (or leave it out).")
+        if rtype != "in_kind" and data.get("label") is not None:
+            raise ApiError(422, "invalid", "label: only for type in_kind.")
+        data = {**data, "kind": implied}
     wanted = None  # an event ticket instead of a product (ticketsales.py)
-    if (data.get("product") is None) == (data.get("ticket") is None):
+    if plain:
+        p = {"id": rtype, "name": TYPE_NAMES[rtype]}
+    elif (data.get("product") is None) == (data.get("ticket") is None):
         raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
-    if data.get("ticket") is not None:
+    elif data.get("ticket") is not None:
         from . import ticketsales
 
         if not isinstance(data["ticket"], str):
@@ -2873,9 +2958,11 @@ def make_offer(
             raise ApiError(404, "unknown_product", "No such product.")
         if not p.get("on_sale"):
             raise ApiError(409, "not_on_sale", "This product is not on sale.")
-    kind = data.get("kind", "in_kind")
-    if kind not in OFFER_KINDS:
+    kind = None if plain else data.get("kind", "in_kind")
+    if not plain and kind not in OFFER_KINDS:
         raise ApiError(422, "invalid", "kind: " + ", ".join(OFFER_KINDS) + ".")
+    if rtype is None:  # as before types existed: the kind says it
+        rtype = "sponsored_ticket" if kind == "sponsored" else "in_kind"
     name = " ".join(str(data.get("name") or "").split())[:100]
     email = str(data.get("email") or "").strip()
     if not webthreads.EMAIL.match(email) or len(email) > 254:  # the requests page's own rule
@@ -2883,19 +2970,27 @@ def make_offer(
     text = str(data.get("offer") or "").strip()
     if not name or not text or len(text) > 2000:
         raise ApiError(422, "invalid", "Say who you are and what you offer (2000 characters).")
-    try:
-        percent = int(data.get("percent") if data.get("percent") not in (None, "") else 50)
-    except (TypeError, ValueError) as exc:
-        raise ApiError(422, "invalid", "percent: 50 to 100.") from exc
-    if not 50 <= percent <= 100:
-        raise ApiError(422, "invalid", "percent: 50 to 100.")
+    percent: int | None = None
+    if not plain:
+        try:
+            percent = int(data.get("percent") if data.get("percent") not in (None, "") else 50)
+        except (TypeError, ValueError) as exc:
+            raise ApiError(422, "invalid", "percent: 50 to 100.") from exc
+        if not 50 <= percent <= 100:
+            raise ApiError(422, "invalid", "percent: 50 to 100.")
     erase = erase_flag(data)
     public_name = public_name_flag(data)
     label = offer_label(data)
     days = offer_days(data)
     own_title = request_title(data["title"]) if data.get("title") is not None else None
     st = store(svc)
-    mine = [f for f in st.offers(key) if f["state"] in ("confirm", "open")]
+    # what waits for an answer: a plain request that is public waits for none (it may stay
+    # open for good), so only its confirmation counts
+    mine = [
+        f
+        for f in st.offers(key)
+        if f["state"] == "confirm" or (f["state"] == "open" and not plain_offer(f))
+    ]
     if (
         len(mine) >= 3
         or not st.hit("offer-key:" + key, OFFERS_PER_DAY, 86400)
@@ -2903,28 +2998,43 @@ def make_offer(
     ):
         raise ApiError(429, "too_many", "Too many offers for now.")
     fid = "f_" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(16))
-    if wanted is not None:
+    if plain:
+        title = f"{name}: {TYPE_NAMES[rtype]}"
+    elif wanted is not None:
         day = ticketsales.one_day(wanted.ev)
         title = f"{name}: {percent}% off {p['name']}" + (f", {day}" if day else "")
     else:
         title = f"{name}: {percent}% off {p['name']} in kind"
     if own_title:
         title = own_title  # the person's own words are the thread's title, as written
-    extra = [
-        ["offer", fid],
-        ["ticket", wanted.t.d] if wanted is not None else ["product", p["id"]],
-        ["percent", str(percent)],
-        ["p", key],
-        *([["offer-kind", kind]] if kind != "in_kind" else []),
-        *([["offer-label", label]] if label else []),
-        *([["offer-days", *days]] if days else []),
-        *offer_buttons(),
-    ]
+    if plain:
+        # no percent, no approval: the card says what it is in words, and an admin closes it
+        extra = [
+            ["offer", fid],
+            [TYPE_TAG, rtype],
+            ["p", key],
+            *([["offer-days", *days]] if days else []),
+            *close_button(),
+        ]
+        card_text = f"{type_line(rtype)}\n\n{text}"  # webthreads._body leaves the line out
+    else:
+        extra = [
+            ["offer", fid],
+            [TYPE_TAG, rtype],
+            ["ticket", wanted.t.d] if wanted is not None else ["product", p["id"]],
+            ["percent", str(percent)],
+            ["p", key],
+            *([["offer-kind", kind]] if kind != "in_kind" else []),
+            *([["offer-label", label]] if label else []),
+            *([["offer-days", *days]] if days else []),
+            *offer_buttons(),
+        ]
+        card_text = text
     posted = None
     if site is not None:
         # proven by the session: no confirmation link, the thread is public now
         posted = webthreads.post_thread(
-            svc, slug, page, title, text, name, email, ip, site["partner"], extra
+            svc, slug, page, title, card_text, name, email, ip, site["partner"], extra
         )
     else:
         token = webthreads.start_thread(
@@ -2932,7 +3042,7 @@ def make_offer(
             slug,
             page,
             title,
-            text,
+            card_text,
             name,
             email,
             ip,
@@ -2946,8 +3056,9 @@ def make_offer(
     f = {
         "id": fid,
         "key": key,
-        "product": p["id"] if wanted is None else None,
+        "product": p["id"] if wanted is None and not plain else None,
         **(ticketsales.order_fields(wanted) if wanted is not None else {}),
+        "type": rtype,
         "kind": kind,
         "name": name,
         "email": email,
@@ -3050,6 +3161,8 @@ def _decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> 
     f = st.offer(fid)
     if f is None:
         raise ApiError(404, "not_found", "No such offer.")
+    if plain_offer(f):
+        raise ApiError(409, "no_decision", "This request asks for no pass: close it instead.")
     if f["state"] != "open":
         raise ApiError(
             409,
@@ -3158,6 +3271,86 @@ async def offer_decide_press(p: Any) -> Any:
     if percent:
         return actions.Result("ok", f"Approved by {name}: {percent}% off.", closed=True)
     return actions.Result("ok", f"Declined by {name}.", closed=True)
+
+
+# ── closing a plain request ─────────────────────────────────────────────────────────────────
+# A request's open / closed state is what it always was: the latest NIP-32 label on its thread
+# (namespace belfry/inbox, as the chat writes on e-mail cards; webthreads._labels). An admin's
+# close from the console or from the card's button is that same label, signed by the groups key
+# for them: ``["by", <the admin's key>]`` says who (read only on the groups key's own labels).
+_close_lock = threading.Lock()
+
+
+def close_request(svc: Services, channel: str, root_id: str, closed: bool, by: str = "") -> bool:
+    """Close (or reopen) the thread ROOT_ID of CHANNEL. False when it was that already (nothing
+    is published). ApiError 503 without the relay."""
+    from . import followers, webthreads
+    from .holder_invites import ApiError
+
+    want = "closed" if closed else "open"
+    with _close_lock:
+        got = followers._relay(svc)
+        if got is None:
+            raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+        relay, sign = got
+        labels = webthreads._labels(svc, channel).get(root_id, [])
+        if (labels[-1][1] if labels else "open") == want:
+            return False
+        tags = [
+            ["L", "belfry/inbox"],
+            ["l", want, "belfry/inbox"],
+            ["e", root_id],
+            ["h", channel],
+        ]
+        if re.fullmatch(r"[0-9a-f]{64}", by or ""):
+            tags.append(["by", by])
+        # after the last label, whatever the clocks: the latest counts
+        at = max(int(time.time()), (labels[-1][0] + 1) if labels else 0)
+        relay.publish(sign({"kind": 1985, "created_at": at, "content": "", "tags": tags}), sign)
+    _requests_changed()
+    return True
+
+
+def closable(svc: Services, message: dict[str, Any]) -> str:
+    """The requests channel when MESSAGE is a plain request's opening message there (one that
+    asks for no pass: an enquiry, sponsoring, a talk, a meetup, or a thread started in the
+    chat), else ""."""
+    found = requests_site(svc) if own(svc) else None
+    if found is None or message.get("kind") != 9:
+        return ""
+    channel = found[1]["channel"]
+    tags = [t for t in message.get("tags", []) if isinstance(t, list) and len(t) > 1]
+    if ["h", channel] not in [t[:2] for t in tags] or any(t[0] == "e" for t in tags):
+        return ""
+    fid = next((t[1] for t in tags if t[0] == "offer"), "")
+    f = store(svc).offer(fid) if OFFER_RE.match(fid or "") else None
+    if f is not None and f.get("card") != message.get("id"):
+        f = None
+    return channel if message_type(message, f) in PLAIN_TYPES else ""
+
+
+async def request_close_press(p: Any) -> Any:
+    """docs/actions.md: belfry:request-close, pressed on a plain request's card in the chat."""
+    from . import actions, apps
+    from .holder_invites import ApiError
+
+    svc = p.svc
+    admins = await run_in_threadpool(apps.admin_pubkeys, svc)
+    if p.press["pubkey"] not in admins:
+        return actions.Result.error("not_allowed", "Only admins of this belfry close requests.")
+    channel = await run_in_threadpool(closable, svc, p.message)
+    if not channel or channel != p.press.get("group"):
+        return actions.Result.error("no_target", "This message is not a request to close here.")
+    try:
+        changed = await run_in_threadpool(
+            close_request, svc, channel, p.message["id"], True, p.press["pubkey"]
+        )
+    except ApiError as exc:
+        return actions.Result.error("failed", exc.message)
+    if not changed:
+        return actions.Result.error("gone", "This request is closed already.")
+    name = await run_in_threadpool(actions._name, svc, p.press["pubkey"])
+    return actions.Result("ok", f"Closed by {name}.", closed=True)
 
 
 # ── the API ─────────────────────────────────────────────────────────────────────────────────

@@ -74,6 +74,8 @@ FLAGS = {
     "refunded": "refunded: its pass was closed",
 }
 
+CLOSES = {"close": "request_closed", "reopen": "request_reopened"}  # do → the message's key
+
 MSG = {
     "picks": "Saved.",
     "bank": "Bank details saved.",
@@ -83,6 +85,10 @@ MSG = {
     "codes": "Codes made: they are at the top of the list.",
     "revoked": "Code revoked.",
     "decided": "Answer sent.",
+    "request_closed": "Request closed.",
+    "request_reopened": "Request reopened.",
+    "request_same": "Nothing changed: the request was that already.",
+    "request_unknown": "That request can't be closed here.",
     "cancelled": "Order cancelled.",
     "paid": "Order marked paid.",
     "reopened": "Order reopened and marked paid.",
@@ -346,8 +352,23 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
 {f'<table class="list"><tr><th>Code</th><th>Off</th><th>For</th><th>Used</th><th>Expires</th><th>Note</th><th></th></tr>{crow}</table>' if crow else '<p class="hint">No codes yet.</p>'}"""
     # ── offers
     orow = ""
+    states: dict[str, str] | None = None  # open / closed per thread, read once when needed
     for f in sales.store(svc).offers()[:100]:
-        if f["state"] == "open":
+        plain = sales.plain_offer(f)
+        if plain and f["state"] == "open":
+            # a plain request (an enquiry, sponsoring, a talk, a meetup): open or closed
+            if states is None:
+                from . import webthreads
+
+                try:
+                    states = webthreads._states(svc, f["channel"])
+                except Exception:  # noqa: BLE001 — the relay: shown as open
+                    states = {}
+            closed = states.get(f.get("card") or "", "open") == "closed"
+            act = f"""<form method="post" action="{PATH}/request" class="f"><input type="hidden" name="csrf" value="{csrf}">
+<input type="hidden" name="id" value="{E(f["id"])}"><input type="hidden" name="do" value="{"reopen" if closed else "close"}">
+<p>{"closed" if closed else "open"}</p><div class="actions"><button class="btn" type="submit">{"Reopen" if closed else "Close"}</button></div></form>"""
+        elif f["state"] == "open":
             choices = "".join(
                 _opt(v, "no" if v == 0 else f"{v}% off", f["percent"])
                 for v in (0, 50, 60, 70, 75, 80, 90, 100)
@@ -370,16 +391,21 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
             )
         chat = sales.offer_chat_link(svc, f)
         link = f' · <a href="{E(chat)}">the thread in the chat</a>' if chat else ""
+        asks = (
+            sales.TYPE_NAMES[sales.offer_type(f)]
+            if plain
+            else f"{sales.offer_what(f)} · asks {f['percent']}% off"
+        )
         more = "".join(
             f" · {E(x)}"
             for x in (
-                "sponsored" if sales.offer_kind(f) == "sponsored" else "",
+                "sponsored" if not plain and sales.offer_kind(f) == "sponsored" else "",
                 f.get("label") or "",
                 ", ".join(f.get("days") or []),
             )
             if x
         )
-        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(sales.offer_what(f))} · asks {f["percent"]}% off{more} · {E(f["created"][:10])}</span>{link}</p>
+        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(asks)}{more} · {E(f["created"][:10])}</span>{link}</p>
 {f"<p><b>{E(f['title'])}</b></p>" if f.get("own_title") else ""}<p>{E(f["offer"])}</p>{act}</div>"""
     chans = sales.public_channels(svc)
     current = st.get("requests_channel") or ""
@@ -637,6 +663,31 @@ def register(app: FastAPI) -> None:
         except ApiError as exc:
             return back(request, err=exc.message, at="offers")
         return back(request, msg="decided", at="offers")
+
+    @app.post("/console/sales/request")
+    @admin_only
+    async def request_close(request: Request, me: dict[str, Any], form: Any):
+        """Close or reopen a plain request (docs/requests.md): the label on its thread, by the
+        belfry for this admin."""
+        from . import sitesessions
+        from .holder_invites import ApiError
+
+        s = svc(request)
+        fid, do = str(form.get("id") or ""), str(form.get("do") or "")
+        f = sales.store(s).offer(fid) if sales.OFFER_RE.match(fid) else None
+        if f is None or not sales.plain_offer(f) or not f.get("card") or do not in CLOSES:
+            return back(request, err="request_unknown", at="offers")
+
+        def run() -> bool:
+            acct = sitesessions.account(s, me["partner"]) if sitesessions.own(s) else None
+            by = acct["pubkey"] if acct else ""
+            return sales.close_request(s, f["channel"], f["card"], do == "close", by)
+
+        try:
+            changed = await run_in_threadpool(run)
+        except ApiError as exc:
+            return back(request, err=exc.message, at="offers")
+        return back(request, msg=CLOSES[do] if changed else "request_same", at="offers")
 
     @app.post("/console/sales/order")
     @admin_only

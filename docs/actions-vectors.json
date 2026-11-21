@@ -425,6 +425,7 @@
     "timeout": "No answer yet.",
     "unknown_belfry_action": "Update the app to use this.",
     "confirm:belfry:website-publish": "Publish this version as the website? Everyone will see it at https://<domain>.",
-    "confirm:belfry:offer-decide": "Answer this offer? The answer is public in the thread; the code goes privately to them."
+    "confirm:belfry:offer-decide": "Answer this offer? The answer is public in the thread; the code goes privately to them.",
+    "confirm:belfry:request-close": "Close this request? It stays readable, and people can still comment."
   }
 }

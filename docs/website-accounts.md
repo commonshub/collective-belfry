@@ -462,7 +462,13 @@ Signed by a site session, with no `X-Thread-Key`:
   comment they signed (403 `not_author` for anything else, 403 `not_yours` for a comment that
   is not theirs). 20 edits an hour per thread for its author, and per thread and commenter.
 
-Unsigned, or signed by the offer's key, or with `X-Thread-Key`: everything is as it was.
+- `POST /requests/<id or number>/react` `{"emoji", "comment"?, "remove"?}` → 200
+  `{"reactions": [...]}`: an emoji on the request or on a comment, a kind 7 signed with
+  **their own key** through the signer, by anyone who may comment (docs/requests.md §4c).
+  `reactions` on every request and comment; `"mine": true` on theirs in signed reads.
+
+Unsigned, or signed by the offer's key, or with `X-Thread-Key`: everything is as it was (a
+reaction needs an account: 403 `not_allowed` for a thread key alone).
 
 ## 5. Offers and the checkout (docs/sales.md)
 

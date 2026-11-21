@@ -325,6 +325,29 @@ belfry's **requests channel**: a channel whose web page is on and public (webthr
 `requests` with the slug `requests` when there is none). No requests channel → `POST /offers`
 answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 
+**Types** (2026-11-21; the wire is in [requests.md](requests.md) §1, §4b, §4c). `POST /offers`
+takes `"type"`: `enquiry` | `sponsoring` | `talk` | `meetup` | `in_kind` | `sponsored_ticket`;
+anything else 422 `invalid`. Left out: as before, the type follows `kind` (`in_kind`, or
+`sponsored_ticket` for `sponsored`). The answers of `POST /offers` and `GET /offers/<id>` carry
+`type`; the thread's message carries `["request-type", <type>]`; the record keeps `type`.
+
+- `in_kind`, `sponsored_ticket`: an offer as described below. `kind` may be left out (it
+  follows the type) and must agree with it when sent; `label` only with `in_kind` (with
+  `sponsored_ticket`: 422 `invalid`).
+- `enquiry`, `sponsoring`, `talk`, `meetup`: a **plain request**. Body: `name`, `email`,
+  `title`, `offer` (the text, 1–2000 characters), `public_name`, `days`?, `erase_after_event`?;
+  `product`, `ticket`, `percent`, `kind` and `label` must be absent (or null), else 422
+  `invalid`. Same confirmation by mail (or none for a website session), same limits, but a
+  public plain request does not count in "3 open per key". No percent, no code, no approval
+  (`POST /offers/<id>/decide`: 409 `no_decision`), no offer-decide buttons: its card carries
+  one button, Close (`belfry:request-close`, docs/actions.md), and its `state` is `confirm`,
+  then `open` | `closed`. In the answers `kind` and `product` are null and **`percent` is
+  null** (present, never 0). Without a `title` the thread is titled "<name>: <the type's
+  name>". In the chat the card reads: the title in bold, a line with the type's plain name
+  ("General enquiry", "Sponsoring", "Talk or workshop", "Meetup"), then the text; that line is
+  not part of `body` in the API and stays through the author's edits. Organisers close and
+  reopen it in the console (Sales → the requests' list) or with the card's button.
+
 `POST /offers` — NIP-98 (any key). `{"product" | "ticket", "name", "email", "offer": "…",
 "percent", "title"?, "kind"?, "erase_after_event"?, "public_name"?, "label"?, "days"?}` (exactly one of
 `product` and `ticket`, else 422 `invalid`; `ticket` = an event ticket's d tag: §10 "A ticket
@@ -367,8 +390,8 @@ answer: <title>"). The author can change the title and the text later
 text the console shows); an approval given before stays, and the console's row says "edited
 after approval".
 
-`GET /offers/<id>` by the same key → `{"offer", "state": "confirm" | "open" | "accepted" |
-"declined", "kind", "product", "ticket"?, "event"?, "event_link"?, "erase_after_event",
+`GET /offers/<id>` by the same key → `{"offer", "type", "state": "confirm" | "open" | "accepted" |
+"declined" (a plain request: "confirm" | "open" | "closed"), "kind", "product", "ticket"?, "event"?, "event_link"?, "erase_after_event",
 "public_name", "label", "days", "title"?, "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
 requester's own link (to comment), only in this answer and in their mail.
 

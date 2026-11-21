@@ -11,6 +11,8 @@ one thing an author does from the web, a comment under their own request.
 - ``POST /api/v1/requests/<id or number>/comments``: the author's comment.
 - ``POST /api/v1/requests/<id or number>/edit``: the author's edit of the title, the text or
   one of their own comments (a kind 1010, as the chat edits a message).
+- ``POST /api/v1/requests/<id or number>/react``: an emoji on the request or on a comment, by
+  someone logged in (a kind 7 signed as the person, as the chat reacts to a message).
 - ``GET /api/v1/events/<link>/activity``: tickets bought and requests, newest first.
 
 Reading and permissions are webthreads.py's (the HTML pages of the same channel): what was
@@ -26,6 +28,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -120,6 +123,7 @@ def _read(svc: Services, slug: str, site: dict[str, Any]) -> dict[str, Any]:
     for r in sorted(replies, key=lambda e: (e["created_at"], e["id"])):
         by_root.setdefault(webthreads._root_of(r), []).append(r)
     gk = webthreads._groups_pubkey(svc)
+    reactions = _reactions(svc, channel)
     threads = []
     for root in roots:
         threads.append(
@@ -140,7 +144,120 @@ def _read(svc: Services, slug: str, site: dict[str, Any]) -> dict[str, Any]:
         "names": names,
         "roles": roles,
         "gk": gk,
+        "reactions": reactions,
     }
+
+
+# ── reactions: kind 7 on the thread's message or on a comment, as the chat makes them ───────
+REACTIONS_PER_HOUR = 60  # per person, through the endpoint
+EMOJI_BYTES = 32
+_ASCII = re.compile(r"[A-Za-z0-9\s]")
+LIKES = {"+": "👍", "-": "👎"}
+
+
+def emoji_of(raw: Any, one: bool = False) -> str | None:
+    """A reaction's content as the answers show it: "+" is 👍 and "-" is 👎 (NIP-25; so is an
+    empty one, when read); else an emoji: at most 32 UTF-8 bytes, no ASCII letter, digit or
+    whitespace, no control character, something that is not ASCII in it. ONE (what the
+    endpoint takes): exactly one emoji sequence. None for anything else."""
+    if not isinstance(raw, str):
+        return None
+    if raw in LIKES:
+        return LIKES[raw]
+    if raw == "":
+        return None if one else LIKES["+"]
+    if len(raw.encode("utf-8", "replace")) > EMOJI_BYTES or _ASCII.search(raw):
+        return None
+    if all(ord(ch) < 128 for ch in raw):
+        return None
+    if any(unicodedata.category(ch) in ("Cc", "Cs", "Co", "Cn", "Zs", "Zl", "Zp") for ch in raw):
+        return None
+    if one and _sequences(raw) != 1:
+        return None
+    return raw
+
+
+def _sequences(text: str) -> int:
+    """How many emoji sequences TEXT holds, near enough: what a zero-width joiner ties, a
+    variation selector, a skin tone, a keycap, a tag or a combining mark belongs to the emoji
+    before it; two regional indicators make one flag."""
+    n = flags = 0
+    joined = False
+    for ch in text:
+        o = ord(ch)
+        if (
+            o in (0xFE0F, 0xFE0E, 0x20E3)
+            or 0x1F3FB <= o <= 0x1F3FF
+            or 0xE0020 <= o <= 0xE007F
+            or unicodedata.category(ch).startswith("M")
+        ):
+            continue
+        if o == 0x200D:
+            joined = True
+            continue
+        if 0x1F1E6 <= o <= 0x1F1FF:
+            flags += 1
+            if flags % 2 == 1 and not joined:
+                n += 1
+        elif not joined:
+            n += 1
+        joined = False
+    return n
+
+
+def _reactions(svc: Services, channel: str) -> dict[str, list[dict[str, Any]]]:
+    """Per message, the reactions on it that stand, oldest first: every kind 7 in the channel
+    whose content is an emoji (whoever made it, in the chat or here), but those their own
+    author deleted (kind 5). The message is the reaction's last ``e`` tag (NIP-25)."""
+    got = webthreads._relay(svc)
+    if got is None:
+        return {}
+    relay, sign = got
+    try:
+        evs = relay.query([{"kinds": [7, 5], "#h": [channel], "limit": 5000}], sign) or []
+    except Exception as exc:  # noqa: BLE001 — the requests read without their reactions
+        log.warning("webrequests: reactions not read: %s", type(exc).__name__)
+        return {}
+    gone = {
+        (e["pubkey"], t[1])
+        for e in evs
+        if e["kind"] == 5
+        for t in e.get("tags", [])
+        if isinstance(t, list) and len(t) > 1 and t[0] == "e"
+    }
+    out: dict[str, list[dict[str, Any]]] = {}
+    for e in sorted(evs, key=lambda e: (e["created_at"], e["id"])):
+        if e["kind"] != 7 or (e["pubkey"], e["id"]) in gone:
+            continue
+        emoji = emoji_of(e.get("content"))
+        target = next(
+            (
+                t[1]
+                for t in reversed(e.get("tags", []))
+                if isinstance(t, list) and len(t) > 1 and t[0] == "e"
+            ),
+            "",
+        )
+        if emoji and target:
+            out.setdefault(target, []).append(
+                {"id": e["id"], "emoji": emoji, "pubkey": e["pubkey"], "at": e["created_at"]}
+            )
+    return out
+
+
+def _summary(rows: list[dict[str, Any]], me: str | None = None) -> list[dict[str, Any]]:
+    """``[{"emoji", "count", "mine"?}]``: each person once per emoji; most used first, then
+    first used. ``mine`` only for ME (who signed the request), never otherwise."""
+    seen: dict[str, dict[str, Any]] = {}
+    for i, r in enumerate(rows):
+        seen.setdefault(r["emoji"], {"first": (r["at"], i), "who": set()})["who"].add(r["pubkey"])
+    out = []
+    for emoji, d in sorted(seen.items(), key=lambda kv: (-len(kv[1]["who"]), kv[1]["first"])):
+        row: dict[str, Any] = {"emoji": emoji, "count": len(d["who"])}
+        if me and me in d["who"]:
+            row["mine"] = True
+        out.append(row)
+    return out
 
 
 def _account_names(svc: Services, keys: set[str]) -> dict[str, str]:
@@ -248,20 +365,30 @@ def _asked(svc: Services, f: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = False) -> dict:
+def item(
+    svc: Services,
+    snap: dict[str, Any],
+    t: dict[str, Any],
+    mine: bool = False,
+    me: str | None = None,
+) -> dict:
+    """ME: the key that signed the request, if any: its own reactions are marked."""
     root, f = _root(snap, t, mine), t["offer"]
     comments = _comments(snap, t, mine)
     state = _state(t)
     decided = _unix(f.get("decided_at")) if f and state in ("approved", "declined") else None
+    asks = f if f and not sales.plain_offer(f) else None  # an offer: a pass or a ticket
     return {
         "id": root["id"],
         "number": t["number"],
         "title": webthreads._title(root),
+        # what the request is: enquiry, sponsoring, talk, meetup, in_kind, sponsored_ticket
+        "type": sales.message_type(t["root"], f),
         # an offer says which it is: in kind, or a sponsored pass asked for (sales.OFFER_KINDS)
-        "kind": sales.offer_kind(f) if f else "other",
+        "kind": sales.offer_kind(asks) if asks else "other",
         "label": f.get("label") if f else None,
         "days": (f.get("days") or None) if f else None,
-        "percent_asked": int(f["percent"]) if f else None,
+        "percent_asked": int(asks["percent"]) if asks else None,
         # which ticket of which event is asked for (null for a product's offer or a plain thread)
         **_asked(svc, f),
         "state": state,
@@ -272,6 +399,7 @@ def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = Fa
         "edited_at": root.get("edited_at"),  # the title or the text, by its author
         "comments": len(comments),
         "last_at": max([root["created_at"], decided or 0, *(c["created_at"] for c in comments)]),
+        "reactions": _summary(snap["reactions"].get(root["id"], []), me),
     }
 
 
@@ -281,6 +409,7 @@ def _timeline(
     t: dict[str, Any],
     mine: bool,
     viewer: dict[str, Any] | None = None,
+    me: str | None = None,
 ) -> list[dict]:
     root, f = t["root"], t["offer"]
     site = snap["site"]
@@ -321,6 +450,7 @@ def _timeline(
             "at": c["created_at"],
             "edited_at": c.get("edited_at"),
             "text": webthreads._body(c),
+            "reactions": _summary(snap["reactions"].get(c["id"], []), me),
         }
         if (mine and webthreads.own_comment(svc, root, c)) or (
             viewer and c["kind"] == 1111 and c["pubkey"] == viewer["pubkey"]
@@ -383,9 +513,12 @@ def listing(
     before: int | None,
     limit: int,
     viewer: dict[str, Any] | None = None,
+    rtype: str = "",
+    me: str | None = None,
 ) -> dict[str, Any]:
     """VIEWER: the account of a website session that signed the request: its own requests
-    carry ``"mine": true`` (the list itself is the public one, for everyone)."""
+    carry ``"mine": true`` (the list itself is the public one, for everyone). RTYPE: only the
+    requests of that type. ME: the key that signed, if any (its own reactions are marked)."""
     snap = snapshot(svc)
     needle = fold(q)
     rows = []
@@ -395,7 +528,9 @@ def listing(
         root = _root(snap, t)
         if needle and needle not in fold(webthreads._title(root) + "\n" + webthreads._body(root)):
             continue
-        row = item(svc, snap, t)
+        row = item(svc, snap, t, me=me)
+        if rtype and row["type"] != rtype:
+            continue
         if is_mine(svc, t, viewer):
             row["mine"] = True
         rows.append(row)
@@ -501,9 +636,9 @@ def detail(
     mine = t is not None and (_proven(svc, t, signer, thread_key) or is_mine(svc, t, viewer))
     if t is None or not (t["public"] or mine):
         raise ApiError(404, "unknown", "No such request.")
-    out = item(svc, snap, t, mine)
+    out = item(svc, snap, t, mine, signer)
     out["body"] = webthreads._body(_root(snap, t, mine))
-    out["timeline"] = _timeline(svc, snap, t, mine, viewer)
+    out["timeline"] = _timeline(svc, snap, t, mine, viewer, signer)
     if viewer:
         out["viewer"] = {
             "role": viewer["role"],
@@ -684,6 +819,116 @@ def edit(
         # the offer says what its thread says now (the console, the mails' subjects)
         sales.offer_edited(svc, t["offer"]["id"], now["title"] if title is not None else None, body)
     return {"ok": True, "changed": got == "ok"}
+
+
+def _reactor(
+    svc: Services, t: dict[str, Any], signer: str | None, thread_key: str
+) -> dict[str, Any]:
+    """The account behind a key that signed and is no website session: the account's own key
+    (a member's chat session signs with it). No account: 403 ``not_allowed`` for the thread's
+    author by its own key or the offer's (a reaction is signed as a person, through the
+    signer: it needs an account), else 401 ``no_session``."""
+    from . import sitesessions
+    from .holder_invites import ApiError
+
+    acct = None
+    if signer and sitesessions.own(svc):
+        pid = webthreads._partner_of_key(svc, signer)
+        acct = sitesessions.account(svc, pid) if pid else None
+        if acct is not None and acct["pubkey"] != signer:
+            acct = None
+    if acct is not None:
+        return acct
+    if (KEY_RE.match(thread_key or "") and t is not None) or (
+        t is not None and _proven(svc, t, signer, "")
+    ):
+        raise ApiError(403, "not_allowed", "Log in to react: a thread's own link is not enough.")
+    raise ApiError(401, "no_session", "Log in first.")
+
+
+def react(
+    svc: Services,
+    ref: str,
+    signer: str | None,
+    thread_key: str,
+    data: dict[str, Any],
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """POST /requests/<id or number>/react: ``{"emoji", "comment"?, "remove"?}`` by someone
+    logged in who may comment (VIEWER: a website session's account; else the account whose own
+    key signed). A kind 7 signed as the person through the signer, with the tags the chat
+    writes for a message in a group; ``remove``: a kind 5 by the person on their own
+    reaction(s) with that emoji. → ``{"reactions": [...]}`` of the request or the comment."""
+    from . import checkin, mail, sitesessions
+    from .holder_invites import ApiError
+
+    snap = snapshot(svc)
+    t = _find(snap, ref)
+    acct = viewer if viewer is not None else _reactor(svc, t, signer, thread_key)
+    mine = t is not None and is_mine(svc, t, acct)
+    if t is None or not (t["public"] or mine):
+        raise ApiError(404, "unknown", "No such request.")
+    if not (mine or may_comment(svc, snap, acct)):
+        raise ApiError(403, "not_allowed", "Only people who have this channel react here.")
+    emoji = emoji_of(data.get("emoji"), one=True)
+    if emoji is None:
+        raise ApiError(422, "invalid", "emoji: one emoji.")
+    remove = data.get("remove", False)
+    if not isinstance(remove, bool):
+        raise ApiError(422, "invalid", "remove: true or false.")
+    target = t["root"]
+    if data.get("comment") is not None:
+        cid = data["comment"]
+        target = next(
+            (c for c in _comments(snap, t, mine) if isinstance(cid, str) and c["id"] == cid), None
+        )
+        if target is None:
+            raise ApiError(422, "invalid", "comment: no such comment under this request.")
+    channel = snap["site"]["channel"]
+    checkin.refuse_archived(svc, channel)
+    me = acct["pubkey"]
+    rows = list(snap["reactions"].get(target["id"], []))
+    own = [r for r in rows if r["pubkey"] == me and r["emoji"] == emoji]
+    if bool(own) != remove:  # there already, or nothing to take away: nothing changes
+        return {"reactions": _summary(rows, me)}
+    sign = sitesessions.signer(svc, acct)  # 409 own_key, 503 signer
+    if mail._limited(f"site-react:{acct['partner']}", REACTIONS_PER_HOUR, 3600):
+        raise ApiError(429, "too_many", "Too many reactions in a short time.")
+    now = int(time.time())
+    if remove:
+        draft = {
+            "kind": 5,
+            "created_at": now,
+            "content": "",
+            "tags": [["h", channel], *[["e", r["id"]] for r in own], ["k", "7"]],
+        }
+    else:
+        draft = {
+            "kind": 7,
+            "created_at": now,
+            "content": emoji,
+            "tags": [
+                ["h", channel],
+                ["e", target["id"]],
+                ["p", target["pubkey"]],
+                ["k", str(target["kind"])],
+            ],
+        }
+    try:
+        event = sign(draft)
+        if event.get("pubkey") != me:
+            raise RuntimeError("the signer signed for another key")
+        relay, _api_sign = webthreads._relay(svc)
+        relay.publish(event, sign)
+    except Exception as exc:  # noqa: BLE001 — the signer or the relay
+        log.warning("webrequests: a reaction was not posted: %s", type(exc).__name__)
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
+    forget()
+    if remove:
+        rows = [r for r in rows if r not in own]
+    else:
+        rows.append({"id": event.get("id"), "emoji": emoji, "pubkey": me, "at": now})
+    return {"reactions": _summary(rows, me)}
 
 
 # ── an event's public activity ──────────────────────────────────────────────────────────────
@@ -902,12 +1147,15 @@ def register(app: FastAPI) -> None:
         text = q.get("q") or ""
         if len(text) > Q_MAX:
             raise ApiError(422, "invalid", f"q: at most {Q_MAX} characters.")
+        rtype = q.get("type") or ""
+        if rtype and rtype not in sales.REQUEST_TYPES:
+            raise ApiError(422, "invalid", "type: " + ", ".join(sales.REQUEST_TYPES) + ".")
         before, limit = _paging(request)
         s = request.app.state.services
         # signed by a website session: the same list, the account's own requests marked
-        _key, viewer = await _acting(request, events._viewer(request, _signed_path(request)))
-        out = await _run(listing, s, state, text, before, limit, viewer)
-        return answer(out, NO_STORE if viewer else SHORT)
+        key, viewer = await _acting(request, events._viewer(request, _signed_path(request)))
+        out = await _run(listing, s, state, text, before, limit, viewer, rtype, key)
+        return answer(out, NO_STORE if key else SHORT)
 
     @app.get(API + "/requests/{ref}")
     async def requests_one(request: Request, ref: str) -> JSONResponse:
@@ -970,6 +1218,14 @@ def register(app: FastAPI) -> None:
         out = await _run(edit, s, ref, signer, key, data, viewer)
         return answer(out, NO_STORE)
 
+    @app.post(API + "/requests/{ref}/react")
+    async def requests_react(request: Request, ref: str) -> JSONResponse:
+        _allow(request)
+        s, signer, key, data = await _posted(request)
+        signer, viewer = await _acting(request, signer)
+        out = await _run(react, s, ref, signer, key, data, viewer)
+        return answer(out, NO_STORE)
+
     @app.get(API + "/events/{link}/activity")
     async def event_activity(request: Request, link: str) -> JSONResponse:
         _allow(request)
@@ -982,4 +1238,14 @@ def register(app: FastAPI) -> None:
         return answer(out, SHORT)
 
 
-__all__ = ["register", "forget", "snapshot", "listing", "detail", "comment", "edit", "activity"]
+__all__ = [
+    "register",
+    "forget",
+    "snapshot",
+    "listing",
+    "detail",
+    "comment",
+    "edit",
+    "react",
+    "activity",
+]

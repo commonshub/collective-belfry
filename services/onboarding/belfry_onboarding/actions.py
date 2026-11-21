@@ -214,9 +214,16 @@ async def offer_decide(p: Press) -> Result:
     return await sales.offer_decide_press(p)
 
 
+async def request_close(p: Press) -> Result:
+    from . import sales
+
+    return await sales.request_close_press(p)
+
+
 HANDLERS: dict[str, Handler] = {
     "website-publish": website_publish,
     "offer-decide": offer_decide,  # an offer in kind's card (sales.py)
+    "request-close": request_close,  # a plain request's card (sales.py)
 }
 
 

@@ -503,11 +503,26 @@ def _title(e: dict[str, Any]) -> str:
     return (text[:100] + "…") if len(text) > 100 else (text or "(no title)")
 
 
+def _type_line(e: dict[str, Any]) -> str:
+    """The line a plain request's card carries under its title for the chat: the type's plain
+    name ("_General enquiry_", sales.type_line), by the message's ``request-type`` tag; ""
+    for any other message. It is no part of the text its author wrote."""
+    named = _tag(e, "request-type")
+    if not named:
+        return ""
+    from . import sales
+
+    return sales.type_line(named)
+
+
 def _body(e: dict[str, Any]) -> str:
     text = e.get("content") or ""
     subject = _tag(e, "subject")
     if subject and text.startswith(f"**{subject}**"):
         text = text[len(subject) + 4 :].lstrip()
+    line = _type_line(e)
+    if line and text.startswith(line):
+        text = text[len(line) :].lstrip()
     return text
 
 
@@ -587,6 +602,7 @@ def _labels(svc: Services, channel: str) -> dict[str, list[tuple[int, str, str]]
     except Exception:  # noqa: BLE001
         return {}
     out: dict[str, list[tuple[int, str, str]]] = {}
+    gk = _groups_pubkey(svc)
     for e in sorted(evs, key=lambda e: e["created_at"]):
         if ["L", "belfry/inbox"] not in [t[:2] for t in e.get("tags", [])]:
             continue
@@ -595,8 +611,11 @@ def _labels(svc: Services, channel: str) -> dict[str, list[tuple[int, str, str]]
             "",
         )
         card = _tag(e, "e")
+        who = e["pubkey"]
+        if who == gk and re.fullmatch(r"[0-9a-f]{64}", _tag(e, "by")):
+            who = _tag(e, "by")  # the belfry's label for an admin (sales.close_request)
         if lab in ("open", "closed") and card:
-            out.setdefault(card, []).append((e["created_at"], lab, e["pubkey"]))
+            out.setdefault(card, []).append((e["created_at"], lab, who))
     return out
 
 
@@ -775,7 +794,12 @@ def _offer_details(root: dict[str, Any]) -> str:
     of help and the days."""
     import datetime as dt
 
-    label = OFFER_LABELS.get(_tag(root, "offer-label"), "")
+    from . import sales
+
+    named = _tag(root, "request-type")
+    label = OFFER_LABELS.get(_tag(root, "offer-label"), "") or (
+        sales.TYPE_NAMES[named] if named in sales.PLAIN_TYPES else ""
+    )
     days = []
     for t in root.get("tags", []):
         if t[:1] == ["offer-days"]:
@@ -1245,7 +1269,10 @@ def edit(
         subject = title if title is not None else _tag(now_root, "subject")
         new_body = body if body is not None else _body(now_root)
         same = subject == _tag(now_root, "subject") and new_body == _body(now_root)
-        content = f"**{subject}**\n\n{new_body}" if subject else new_body
+        # a plain request's card keeps the line that names its type (never part of the text)
+        line = _type_line(root)
+        shown = f"{line}\n\n{new_body}" if line else new_body
+        content = f"**{subject}**\n\n{shown}" if subject else shown
     now = {"title": subject, "body": new_body} if not comment_id else {}
     if same:
         return "same", now

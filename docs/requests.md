@@ -18,9 +18,9 @@ wrote it: never HTML. The website renders it and must escape it.
 
 **CORS.** The apex (`https://<domain>`) may call everything, with the request headers
 `Authorization, Content-Type, X-Thread-Key`. The website's previews (`https://preview.<domain>`)
-may call the three `GET`s only, never the comment or the edit.
+may call the three `GET`s only, never the comment, the edit or the reaction.
 
-**Limits.** 120 calls a minute per IP over these five endpoints (429 `too_many`). What is read
+**Limits.** 120 calls a minute per IP over these six endpoints (429 `too_many`). What is read
 from the relay is kept 15 seconds in the service; the list and the activity say
 `Cache-Control: public, max-age=15`, one request says `no-store` (the same address answers its
 author with more). A comment, an edit or a decision made through the belfry shows at once.
@@ -34,8 +34,10 @@ members only.
 
 Query: `state` = `open` | `approved` | `closed` | `all` (default `all`; `closed` covers declined
 and closed); `q` = words looked for in the title and the body as they are now (after their author's
-edits), whatever the case or the accents, at most 100 characters; `before` = a unix time (only threads made before it); `limit` = 1–100
-(default 30). Anything else: 422 `invalid`.
+edits), whatever the case or the accents, at most 100 characters; `type` = one type (below:
+`enquiry` | `sponsoring` | `talk` | `meetup` | `in_kind` | `sponsored_ticket`; only the requests
+of that type, and `counts` then counts only those); `before` = a unix time (only threads made before it); `limit` = 1–100
+(default 30). Anything else (an unknown type, two types): 422 `invalid`.
 
 ```json
 {"slug": "requests", "channel": "Requests",
@@ -43,11 +45,12 @@ edits), whatever the case or the accents, at most 100 characters; `before` = a u
  "items": [
   {"id": "<64 hex>", "number": 42,
    "title": "Kim Cook: 50% off Two-week pass in kind",
-   "kind": "in_kind", "label": "food", "days": ["2027-01-26", "2027-01-27"],
+   "type": "in_kind", "kind": "in_kind", "label": "food", "days": ["2027-01-26", "2027-01-27"],
    "percent_asked": 50,
    "state": "approved", "percent_approved": 75, "approved_by": {"name": "Ada"},
    "author": {"name": "Kim Cook", "role": "guest"},
-   "created_at": 1795000000, "edited_at": null, "comments": 3, "last_at": 1795003600}],
+   "created_at": 1795000000, "edited_at": null, "comments": 3, "last_at": 1795003600,
+   "reactions": [{"emoji": "👍", "count": 3}, {"emoji": "🎉", "count": 1}]}],
  "next": 1795000000}
 ```
 
@@ -65,16 +68,31 @@ edits), whatever the case or the accents, at most 100 characters; `before` = a u
 - `title`: the title the thread has now: the person's own (`"title"` of `POST /offers`,
   [sales.md](sales.md) §4) or the generated one, after its author's edits (§4). `edited_at`:
   when the author last edited the title or the text (unix), else `null`.
-- `kind`: for a thread started by `POST /offers`, what the offer said: `in_kind` (the default)
+- `type` (2026-11-21): what the request is, on every item: `enquiry` | `sponsoring` | `talk` |
+  `meetup` (plain requests: a thread that is open or closed, nothing to approve) |
+  `in_kind` | `sponsored_ticket` (offers: they ask for a pass or a ticket, see `kind`). It is
+  the `"type"` of `POST /offers` ([sales.md](sales.md) §4), kept on the offer and as the tag
+  `["request-type", <type>]` on the thread's message. Threads from before types existed: an
+  offer of kind `in_kind` is `in_kind`, of kind `sponsored` is `sponsored_ticket`; everything
+  else, also a thread started in the chat, is `enquiry`.
+- **A plain request** (`enquiry`, `sponsoring`, `talk`, `meetup`): `state` is `open` or
+  `closed`, never anything else; `kind` is `other`; `label`, `ticket`, `ticket_title`,
+  `event_link`, `event_title` and `approved_by` are `null`; **every percent field is JSON
+  `null`** (`percent_asked`, `percent_approved`: present, never 0, never left out), open or
+  closed. `days` when its author gave some.
+- `kind`: for an offer (type `in_kind` or `sponsored_ticket`), what it said: `in_kind` (the default)
   or `sponsored`; else `other`. `label` never says sponsored. `label`, `days`, `percent_asked`
   come from the offer (`null` for `other`, or when the offer has none).
 - `state`: `approved` / `declined` once an admin decided the offer (that wins over a label);
-  else `closed` when the members' latest label on it in the chat says closed (NIP-32
-  `belfry/inbox`); else `open`. `percent_approved` and `approved_by` only when approved.
+  else `closed` when the latest label on it says closed (NIP-32 `belfry/inbox`: a member's in
+  the chat, or the organisers' Close, §4b); else `open`. `percent_approved` and `approved_by` only when approved.
 - `author.role`: `organiser` (an admin of the belfry, or the belfry itself), `member`, `agent`,
   `guest` (anyone else: someone from outside, with or without an account).
 - `comments`: the public replies, without the belfry's own reply that says the decision.
   `last_at`: the latest of the thread, its comments and its decision.
+- `reactions`: the emoji on the thread's opening message, `[{"emoji", "count", "mine"?}]`,
+  most used first, then first used; `[]` when none (§4c). `"mine": true` only in an answer to
+  a signed request, on the emoji the signer used; never in an anonymous answer.
 
 ## 2. `GET /requests/<id or number>`
 
@@ -86,7 +104,8 @@ The item of §1, plus:
   {"type": "edited", "field": "title", "by": {"name": "Kim Cook"}, "at": 1795000050,
    "title": "Dinner for forty"},
   {"type": "comment", "id": "<64 hex>", "author": {"name": "Mia", "role": "member"},
-   "at": 1795000100, "edited_at": null, "text": "Which evenings?"},
+   "at": 1795000100, "edited_at": null, "text": "Which evenings?",
+   "reactions": [{"emoji": "🙏", "count": 1}]},
   {"type": "comment", "id": "<64 hex>", "author": {"name": "Kim Cook", "role": "author"},
    "at": 1795000200, "edited_at": 1795000300, "text": "Tuesday and Friday.", "mine": true},
   {"type": "edited", "field": "comment", "by": {"name": "Kim Cook"}, "at": 1795000300,
@@ -101,7 +120,9 @@ The item of §1, plus:
 - `timeline`, oldest first. A comment's `author.role` is `author` when it is by whoever opened
   the thread, else as in §1. `approved` (with `percent`) / `declined`: the admin's decision, by
   the admin's name; `note` (optional) is the admin's public note. `closed` / `reopened`: the
-  members' labels in the chat (a label that changes nothing is left out).
+  labels on the thread (a label that changes nothing is left out): a member's in the chat, by
+  that member's name, or the organisers' Close / Reopen (§4b), by the admin's name. Every
+  `comment` entry carries its own `reactions` (as on the request; `[]` when none).
 - `title`, `body` and a comment's `text` are the current ones. `edited_at` (the opening post:
   its title or text; a comment: its text) is when its author last edited it, else `null`.
   A comment's `id` is an opaque identifier (for §4). `"mine": true` marks the comments the
@@ -183,6 +204,73 @@ the new text; the first version and every edit stay on the relay.
 As for everything else on the page, moving the channel is never retroactive: an edit made
 while the channel was members only shows to the author (with their proof) and in the chat,
 not in the public answers, which keep the last version written while it was public.
+
+## 4b. Closing a plain request
+
+A plain request (`enquiry`, `sponsoring`, `talk`, `meetup`; also a thread started in the chat)
+is closed and reopened by the organisers: the belfry's admins, the people who decide offers.
+There is no endpoint for the website. Two ways:
+
+- **the console**, belfry.<domain>/sales, the requests' list: a Close or Reopen button on each
+  plain request made through `POST /offers` (a form with the csrf; the page answers with a
+  fixed message);
+- **the card's button in the chat**: a plain request's card carries
+  `["button", "close", "Close", "", "belfry:request-close"]` ([actions.md](actions.md) §4).
+  The belfry answers "Closed by <name>." and the button is finished for everyone. (After a
+  reopen the card's button stays finished: closing again is the console's, or a label in the
+  chat.)
+
+Either one publishes what a member's close in the chat is, signed by the belfry's groups key
+for the admin: a kind 1985 in the channel, `["L", "belfry/inbox"]`,
+`["l", "closed" | "open", "belfry/inbox"]`, `["e", <the thread's message>]`, `["h", <channel>]`,
+`["by", <the admin's key>]` (read only on the groups key's own labels: it names who closed).
+The record is those events on the relay, nothing else: the latest label is the state, and each
+change is a `closed` / `reopened` entry of the timeline. Closing what is closed changes
+nothing (no event). A closed request still shows, in the list (`state=closed`) and by itself;
+comments, edits and reactions stay allowed. `GET /offers/<id>` says `"state": "closed"` for it.
+
+An offer (`in_kind`, `sponsored_ticket`) is not closed this way: it is approved or declined
+(`belfry:request-close` on its card answers `no_target`; the console shows no Close for it).
+
+## 4c. Reactions: `POST /requests/<id or number>/react`
+
+`{"emoji": "👍", "comment"?: "<comment id>", "remove"?: true}` → 200
+`{"reactions": [{"emoji", "count", "mine"?}]}`: the reactions of the request (or of that
+comment) as they are now, for the person who asked.
+
+- **Who**: someone logged in who may comment (`viewer.can_comment`): NIP-98 by a website
+  session ([website-accounts.md](website-accounts.md)), or by the own key of an account that
+  has the channel. The thread's author by `X-Thread-Key` or by the offer's key alone, with no
+  account: 403 `not_allowed` (a reaction is signed as a person). Nothing that proves an
+  account: 401 `no_session`.
+- **`emoji`**: exactly one emoji: one emoji sequence (a flag, a skin tone, a family joined by
+  zero-width joiners count as one), at most 32 UTF-8 bytes, no ASCII letter, digit or
+  whitespace. `"+"` and `"-"` are taken as 👍 and 👎. Anything else: 422 `invalid`.
+- **`comment`**: a comment's `id` from the timeline; one that is not under this request: 422
+  `invalid`. Without it the reaction is on the request itself.
+- The same emoji twice: 200, unchanged, no second event. `"remove": true`: takes the person's
+  own reaction(s) with that emoji away; with none: 200, unchanged. (`remove` that is not a
+  boolean: 422 `invalid`.)
+- Errors: 401 `no_session`; 401 `unauthorized` (a bad NIP-98); 403 `not_allowed`; 404 `unknown`
+  (no such request, or one that is not public and not theirs); 422 `invalid`; 409 `own_key`
+  (someone who holds their own key: the belfry can't sign for them; they react in the chat);
+  409 `archived`; 429 `too_many` (60 reactions an hour per person; a call that changes nothing
+  never counts); 400 `invalid_json`; 503 `signer` / `unavailable`.
+- CORS: the apex only, as for a comment; never a preview.
+
+**On the relay** a reaction is what the chat's is: a kind 7 in the channel signed **as the
+person** through the signer, the emoji as content, `["h", <channel>]`,
+`["e", <the message or the comment>]`, `["p", <its author>]`, `["k", "9" | "1111"]`. Taking
+one away is a kind 5 by the person: `["h", <channel>]`, `["e", <their reaction>]` (one per
+reaction), `["k", "7"]`.
+
+**What is counted** (`reactions` everywhere): every kind 7 in the channel on that message
+(its last `e` tag), whoever made it and wherever (the chat, the apps, this endpoint), each
+person once per emoji, without those their own author deleted (a kind 5 by the same key).
+Content `"+"` (or empty) counts as 👍, `"-"` as 👎; content that is no emoji (text, a
+`:shortcode:`, more than 32 bytes) is left out, nothing else is. Order: `count` descending,
+then the emoji first used. `mine` (always `true` when present) only for the key that signed the read:
+a website session's account, or an account's own key.
 
 ## 5. `GET /events/<link>/activity`
 
@@ -310,7 +398,8 @@ account's, so what they wrote before reads under the new name.
 - `program` items.
 - Tickets taken for free on an event's page (no order) are not in the activity; nor are
   membership passes bought as products (only event tickets are).
-- Closing a request from the web; comments by anyone who is not logged in on the website, but
+- Closing a request from the web (organisers close a plain one in the console or in the chat,
+  §4b); comments by anyone who is not logged in on the website, but
   the author (members also answer in the chat); edits of anything but one's own title, text
   and comments.
 - Nothing here was run against a live relay or a real website yet.
