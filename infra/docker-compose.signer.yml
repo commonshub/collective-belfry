@@ -45,14 +45,17 @@ services:
 
   # The members' keys, derived from the custody seed and sealed at rest with the master key;
   # signs for the onboarding service (internal API) and for apps over NIP-46 on the bunker
-  # relay. Its own network only: no internet, no published port. Two services share that
-  # network with it: the onboarding service (the API's one caller) and the bunker relay (which
-  # the signer dials). The relay can therefore open the API's port too; what keeps it out is
-  # the bearer token (signer_token), which only the onboarding service is given. A second
-  # network would not change that: containers that share any network reach every port of each
-  # other, so the API would have to listen on one interface only (a fixed address on a network
-  # of its own, SIGNER_LISTEN=<address>:8200). Not done: fixed subnets clash on hosts we do not
-  # control, and it was never run (docs/own-signer.md, "For the Rust round").
+  # relay. No internet, no published port, and two networks of its own, one per neighbour:
+  #   - `signer-api`, with the onboarding service: the API's one caller;
+  #   - `signer`, with the bunker relay, which the signer dials.
+  # Containers that share a network reach every port the other listens on there, so two
+  # networks alone would not keep the relay off the API. The API therefore listens on one
+  # interface only: SIGNER_LISTEN names the signer's alias on `signer-api` (`signer-api:8200`),
+  # which Docker's resolver answers with the signer's address on that network; the signer
+  # looks it up once at start and binds there. On the relay's network nothing listens on 8200
+  # (tried with stand-in containers: the relay's connection is refused, the alias does not
+  # resolve for it). The bearer token (signer_token), which only the onboarding service is
+  # given, stays the second lock. No fixed subnets: they clash on hosts we do not control.
   signer:
     image: belfry-signer:local
     build:
@@ -64,14 +67,19 @@ services:
     cap_drop: [ALL]
     mem_limit: 256m
     secrets: [signer_token, signer_master_key]
-    networks: [signer]
+    networks:
+      signer: {}
+      signer-api:
+        aliases: [signer-api]
     depends_on:
       signer-init:
         condition: service_completed_successfully
       keycast-relay:
         condition: service_started
     environment:
-      SIGNER_LISTEN: 0.0.0.0:8200
+      # the signer's own name on the network it shares with the onboarding service: the API
+      # listens on that address only (a name that does not resolve stops the start)
+      SIGNER_LISTEN: signer-api:8200
       SIGNER_DB: /data/signer.sqlite3
       CUSTODY_SEED_FILE: /run/belfry/custody-seed
       BUNKER_RELAYS: ws://keycast-relay:8080
@@ -106,7 +114,7 @@ services:
 
   onboarding:
     secrets: [signer_token]
-    networks: [default, signer]
+    networks: [default, signer-api]
     depends_on:
       authentik-server: !reset null
       keycast: !reset null
@@ -114,15 +122,17 @@ services:
         condition: service_healthy
     environment:
       SIGNER: belfry
-      SIGNER_URL: http://signer:8200
+      SIGNER_URL: http://signer-api:8200
       # no Authentik: the belfry's own e-mail and code sign-in (the service refuses to start
       # with anything else next to SIGNER=belfry)
       PASS_SIGNIN: belfry
 
-# signer (internal, no internet): the signer with the onboarding service and the bunker relay
-# (both reach the signer's port; the API token is the onboarding service's alone, see above)
+# Both internal (no internet). signer: the signer and the bunker relay it listens on.
+# signer-api: the signer and the onboarding service; the signer's API listens here only.
 networks:
   signer:
+    internal: true
+  signer-api:
     internal: true
 
 secrets:
