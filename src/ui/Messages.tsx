@@ -19,6 +19,8 @@ import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
 import { SendingLine } from './Sending'
+import { TypingDots, TypingLine } from './Typing'
+import { cleared, messageSent, onTyping, typed, typingIn, type Place } from '../core/typing'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
 // by e-mail through the belfry. Your address here is name@domain; mail to it lands here too.
@@ -30,8 +32,17 @@ function Who({ conv, size = 40 }: { conv: Conv; size?: number }) {
   return <span className="mail-avatar" style={{ width: size, height: size }} aria-hidden="true"><MailIcon /></span>
 }
 
+/** Someone else types in CONV now (the list's "typing…", canvas messages/typing-list). */
+function typingNow(conv: Conv): boolean {
+  if (isMail(conv)) return false
+  const p = peers(conv).filter((k) => k !== me())
+  return p.length > 0 && typingIn({ peers: p }, (pk) => thread(conv).reduce((m, d) => (d.from === pk && d.at > m ? d.at : m), 0)).length > 0
+}
+
 export function MessagesList() {
   useVersion()
+  const [, tick] = useState(0)
+  useEffect(() => onTyping(() => tick((n) => n + 1)), [])
   const [creating, setCreating] = useState(false)
   const list = threads()
   return (
@@ -53,7 +64,9 @@ export function MessagesList() {
             <Who conv={t.conv} size={36} />
             <span className="t">
               <b>{isMail(t.conv) ? threadName(t.conv) : convName(t.conv)}</b>
-              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(previewOf(t.last)).split('\n')[0]}</small>
+              {typingNow(t.conv)
+                ? <small className="typing-row"><TypingDots />typing…</small>
+                : <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(previewOf(t.last)).split('\n')[0]}</small>}
             </span>
             <span className="dm-meta">
               <time>{fmtTime(t.last.at)}</time>
@@ -286,6 +299,8 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
   const [busy, setBusy] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
   const canFiles = !isMail(conv)
+  // typing indicators (docs/typing.md): Nostr conversations with someone else, not e-mail
+  const tplace = useMemo<Place | null>(() => { const p = peers(conv).filter((k) => k !== me()); return p.length ? { peers: p } : null }, [conv])
   const previews = useMemo(() => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : '')), [files])
   useEffect(() => () => previews.forEach((u) => u && URL.revokeObjectURL(u)), [previews])
   useLayoutEffect(() => {
@@ -304,6 +319,7 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
     const t = text.trim()
     if (busy || (!t && !files.length)) return
     setError('')
+    if (tplace) messageSent(tplace)
     if (files.length) {
       // pictures and files, the text as their caption (canvas v104)
       setBusy(true)
@@ -323,6 +339,8 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
     }
   }
   return (
+    <>
+    {tplace && <TypingLine place={tplace} />}
     <div className="composer" onDragOver={(e) => { if (canFiles && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
       onDrop={(e) => { if (!canFiles || !e.dataTransfer.files.length) return; e.preventDefault(); add([...e.dataTransfer.files]) }}>
       {error && <div className="error" style={{ margin: '0 4px 6px' }}>{error}</div>}
@@ -339,7 +357,8 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
       )}
       <div className="bar">
         {canFiles && <button type="button" className="plus" aria-label="Add a picture, a file or a recording" onClick={() => setMenu(true)}>＋</button>}
-        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? 'Write an e-mail' : files.length ? 'Add a caption' : 'Message'} value={text} onChange={(e) => setText(e.target.value)}
+        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? 'Write an e-mail' : files.length ? 'Add a caption' : 'Message'} value={text}
+          onChange={(e) => { const v = e.target.value; setText(v); if (tplace) { if (v.trim()) typed(tplace, v); else cleared(tplace) } }}
           onPaste={(e) => { const pasted = canFiles ? [...e.clipboardData.files] : []; if (!pasted.length) return; if (!e.clipboardData.getData('text/plain')) e.preventDefault(); add(pasted) }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() } }} />
         <button className="send" aria-label="Send" aria-busy={busy || undefined} disabled={busy || (!text.trim() && !files.length)} onClick={() => void send()}>↑</button>
@@ -347,5 +366,6 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
       {menu && <AttachSheet onFiles={add} onRecord={() => setRecording(true)} onClose={() => setMenu(false)} />}
       {recording && <DmRecordSheet conv={conv} onClose={() => setRecording(false)} onSend={(file, seconds) => sendDmFiles(conv, [{ file, duration: seconds }])} />}
     </div>
+    </>
   )
 }

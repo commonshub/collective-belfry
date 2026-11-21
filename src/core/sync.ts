@@ -468,6 +468,9 @@ async function upload(blob: Blob, a: Attachment, progress?: (sent: number) => vo
 // ---- relays ---------------------------------------------------------------------
 
 /** The manager's socket for TARGET, with this module's hooks (once). */
+/** The manager's socket for TARGET (typing.ts sends and listens on it, outside the outbox). */
+export const sockFor = (target: Target) => sockOf(target)
+
 function sockOf(target: Target): Sock {
   const have = socks[target]
   if (have) return have

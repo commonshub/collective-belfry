@@ -43,6 +43,8 @@ import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
 import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, reading, useGuestMode } from '../core/guestmode'
+import { cleared, messageSent, typed, type Place } from '../core/typing'
+import { TypingLine } from './Typing'
 import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
 import { VisibilitySheet } from './ChannelInfo'
@@ -1261,6 +1263,9 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft, above, className, plain = false }: { /** a line above the text field (who receives it: an e-mail thread) */ above?: ReactNode; /** an extra class (mail-mode: going out by e-mail) */ className?: string; /** plain text only: no files, no @people or #channels (an e-mail) */ plain?: boolean; /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
+  // typing indicators (docs/typing.md): this conversation or this thread; not by e-mail
+  const tplace = useMemo<Place | null>(() => (groupId && draft && !plain ? (draft.startsWith('t:') ? { h: groupId, root: draft.slice(2) } : { h: groupId }) : null), [groupId, draft, plain])
+  const tallowed = () => !!groupId && !group(groupId)?.archived && !reading()
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
   const [menu, setMenu] = useState(false)
@@ -1380,6 +1385,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     setText('')
     setFiles([])
     setError('')
+    if (tplace) messageSent(tplace)
     if (!announcing) setAnn(false)
     setBusy(true)
     try { await onSend(t, f, a) } catch (e) {
@@ -1405,6 +1411,8 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     return () => el.removeEventListener(ADD_FILES, on)
   }, [plain])
   return (
+    <>
+    {tplace && <TypingLine place={tplace} />}
     <div ref={box} data-files={plain ? undefined : ''} className={'composer' + (compact ? ' compact' : '') + (className ? ' ' + className : '')}>
       {above}
       {canAnnounce && ann && (
@@ -1467,7 +1475,11 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
             if (!e.clipboardData.getData('text/plain')) e.preventDefault()
             setFiles((now) => [...now, ...pasted])
           }}
-          onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length) }}
+          onChange={(e) => {
+            const v = e.target.value
+            setText(v); setCaret(e.target.selectionStart ?? v.length)
+            if (tplace) { if (v.trim()) typed(tplace, v, tallowed()); else cleared(tplace, tallowed()) }
+          }}
           onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onKeyDown={(e) => {
             if (people.length && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); pick(people[0]); return }
@@ -1500,6 +1512,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
         </Sheet>
       )}
     </div>
+    </>
   )
 }
 

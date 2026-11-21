@@ -1,4 +1,5 @@
 import { startNames } from '../core/names'
+import { demoTyping, demoTypingSent, setShowMyTyping, showMyTyping, watchDms } from '../core/typing'
 import { replaceHash } from '../core/nav'
 import { demoButtons } from '../core/buttons'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
@@ -182,9 +183,10 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
+        watchDms() // others typing to me (typing.ts): one live subscription on the community relay
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, __demoMe: () => me(), __demoOrder: () => orderContent() })
+        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -318,6 +320,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
   else if (section === 'me' && a === 'signin') view = <SignInMethods />
+  else if (section === 'me' && a === 'privacy') view = <Privacy />
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'accounts') view = <AccountsScreen />
@@ -378,6 +381,27 @@ const INFO_PAGES: Record<string, 'members' | 'files' | 'tasks' | 'log' | 'about'
 const EVENT_KEY = 'belfry-event-open'
 const pendingEvent = () => { try { return localStorage.getItem(EVENT_KEY) ?? '' } catch { return '' } }
 const setPendingEvent = (link: string) => { try { if (link) localStorage.setItem(EVENT_KEY, link); else localStorage.removeItem(EVENT_KEY) } catch { /* private mode */ } }
+
+/** Me → Privacy (canvas v110 messages/typing-setting): this browser's own settings. */
+function Privacy() {
+  const [on, setOn] = useState(showMyTyping())
+  return (
+    <div className="screen privacy">
+      <div className="topbar">
+        <button className="icon-btn" aria-label="Back" onClick={() => back('me')}>‹</button>
+        <h1>Privacy</h1>
+      </div>
+      <div className="scroll" style={{ padding: 16 }}>
+        <h3 className="privacy-sec">This browser</h3>
+        <label className="card switch-row" style={{ width: '100%' }}>
+          <span><b>Show others when I'm typing</b></span>
+          <input type="checkbox" role="switch" checked={on} onChange={(e) => { setShowMyTyping(e.target.checked); setOn(e.target.checked) }} />
+        </label>
+        <p className="hint">When this is off, this browser doesn't tell anyone you're typing. You still see when others are.</p>
+      </div>
+    </div>
+  )
+}
 
 /** Admins: show the raw Nostr events (a channel's Log links to them). */
 function DevModeRow() {
@@ -473,6 +497,13 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </div>
           <span className="hint" aria-hidden="true">›</span>
         </button>}
+        <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/privacy')}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Privacy</div>
+            <div className="hint" style={{ fontSize: 14 }}>What this browser tells others</div>
+          </div>
+          <span className="hint" aria-hidden="true">›</span>
+        </button>
         <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/connections')}>
           <div>
             <div style={{ fontWeight: 600 }}>Connections</div>
