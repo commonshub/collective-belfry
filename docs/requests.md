@@ -17,13 +17,37 @@ profile name is "Somebody"; a "name" that is itself a key or an address is "Some
 wrote it: never HTML. The website renders it and must escape it.
 
 **CORS.** The apex (`https://<domain>`) may call everything, with the request headers
-`Authorization, Content-Type, X-Thread-Key`. The website's previews (`https://preview.<domain>`)
+`Authorization, Content-Type, X-Thread-Key`; a page's script may read the answer's headers
+`X-Belfry-Replayed` and `Retry-After` (`Access-Control-Expose-Headers`). The website's previews (`https://preview.<domain>`)
 may call the three `GET`s only, never the comment, the edit or the reaction.
 
 **Limits.** 120 calls a minute per IP over these six endpoints (429 `too_many`). What is read
 from the relay is kept 15 seconds in the service; the list and the activity say
 `Cache-Control: public, max-age=15`, one request says `no-store` (the same address answers its
 author with more). A comment, an edit or a decision made through the belfry shows at once.
+
+**When the relay can't be read: 503 `relay`** (2026-11-21). The requests live on the groups
+relay, an event's activity on the community relay too. When one of them does not answer
+(refused, timed out, closed the question), every endpoint here answers
+`503 {"error": "relay", "message": "…"}` with `Retry-After: 5`, `Cache-Control: no-store` and
+the CORS headers: **never** a 200 with an empty list, a request without its comments or its
+reactions, "open" for a request whose labels could not be read, or 404 `none` / `unknown`
+because the channel's settings or the thread could not be read. A failed read is never kept:
+the next call asks the relay again (an answer read **before** the failure may still be served
+for its 15 seconds). A write (§3, §4, §4c) answers 503 `relay` too when the relay does not
+take the event or what it needs can't be read; nothing is posted then. The signer failing is
+not this: 503 `signer` / `unavailable`, as before; a name the register can't give is
+"Somebody", as before. Code: `retries.py`; [website-accounts.md](website-accounts.md)
+"Retries".
+
+**`client_id` on the writes** (2026-11-21): `POST …/comments`, `…/edit`, `…/react` (and
+`POST /offers`) take an optional `"client_id"` in the JSON body: 8–64 characters of
+`A-Z a-z 0-9 -` (else 422 `invalid`). The same call with the same id by the same author within
+24 hours answers the **first success again**, same status and body, with the header
+`X-Belfry-Replayed: 1`, and does nothing else (no second comment, no mail, no count towards a
+limit). While the first is still running: 409 `in_progress`. Only 2xx answers are kept: after
+an error (a 503 `relay` too) the retry runs for real. The full rule:
+[website-accounts.md](website-accounts.md) "Retries".
 
 ## 1. `GET /requests`
 
@@ -35,7 +59,7 @@ members only.
 Query: `state` = `open` | `approved` | `closed` | `all` (default `all`; `closed` covers declined
 and closed); `q` = words looked for in the title and the body as they are now (after their author's
 edits), whatever the case or the accents, at most 100 characters; `type` = one type (below:
-`enquiry` | `sponsoring` | `talk` | `meetup` | `in_kind` | `sponsored_ticket`; only the requests
+`enquiry` | `sponsoring` | `talk` | `workshop` | `meetup` | `in_kind` | `sponsored_ticket`; only the requests
 of that type, and `counts` then counts only those); `before` = a unix time (only threads made before it); `limit` = 1–100
 (default 30). Anything else (an unknown type, two types): 422 `invalid`.
 
@@ -69,13 +93,16 @@ of that type, and `counts` then counts only those); `before` = a unix time (only
   [sales.md](sales.md) §4) or the generated one, after its author's edits (§4). `edited_at`:
   when the author last edited the title or the text (unix), else `null`.
 - `type` (2026-11-21): what the request is, on every item: `enquiry` | `sponsoring` | `talk` |
-  `meetup` (plain requests: a thread that is open or closed, nothing to approve) |
+  `workshop` | `meetup` (plain requests: a thread that is open or closed, nothing to approve) |
   `in_kind` | `sponsored_ticket` (offers: they ask for a pass or a ticket, see `kind`). It is
   the `"type"` of `POST /offers` ([sales.md](sales.md) §4), kept on the offer and as the tag
   `["request-type", <type>]` on the thread's message. Threads from before types existed: an
   offer of kind `in_kind` is `in_kind`, of kind `sponsored` is `sponsored_ticket`; everything
-  else, also a thread started in the chat, is `enquiry`.
-- **A plain request** (`enquiry`, `sponsoring`, `talk`, `meetup`): `state` is `open` or
+  else, also a thread started in the chat, is `enquiry`. `workshop` is a type of its own
+  since 2026-11-21; until then a talk's shown name was "Talk or workshop" (now "Talk"):
+  threads made as `talk` stay `talk`, and an older card's line "Talk or workshop" is still
+  read as its type line (never part of `body`, kept as it is by an edit).
+- **A plain request** (`enquiry`, `sponsoring`, `talk`, `workshop`, `meetup`): `state` is `open` or
   `closed`, never anything else; `kind` is `other`; `label`, `ticket`, `ticket_title`,
   `event_link`, `event_title` and `approved_by` are `null`; **every percent field is JSON
   `null`** (`percent_asked`, `percent_approved`: present, never 0, never left out), open or
@@ -157,7 +184,8 @@ The item of §1, plus:
 
 ## 3. `POST /requests/<id or number>/comments`
 
-`{"text": "…"}` (1–8000 characters), by the thread's author only, proven as for `me`: NIP-98 by
+`{"text": "…", "client_id"?: "…"}` (`text`: 1–8000 characters; `client_id`: a retry is
+answered again, see above), by the thread's author only, proven as for `me`: NIP-98 by
 the offer's key (with the `payload` tag), or `X-Thread-Key`. By the thread's id or its number.
 The comment is posted as the web page posts it: by the author's own account when the
 thread was opened by one, else by the groups key for their address. → 201 `{"ok": true}`.
@@ -165,12 +193,15 @@ thread was opened by one, else by the groups key for their address. → 201 `{"o
 Errors: 403 `not_author` (no proof, or someone else's); 401 `unauthorized` (an `Authorization`
 that is not a valid NIP-98); 404 `unknown`; 422 `invalid` (no text, or too long); 400
 `invalid_json`; 429 `too_many` (the page's own limit: 20 comments an hour per author); 503
-`unavailable` (the signer).
+`unavailable` (the signer); 503 `relay` (the relay: nothing posted); 409 `in_progress` (the
+same `client_id`, still running).
 
 ## 4. `POST /requests/<id or number>/edit`
 
 The author changes their request, proven as for a comment (NIP-98 by the offer's key, or
 `X-Thread-Key`). Exactly one of:
+
+(Both forms take an optional `"client_id"` besides: a retry is answered again, see above.)
 
 - `{"title"?: "…", "body"?: "…"}`, at least one: the thread's title (one line, 1–120
   characters once trimmed, control characters taken out: the rule of `POST /offers`'s `title`)
@@ -186,7 +217,8 @@ event is published, and it does not count towards the limit).
 Errors: 403 `not_author` (no proof, or someone else's); 403 `not_yours` (a comment that is not
 the author's); 404 `unknown` (no such thread, no such comment under it); 422 `invalid`
 (neither or both forms, a title or text outside its rule); 409 `archived` (the channel is
-archived); 429 `too_many` (20 edits an hour per thread); 401, 400, 503 as in §3.
+archived); 429 `too_many` (20 edits an hour per thread); 401, 400, 503 (`unavailable`,
+`relay`) and 409 `in_progress` as in §3.
 
 A closed, declined or approved request can still be edited, like an issue. An approval stays;
 the organisers' console says "edited after approval" on that request's row.
@@ -207,7 +239,7 @@ not in the public answers, which keep the last version written while it was publ
 
 ## 4b. Closing a plain request
 
-A plain request (`enquiry`, `sponsoring`, `talk`, `meetup`; also a thread started in the chat)
+A plain request (`enquiry`, `sponsoring`, `talk`, `workshop`, `meetup`; also a thread started in the chat)
 is closed and reopened by the organisers: the belfry's admins, the people who decide offers.
 There is no endpoint for the website. Two ways:
 
@@ -234,7 +266,7 @@ An offer (`in_kind`, `sponsored_ticket`) is not closed this way: it is approved 
 
 ## 4c. Reactions: `POST /requests/<id or number>/react`
 
-`{"emoji": "👍", "comment"?: "<comment id>", "remove"?: true}` → 200
+`{"emoji": "👍", "comment"?: "<comment id>", "remove"?: true, "client_id"?: "…"}` → 200
 `{"reactions": [{"emoji", "count", "mine"?}]}`: the reactions of the request (or of that
 comment) as they are now, for the person who asked.
 
@@ -255,7 +287,8 @@ comment) as they are now, for the person who asked.
   (no such request, or one that is not public and not theirs); 422 `invalid`; 409 `own_key`
   (someone who holds their own key: the belfry can't sign for them; they react in the chat);
   409 `archived`; 429 `too_many` (60 reactions an hour per person; a call that changes nothing
-  never counts); 400 `invalid_json`; 503 `signer` / `unavailable`.
+  never counts); 400 `invalid_json`; 503 `signer` / `unavailable`; 503 `relay` (the relay
+  did not take it, or the request could not be read: nothing changed); 409 `in_progress`.
 - CORS: the apex only, as for a comment; never a preview.
 
 **On the relay** a reaction is what the chat's is: a kind 7 in the channel signed **as the

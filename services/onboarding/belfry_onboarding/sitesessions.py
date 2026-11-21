@@ -33,6 +33,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import retries
 from .core import Services, m2o_id
 from .holder_invites import ApiError, authenticate
 from .mailer import masked
@@ -165,7 +166,10 @@ def requests_channel(svc: Services) -> str:
 
     try:
         found = sales.requests_site(svc) if sales.own(svc) else None
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        from . import retries
+
+        retries.soft(exc)
         found = None
     return found[1]["channel"] if found else ""
 
@@ -314,6 +318,10 @@ def _profile(svc: Services, acct: dict[str, Any]) -> tuple[dict[str, Any], int]:
         try:
             found += read(svc, [{"kinds": [0], "authors": [acct["pubkey"]], "limit": 1}])
         except Exception as exc:  # noqa: BLE001 — the other relay may have it
+            from . import retries
+
+            # an API call: a relay that can't be read is 503 relay, never "no profile"
+            retries.soft(exc)
             log.info("site: a profile was not read: %s", type(exc).__name__)
     found = [e for e in found if e.get("kind") == 0 and e.get("pubkey") == acct["pubkey"]]
     if not found:
@@ -439,6 +447,9 @@ def has_ticket(svc: Services, pubkey: str) -> bool:
     try:
         held = any(not t["cancelled"] for t in tickets(svc, {"pubkey": pubkey}))
     except Exception as exc:  # noqa: BLE001 — not a ticket holder, for now
+        from . import retries
+
+        retries.soft(exc)  # an API call: 503 relay, never "holds no ticket"
         log.info("site: tickets not read: %s", type(exc).__name__)
         return False
     if len(_ticket) > 5000:
@@ -466,6 +477,8 @@ def _requests(svc: Services, acct: dict[str, Any]) -> tuple[list[dict], list[dic
 
     try:
         snap = webrequests.snapshot(svc)
+    except retries.RelayDown:
+        raise
     except ApiError:
         return [], []
     reqs, comments = [], []
@@ -502,7 +515,7 @@ def _requests(svc: Services, acct: dict[str, Any]) -> tuple[list[dict], list[dic
 
 
 def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
-    from . import guests, nostr, villagers
+    from . import guests, nostr, retries, villagers
 
     profile, _at = _profile(svc, acct)
 
@@ -514,16 +527,19 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
     try:
         mine = tickets(svc, acct)
     except Exception as exc:  # noqa: BLE001 — the rest still answers
+        retries.soft(exc)  # but a relay that can't be read: 503 relay, never "no tickets"
         log.warning("site: tickets not read: %s", type(exc).__name__)
         mine = []
     try:
         reqs, comments = _requests(svc, acct)
     except Exception as exc:  # noqa: BLE001
+        retries.soft(exc)
         log.warning("site: requests not read: %s", type(exc).__name__)
         reqs, comments = [], []
     try:
         tags = tags_of(svc, acct)
     except Exception as exc:  # noqa: BLE001
+        retries.soft(exc)
         log.warning("site: tags not read: %s", type(exc).__name__)
         tags = []
     try:
@@ -628,6 +644,7 @@ def set_tags(svc: Services, acct: dict[str, Any], tags: list[str], sign: Any) ->
         event = None if guest else _extras(svc, acct)
         have = tags_of(svc, acct) if guest else None
     except Exception as exc:  # noqa: BLE001 — never written over an event that wasn't read
+        retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     content = _extras_content(event)
     if have is None:
@@ -664,6 +681,7 @@ def set_tags(svc: Services, acct: dict[str, Any], tags: list[str], sign: Any) ->
         svc.relay.publish(new, sign)
     except Exception as exc:  # noqa: BLE001
         log.warning("site: tags not on the community relay: %s", type(exc).__name__)
+        retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     events.forget_reads()
     return True
@@ -737,20 +755,25 @@ def _set_profile(svc: Services, acct: dict[str, Any], want: dict[str, Any]) -> d
     except Exception as exc:  # noqa: BLE001
         raise ApiError(503, "signer", "The signer isn't answering: try again in a moment.") from exc
     done = 0
+    down = False  # a relay did not take it (and not the signer refusing its AUTH)
     got = followers._relay(svc)
     if got is not None:
         try:
             got[0].publish(event, sign)
             done += 1
         except Exception as exc:  # noqa: BLE001
+            down = down or retries.is_relay(exc)
             log.warning("site: profile not on the groups relay: %s", type(exc).__name__)
     if acct["role"] != "guest" and svc.relay is not None:
         try:
             svc.relay.publish(event, sign)
             done += 1
         except Exception as exc:  # noqa: BLE001
+            down = down or retries.is_relay(exc)
             log.warning("site: profile not on the community relay: %s", type(exc).__name__)
     if not done:
+        if down:
+            raise retries.RelayDown
         raise ApiError(503, "unavailable", "That did not work just now. Try again.")
     if "name" in want:
         # the name on the contact too: what the belfry calls them (mails, the members' list,
@@ -794,13 +817,18 @@ def register(app: FastAPI) -> None:
     @app.get(API + "/me")
     async def site_me(request: Request) -> JSONResponse:
         s, acct, _ = await session(request, "GET", API + "/me")
-        return JSONResponse(await run_in_threadpool(me, s, acct), headers=NO_STORE)
+        # a relay that can't be read: 503 relay, never an account with nothing in it
+        return JSONResponse(await retries.run(me, s, acct), headers=NO_STORE)
 
     @app.post(API + "/profile")
     async def site_profile(request: Request) -> JSONResponse:
         s, acct, body = await session(request, "POST", API + "/profile")
-        out = await run_in_threadpool(set_profile, s, acct, body)
-        return JSONResponse(out, headers=NO_STORE)
+        cid = retries.client_id(body)  # a retry is answered, not done twice (retries.py)
+
+        async def make() -> JSONResponse:
+            return JSONResponse(await retries.run(set_profile, s, acct, body), headers=NO_STORE)
+
+        return await retries.once(request, acct["pubkey"], cid, make)
 
 
 __all__ = ["register", "site_account", "acting", "login", "closed", "prune", "signer"]

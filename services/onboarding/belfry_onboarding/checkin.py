@@ -229,7 +229,10 @@ def is_archived(svc: Services, group: str) -> bool:
             svc,
             [{"kinds": [39000], "#d": [group]}, {"kinds": [9007, 9002], "#h": [group]}],
         )
-    except Exception:  # noqa: BLE001 — the relay not answering
+    except Exception as exc:  # noqa: BLE001 — the relay not answering
+        from . import retries
+
+        retries.soft(exc)  # the website's calls: 503 relay
         return False
     value = None
     for e in sorted(found, key=lambda e: (e.get("created_at", 0), e.get("id", ""))):

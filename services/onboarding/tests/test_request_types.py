@@ -1,7 +1,8 @@
 """Request types, closing a plain request, and reactions (docs/requests.md; sales.py,
 webrequests.py, actions.py): ``type`` on POST /offers and on every request, plain requests
-(enquiry, sponsoring, talk, meetup) that are open or closed, ``belfry:request-close`` and the
-console's Close / Reopen, kind 7 reactions counted and made as the person."""
+(enquiry, sponsoring, talk, workshop, meetup) that are open or closed,
+``belfry:request-close`` and the console's Close / Reopen, kind 7 reactions counted and made as
+the person."""
 
 # ruff: noqa: F811
 from __future__ import annotations
@@ -175,9 +176,7 @@ def test_a_plain_request_has_no_percent_no_approval_and_reads_well_in_the_chat(r
             }
         ]
         # the chat: the title in bold, the type's plain name, the text; never an id
-        assert card["content"] == (
-            "**A talk about bees**\n\n_Talk or workshop_\n\nForty minutes, with slides."
-        )
+        assert card["content"] == ("**A talk about bees**\n\n_Talk_\n\nForty minutes, with slides.")
         one = get(c, f"/requests/{card['id']}").json()
         assert (one["type"], one["kind"], one["state"]) == ("talk", "other", "open")
         assert one["title"] == "A talk about bees"
@@ -213,7 +212,7 @@ def test_a_plain_request_has_no_percent_no_approval_and_reads_well_in_the_chat(r
         )
         assert r.status_code == 200 and r.json()["changed"] is True, r.text
         edit = [e for e in relay.events if e["kind"] == 1010][-1]
-        assert edit["content"] == "**A talk about bees**\n\n_Talk or workshop_\n\nThirty minutes."
+        assert edit["content"] == "**A talk about bees**\n\n_Talk_\n\nThirty minutes."
         assert get(c, f"/requests/{card['id']}").json()["body"] == "Thirty minutes."
         # open plain requests don't use up the three that may wait for an answer
         for i in range(3):
@@ -312,7 +311,8 @@ def test_admins_close_with_the_button_and_reopen_in_the_console(reqs, world, mon
         # the console: Reopen, then Close, with the csrf and fixed messages
         signed_in(c, rsvc, world[4])
         page = c.get("/sales", headers=H).text
-        assert "Talk or workshop" in page and ">Reopen</button>" in page
+        assert "Talk" in page and "Talk or workshop" not in page
+        assert ">Reopen</button>" in page
         r = c.post("/sales/request", data={"id": fid, "do": "reopen"}, headers=H)
         assert get(c, f"/requests/{card['id']}").json()["state"] == "closed"  # no csrf: nothing
         post = {"csrf": CSRF, "id": fid}

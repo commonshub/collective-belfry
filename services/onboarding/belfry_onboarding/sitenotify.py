@@ -238,7 +238,10 @@ def _set_events(svc: Services, acct: dict[str, Any], value: str) -> None:
     except ApiError:
         raise
     except Exception as exc:  # noqa: BLE001 — nothing is stored: the switch reads as before
+        from . import retries
+
         log.warning("notifications: events not set: %s", type(exc).__name__)
+        retries.check(exc)  # the relay (whose tickets): 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     svc.odoo.set_param(_key(partner, "events"), value)
 
@@ -409,10 +412,17 @@ def register(app: FastAPI) -> None:
 
     @app.post(API)
     async def site_notifications_set(request: Request) -> JSONResponse:
+        from . import retries
+
         s, acct, body = await session(request, "POST")
-        return JSONResponse(
-            {"items": await run_in_threadpool(change, s, acct, body)}, headers=NO_STORE
-        )
+        cid = retries.client_id(body)  # a retry is answered again (retries.py)
+
+        async def make() -> JSONResponse:
+            return JSONResponse(
+                {"items": await run_in_threadpool(change, s, acct, body)}, headers=NO_STORE
+            )
+
+        return await retries.once(request, acct["pubkey"], cid, make)
 
     def page(title: str, body: str, status: int = 200) -> HTMLResponse:
         return HTMLResponse(

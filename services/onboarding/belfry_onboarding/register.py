@@ -156,6 +156,9 @@ class Register(OdooApi):
                 revoked INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS remote_apps_partner ON remote_apps (partner_id);
             CREATE INDEX IF NOT EXISTS remote_apps_client ON remote_apps (client);
+            CREATE TABLE IF NOT EXISTS retries (
+                key TEXT PRIMARY KEY, at INTEGER NOT NULL, status INTEGER NOT NULL,
+                body TEXT NOT NULL);
             """
         )
         self._push_one_row_per_identity()
@@ -2455,6 +2458,24 @@ class Register(OdooApi):
                         "DELETE FROM push_devices WHERE pubkey = ?", (pubkey,)
                     ).rowcount
         return n
+
+    # ── answers kept for a client's retry (retries.py, ``client_id``) ────────────────────────
+    def retry_get(self, key: str, since: int) -> tuple[int, str] | None:
+        """(status, JSON body) of the first answer kept under KEY after SINCE, else None."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT status, body FROM retries WHERE key = ? AND at > ?", (key, int(since))
+            ).fetchone()
+        return (int(row[0]), str(row[1])) if row else None
+
+    def retry_put(self, key: str, at: int, status: int, body: str, before: int) -> None:
+        """Keep an answer; rows from BEFORE or earlier go."""
+        with self._lock:
+            self._db.execute("DELETE FROM retries WHERE at <= ?", (int(before),))
+            self._db.execute(
+                "INSERT OR REPLACE INTO retries (key, at, status, body) VALUES (?, ?, ?, ?)",
+                (key, int(at), int(status), body),
+            )
 
     # ── website sessions (sitesessions.py): a browser key registered on an account ──────────
     SITE_FIELDS = ("key", "partner_id", "label", "created", "used")

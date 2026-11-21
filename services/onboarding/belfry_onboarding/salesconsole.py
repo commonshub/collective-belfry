@@ -356,7 +356,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
     for f in sales.store(svc).offers()[:100]:
         plain = sales.plain_offer(f)
         if plain and f["state"] == "open":
-            # a plain request (an enquiry, sponsoring, a talk, a meetup): open or closed
+            # a plain request (an enquiry, sponsoring, a talk, a workshop, a meetup): open or closed
             if states is None:
                 from . import webthreads
 

@@ -326,7 +326,8 @@ belfry's **requests channel**: a channel whose web page is on and public (webthr
 answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 
 **Types** (2026-11-21; the wire is in [requests.md](requests.md) §1, §4b, §4c). `POST /offers`
-takes `"type"`: `enquiry` | `sponsoring` | `talk` | `meetup` | `in_kind` | `sponsored_ticket`;
+takes `"type"`: `enquiry` | `sponsoring` | `talk` | `workshop` | `meetup` | `in_kind` |
+`sponsored_ticket` (`workshop` since 2026-11-21, a plain type exactly like `talk`);
 anything else 422 `invalid`. Left out: as before, the type follows `kind` (`in_kind`, or
 `sponsored_ticket` for `sponsored`). The answers of `POST /offers` and `GET /offers/<id>` carry
 `type`; the thread's message carries `["request-type", <type>]`; the record keeps `type`.
@@ -334,7 +335,7 @@ anything else 422 `invalid`. Left out: as before, the type follows `kind` (`in_k
 - `in_kind`, `sponsored_ticket`: an offer as described below. `kind` may be left out (it
   follows the type) and must agree with it when sent; `label` only with `in_kind` (with
   `sponsored_ticket`: 422 `invalid`).
-- `enquiry`, `sponsoring`, `talk`, `meetup`: a **plain request**. Body: `name`, `email`,
+- `enquiry`, `sponsoring`, `talk`, `workshop`, `meetup`: a **plain request**. Body: `name`, `email`,
   `title`, `offer` (the text, 1–2000 characters), `public_name`, `days`?, `erase_after_event`?;
   `product`, `ticket`, `percent`, `kind` and `label` must be absent (or null), else 422
   `invalid`. Same confirmation by mail (or none for a website session), same limits, but a
@@ -344,9 +345,21 @@ anything else 422 `invalid`. Left out: as before, the type follows `kind` (`in_k
   then `open` | `closed`. In the answers `kind` and `product` are null and **`percent` is
   null** (present, never 0). Without a `title` the thread is titled "<name>: <the type's
   name>". In the chat the card reads: the title in bold, a line with the type's plain name
-  ("General enquiry", "Sponsoring", "Talk or workshop", "Meetup"), then the text; that line is
-  not part of `body` in the API and stays through the author's edits. Organisers close and
+  ("General enquiry", "Sponsoring", "Talk", "Workshop", "Meetup"), then the text; that line is
+  not part of `body` in the API and stays through the author's edits. (A talk's line read
+  "Talk or workshop" until 2026-11-21: cards written then keep it, it is still read as the
+  type line, and those threads stay type `talk`.) Organisers close and
   reopen it in the console (Sales → the requests' list) or with the card's button.
+
+**Retries and the relay** (2026-11-21; [website-accounts.md](website-accounts.md) "Retries").
+`POST /offers` takes an optional `"client_id"` (8–64 of `A-Z a-z 0-9 -`, else 422 `invalid`):
+the same id again within 24 hours, signed by the same account (with no account: the same
+signing key), answers the first 201 again with `X-Belfry-Replayed: 1`: no second request, no
+second mail, nothing counted; 409 `in_progress` while the first still runs; an error is never
+kept. The id is not stored on the offer and is in no event. When the groups relay can't be
+read or does not take the thread: 503 `relay` with `Retry-After: 5` (before 2026-11-21 an
+unreadable relay could read as 409 `no_requests_channel`). A try that fails at posting has
+still counted towards the three requests a day of its key and its address.
 
 `POST /offers` — NIP-98 (any key). `{"product" | "ticket", "name", "email", "offer": "…",
 "percent", "title"?, "kind"?, "erase_after_event"?, "public_name"?, "label"?, "days"?}` (exactly one of

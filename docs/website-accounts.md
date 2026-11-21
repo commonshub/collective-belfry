@@ -161,12 +161,15 @@ shows them for a member (they set them again in the chat or on the website).
 - `comments`: the comments they signed, newest first (at most 100), as they read now.
 - `sessions`: most recently used first.
 
-401 `no_session`.
+401 `no_session`. 503 `relay` when a relay can't be read ("Retries" below): never an account
+with empty `tickets`, `requests`, `comments` or `tags`, or without its name and picture,
+because the relay did not answer.
 
 ### `POST /site/profile`
 
 `{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null, "tags"?: ["…"],
-"slug"?: "…", "visibility"?: "public" | "villagers"}`, at least one, nothing else. `slug` and
+"slug"?: "…", "visibility"?: "public" | "villagers"}`, at least one, nothing else (but an
+optional `"client_id"`: a retry is answered again, "Retries" below). `slug` and
 `visibility`: "Villagers: profile pages" below. `name`: 1–80 characters, one line, not a key or an e-mail address.
 `about`: at most 1000 characters. `picture`: an `https://` address, at most 500 characters.
 `null` or `""` takes `about` / `picture` out.
@@ -181,7 +184,7 @@ back as `GET /site/me` gave it, so the list can be edited without losing it.
   community relay and publishes it again **through the signer** with only `tags` in its
   content changed: `share`, `place`, any other field and the event's own tags are kept. No
   event yet: one with `{"tags": […]}` and the `d` tag. When that relay can't be read: 503
-  `unavailable`, nothing written. The chat shows the new list at its next sync.
+  `relay`, nothing written. The chat shows the new list at its next sync.
 - **Guest:** saved on the contact (see `tags` above).
 
 The server publishes the account's kind 0 **through the signer**, the current one with these
@@ -192,8 +195,9 @@ read from, and the only relay a guest is on) and, for a member, on the community
 false` when nothing changes (no event). `changed` is true when the tags or the profile changed.
 
 Errors: 422 `invalid`; 409 `own_key` (they hold their own key: the belfry can't sign for
-them; also for `tags` alone, guest or member); 429 `too_many` (10 changes an hour per account); 503 `signer` / `unavailable`; 401
-`no_session`.
+them; also for `tags` alone, guest or member); 429 `too_many` (10 changes an hour per account); 503 `signer` / `unavailable`; 503 `relay`
+(the profile could not be read first, or no relay took the new one; a member's profile that
+reached one of the two relays is a success); 409 `in_progress`; 401 `no_session`.
 
 The site treats the name "Guest" as "ask for a name": after `{"name"}` what they wrote before
 reads under the new name (docs/requests.md: names come from the profile; a guest with no
@@ -381,10 +385,12 @@ shows what it gets, in this order, and nothing else. An account with no proven a
 
 ### `POST /site/notifications`
 
-`{"<id>": "<choice>", …}`: one or more of the ids the account has. → the same shape, with the
+`{"<id>": "<choice>", …}`: one or more of the ids the account has (and an optional
+`"client_id"`: a retry is answered again, "Retries" below). → the same shape, with the
 new values. 422 `invalid` for an empty body, an id the account doesn't have (also one that
-exists for others) or a choice the id doesn't take: nothing is changed then. 503
-`unavailable` (`events`, when the relay or the register can't be reached; nothing changed).
+exists for others) or a choice the id doesn't take: nothing is changed then. 503 `relay`
+(`events`, when the relay can't say which tickets they hold) or 503 `unavailable` (the
+register); nothing changed then.
 401 `no_session`.
 
 ### What each one is
@@ -456,7 +462,8 @@ Signed by a site session, with no `X-Thread-Key`:
   kind 1111 is signed with **their own key** through the signer (an older card's author
   comments the way their card's own link does, so it reads as the author's). Errors: 403
   `not_allowed`; 404 `unknown` (also a request that is not public and not theirs); 422
-  `invalid`; 409 `own_key`; 409 `archived`; 429 `too_many` (20 an hour per account); 503.
+  `invalid`; 409 `own_key`; 409 `archived`; 429 `too_many` (20 an hour per account); 503
+  `signer` / `unavailable` / `relay`.
 - `POST /requests/<id or number>/edit`: their own request: `{"title"?, "body"?}` or
   `{"comment", "text"}` as its author. Someone else's request: only `{"comment", "text"}` for a
   comment they signed (403 `not_author` for anything else, 403 `not_yours` for a comment that
@@ -466,6 +473,9 @@ Signed by a site session, with no `X-Thread-Key`:
   `{"reactions": [...]}`: an emoji on the request or on a comment, a kind 7 signed with
   **their own key** through the signer, by anyone who may comment (docs/requests.md §4c).
   `reactions` on every request and comment; `"mine": true` on theirs in signed reads.
+
+The three `POST`s take an optional `"client_id"` (a retry is answered again) and every
+endpoint here answers 503 `relay` when the relay can't be read: "Retries" below.
 
 Unsigned, or signed by the offer's key, or with `X-Thread-Key`: everything is as it was (a
 reaction needs an account: 403 `not_allowed` for a thread key alone).
@@ -483,8 +493,9 @@ sees them):
 - **`POST /offers`** → 201 with today's fields and `"state": "open"`, `url` and `my_url`:
   no `confirm` state and no confirmation mail; the thread is posted at once, **by the
   person's own key** (as their confirmation would have posted it). The "Your thread: …" mail
-  with their own link is still sent. More errors: 409 `own_key`, 503 `unavailable`, and the
-  thread's limits as 429 `too_many`.
+  with their own link is still sent. More errors: 409 `own_key`, 503 `unavailable`, 503
+  `relay` (the relay did not take the thread: nothing posted), and the thread's limits as
+  429 `too_many`. Optional `"client_id"`: a retry is answered again ("Retries" below).
 - **`POST /checkout`** → today's order shape. The order, the pass or the ticket goes on the
   account: no new account, no `confirm` state (a free product opens at once), and **never a
   `bunker_url`**, in this answer or in `GET /checkout/<order>`.
@@ -522,8 +533,10 @@ list, or a 9000 not followed by a 9001); its creator and co-hosts; an admin of t
 site session of an admin too: this is the one place where it counts). Everyone else: 403
 `not_in` (a key that is no account's and no session's, an agent's key, a member who is not in
 the event). Unsigned: 401 `unauthorized`. No such event: 404 `unknown`. 409 `unsupported`
-without the belfry's own register. 503 `unavailable` when a relay does not answer. Every
-answer is `Cache-Control: no-store`.
+without the belfry's own register. 503 `relay` (with `Retry-After: 5`) when a relay does not
+answer: never an empty conversation, a list of participants without the people the relay
+would have named, or a "Somebody" for a profile that could not be read ("Retries" below).
+Every answer is `Cache-Control: no-store`.
 
 **A person** is always exactly `{"name", "picture", "slug", "role"}`:
 
@@ -572,7 +585,9 @@ theirs: a text that spells out an address is given as written.
 
 ### `POST /events/<link>/chat`
 
-`{"text", "images"?, "reply_to"?}` → 201, the message as above.
+`{"text", "images"?, "reply_to"?, "client_id"?}` → 201, the message as above. With a
+`client_id` a retry answers the first 201 again (the same message, the same `id`) with
+`X-Belfry-Replayed: 1` and posts nothing ("Retries" below).
 
 - `text`: 1–4000 characters after trimming; may be empty when there are images.
 - `images`: up to 6 addresses `https://<the belfry's Blossom>/<64 hex>[.jpg|.jpeg|.png|.gif|
@@ -589,7 +604,8 @@ same one unless that is itself a reply: the reply then joins its thread).
 
 Errors: 422 `invalid`; 403 `not_in` (also for someone who is only reading: they join first);
 409 `archived`; 409 `own_key` (they hold their own key: they write in the chat); 503 `signer`;
-429 `too_many` (30 an hour per account); 503 `unavailable` (the relay did not take it).
+429 `too_many` (30 an hour per account); 503 `relay` (the relay did not take it, or the
+conversation could not be read: nothing posted); 409 `in_progress`.
 There is no edit and no delete here.
 
 ### `GET /events/<link>/photos?before=<unix>&limit=<1–100, default 60>`
@@ -618,9 +634,94 @@ seconds per group, at most the newest 2000 messages; a message posted here, and 
 belfry publishes, empties it. Names, pictures and slugs are kept 60 seconds (a profile changed
 through `POST /site/profile` shows at once). Who may read is asked again each time.
 
+## 6c. Retries
+
+Two rules for a website whose visitors are on bad connections (2026-11-21; code:
+`retries.py`).
+
+### `client_id`: a write repeated is answered, not done twice
+
+An optional string in the JSON body of:
+
+| | |
+|---|---|
+| `POST /requests/<id or number>/comments` | docs/requests.md §3 |
+| `POST /requests/<id or number>/react` | §4c |
+| `POST /requests/<id or number>/edit` | §4 |
+| `POST /events/<link>/chat` | §6b above |
+| `POST /site/profile` | §2 |
+| `POST /site/notifications` | §3 |
+| `POST /offers` | docs/sales.md §4 |
+
+- **Format**: 8–64 characters of `A-Z`, `a-z`, `0-9` and `-` (a UUID fits). Anything else:
+  422 `invalid`, nothing done. `null` or absent: no client id, the call is what it always was.
+- **Whose retry**: the account the call acts as (a site session's account, or the account
+  whose own key signed); for `POST /offers` signed by a key with no account, that signing key;
+  for a request's author with no account who proves themselves with `X-Thread-Key`, that
+  thread key. The scope is that, **the call's method and path** (so the same id on another
+  request's comments, or on another endpoint, is another call) and the id.
+- **A repeat within 24 hours** answers the **first success again**: the same status code and
+  the same JSON body, with the response header **`X-Belfry-Replayed: 1`**, and does nothing
+  else: no event, no mail, nothing counted towards the hourly limits of comments, edits,
+  reactions, messages, profile changes or requests. (The 120 calls a minute per IP of the
+  requests endpoints count every call, a replay too.) **Bodies are not compared**: a
+  different body under the same id still gets the first answer. The client makes one id per
+  thing the person did, and reuses it only to retry that thing.
+- **While the first is still running**: 409 `{"error": "in_progress"}`. Ask again a moment
+  later: the answer is then the first one's.
+- **Only 2xx answers are remembered.** After an error (a 4xx, a 503 `relay`, a 503 `signer`)
+  the same id runs for real.
+- **Authentication comes first**: a replay needs a valid NIP-98 signature by a key of the same
+  account (or the same thread key), like the first call; unsigned, it is whatever the endpoint
+  answers unsigned.
+- **Kept** in the belfry's own register (table `retries`: a hash of the scope, the status, the
+  body, when), so it survives a restart of the service; rows older than 24 hours go when the
+  next one is written. With REGISTER=odoo (no table of ours) it is kept in the service's
+  memory: a restart forgets it. "Still running" is known per process either way. The id is in
+  no event, on no offer and in no other record.
+- **CORS**: `Access-Control-Expose-Headers: X-Belfry-Replayed, Retry-After` on every
+  `/api/v1/*` answer to an allowed origin, so a page's script can read both.
+
+### A relay that can't be read: 503 `relay`, never an empty 200
+
+What these endpoints answer is read from the belfry's relays (the groups relay: requests,
+event groups, guests' profiles; the community relay: events, tickets, members' profiles).
+When a relay does not answer (connection refused, a timeout, the relay closing the question,
+no EOSE), these answer
+
+`503 {"error": "relay", "message": "…"}` with `Retry-After: 5`, `Cache-Control: no-store` and
+the CORS headers:
+
+`GET /requests`, `GET /requests/<id or number>`, `GET /events`, `GET /events/<link>`,
+`GET /events/<link>/chat`, `/photos`, `/links`, `/participants`, `GET /events/<link>/activity`,
+`GET /villagers`, `GET /villagers/<slug>`, `GET /site/me`
+
+and the seven writes above, when the relay does not take the event or what the write needs
+can't be read (nothing is written then, and nothing is remembered under its `client_id`).
+
+- **Never a 200 that only looks complete**: no empty list, no request without its reactions
+  or its state, no profile without its name, no event without its hosts' names or its
+  tickets' sale fields, no 404 (`none`, `unknown`, `not_found`) or 403 (`villagers_only`,
+  `not_in`) for something that merely could not be read. "The relay answered: there is
+  nothing" is still a 200 (or the 404 it always was).
+- **One relay down is enough** when the answer needs both (an event's page needs the
+  community relay for the event and the groups relay for who is in; a profile is looked for
+  on both).
+- **A failure is never kept.** The next call asks the relay again. An answer read before the
+  failure is still served for its normal time (the requests 15 s, a conversation 10 s, names
+  60 s, the public list of villagers 60 s, a shared read 2 s).
+- **Not the relay**: the signer not answering is 503 `signer` on a write, and on a read it
+  degrades as before (a username the signer can't give: the profile is looked for among the
+  guests; a name the register can't give: "Somebody"). The register failing is 503
+  `unavailable` or a degraded field, as before.
+- Other `/api/v1/*` endpoints are as they were (a relay's timeout there is 503 `unavailable`
+  with `Retry-After: 2`, or the endpoint's own code).
+
 ## 7. CORS
 
 No cookies anywhere; nothing is ever answered with `Access-Control-Allow-Credentials`.
+Allowed request headers: `Authorization, Content-Type, X-Thread-Key`; exposed response
+headers: `X-Belfry-Replayed, Retry-After`.
 
 - The apex `https://<domain>`: every `/api/v1/*` path, as before.
 - `https://preview.<domain>` (anyone's draft site): what it could call before (the sales
@@ -689,4 +790,10 @@ endpoint not named in this document as the account.
   is taken as its author's only when the message it names was read too (the newest 2000);
   the relay is not asked whether it stores a message signed this way for a guest (zooid lets a
   guest write in their groups). Not run against a live relay or signer.
+- Retries (§6c): what counts as "the relay did not answer" is decided by the kind of failure
+  (a refused or unreachable connection, a timeout, the websocket closing, the relay's own
+  CLOSED / no EOSE / no OK); a relay that answers garbage, or one that answers EOSE without
+  the events it has, is not caught. `in_progress` is known to one process only. A request
+  (`POST /offers`) that fails at posting has already counted towards its key's and its
+  address's three a day. None of it ran against a live relay that was really down.
 - Nothing here ran against a live signer, relay, Stripe or Odoo.

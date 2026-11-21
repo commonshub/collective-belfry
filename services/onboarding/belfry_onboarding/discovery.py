@@ -309,6 +309,9 @@ def cors_headers(origin: str) -> dict[str, str]:
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Methods": "GET, POST, PUT",
         "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Thread-Key",
+        # what a page's script may read of an answer: a replayed write (retries.py), and when
+        # to ask again after a 503
+        "Access-Control-Expose-Headers": "X-Belfry-Replayed, Retry-After",
         "Access-Control-Max-Age": "600",
         "Vary": "Origin",
     }

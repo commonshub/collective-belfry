@@ -142,18 +142,29 @@ def _groups_pubkey(svc: Services) -> str:
 
 def sites(svc: Services, fresh: bool = False) -> dict[str, dict[str, Any]]:
     """slug → {"channel", "list", "name", "about"}: the channels whose page is on."""
-    if not fresh and time.monotonic() - _cache["at"] < TTL:
+    from . import retries
+
+    # what was kept after a failed read is the last known settings, not an answer: an API
+    # call (retries.strictly) never takes it for one, it asks the relay again
+    if (
+        not fresh
+        and time.monotonic() - _cache["at"] < TTL
+        and (_cache.get("ok", True) or not retries.strict())
+    ):
         return _cache["sites"]
     out: dict[str, dict[str, Any]] = {}
+    ok = True
     got = _relay(svc)
     if got is not None:
         try:
             out = _read_sites(svc, *got)
         except Exception as exc:  # noqa: BLE001 — the last known ones stay
+            retries.soft(exc)  # an API call answers 503 relay, and nothing is kept
             log.warning("webthreads: settings not read: %s", exc)
             out = _cache["sites"]
+            ok = False
     with _lock:
-        _cache.update(at=time.monotonic(), sites=out)
+        _cache.update(at=time.monotonic(), sites=out, ok=ok)
     return out
 
 
@@ -503,24 +514,36 @@ def _title(e: dict[str, Any]) -> str:
     return (text[:100] + "…") if len(text) > 100 else (text or "(no title)")
 
 
-def _type_line(e: dict[str, Any]) -> str:
+def _type_line(e: dict[str, Any], text: str | None = None) -> str:
     """The line a plain request's card carries under its title for the chat: the type's plain
     name ("_General enquiry_", sales.type_line), by the message's ``request-type`` tag; ""
-    for any other message. It is no part of the text its author wrote."""
+    for any other message. It is no part of the text its author wrote. A card written under an
+    older name of its type ("_Talk or workshop_") keeps that line: the one TEXT (the content
+    after its title) starts with."""
     named = _tag(e, "request-type")
     if not named:
         return ""
     from . import sales
 
-    return sales.type_line(named)
+    lines = sales.type_lines(named)
+    if not lines:
+        return ""
+    if text is None:
+        text = _untitled(e)
+    return next((ln for ln in lines if text.startswith(ln)), lines[0])
 
 
-def _body(e: dict[str, Any]) -> str:
+def _untitled(e: dict[str, Any]) -> str:
     text = e.get("content") or ""
     subject = _tag(e, "subject")
     if subject and text.startswith(f"**{subject}**"):
         text = text[len(subject) + 4 :].lstrip()
-    line = _type_line(e)
+    return text
+
+
+def _body(e: dict[str, Any]) -> str:
+    text = _untitled(e)
+    line = _type_line(e, text)
     if line and text.startswith(line):
         text = text[len(line) :].lstrip()
     return text
@@ -599,7 +622,10 @@ def _labels(svc: Services, channel: str) -> dict[str, list[tuple[int, str, str]]
     relay, sign = got
     try:
         evs = relay.query([{"kinds": [1985], "#h": [channel], "limit": 2000}], sign) or []
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        from . import retries
+
+        retries.soft(exc)  # an API call: 503 relay, never "every request is open"
         return {}
     out: dict[str, list[tuple[int, str, str]]] = {}
     gk = _groups_pubkey(svc)
@@ -993,7 +1019,10 @@ def post_thread(
             svc, site["channel"], f"**{title[:200]}**\n\n{text[:8000]}", tags, int(partner), TAG
         )
     except Exception as exc:  # noqa: BLE001 — the signer or the relay
+        from . import retries
+
         log.warning("webthreads: a thread from the website was not posted: %s", type(exc).__name__)
+        retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     k = thread_key(svc, event["id"], event["pubkey"])
     url = thread_url(svc, slug, site, event["id"])

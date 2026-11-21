@@ -365,7 +365,10 @@ def find(svc: Services, d: str, offer: bool = False) -> Wanted:
     try:
         w = _load(svc, d.strip())
     except Exception as exc:  # noqa: BLE001 — the relay
+        from . import retries
+
         log.warning("ticket sales: the event could not be read: %s", type(exc).__name__)
+        retries.soft(exc)  # POST /offers: 503 relay
         raise ApiError(503, "unavailable", "The event can't be read just now.") from exc
     if w is None:
         raise ApiError(404, "unknown_ticket", "No such ticket.")

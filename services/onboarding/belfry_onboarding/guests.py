@@ -164,7 +164,10 @@ def _closed(svc: Services, channel: str) -> bool | None:
     relay, sign = got
     try:
         found = relay.query([{"kinds": [39000], "#d": [channel], "limit": 1}], sign)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        from . import retries
+
+        retries.soft(exc)  # an API call that must not guess: 503 relay
         return None
     if not found:
         return None
@@ -762,7 +765,10 @@ def _in_channel(svc: Services, channel: str, pubkey: str) -> bool:
     relay, sign = got
     try:
         found = relay.query([{"kinds": [39002], "#d": [channel], "limit": 1}], sign)
-    except Exception:  # noqa: BLE001 — unknown: joining again does no harm
+    except Exception as exc:  # noqa: BLE001 — unknown: joining again does no harm
+        from . import retries
+
+        retries.soft(exc)
         return False
     return any(t[:2] == ["p", pubkey] for e in found[:1] for t in e.get("tags", []))
 

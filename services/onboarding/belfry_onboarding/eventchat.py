@@ -28,9 +28,9 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from starlette.concurrency import run_in_threadpool
 
 from . import relay as _relay_mod
+from . import retries
 from .core import Services
 from .holder_invites import ApiError, authenticate
 
@@ -313,6 +313,8 @@ def people(svc: Services, keys: set[str]) -> dict[str, dict[str, Any]]:
             try:
                 found += read(svc, [{"kinds": [0], "authors": missing[at : at + 200]}])
             except Exception as exc:  # noqa: BLE001 — the other relay may have it
+                # a relay that can't be read: 503 relay (and no "Somebody" kept for a minute)
+                retries.soft(exc)
                 log.info("eventchat: profiles not read: %s", type(exc).__name__)
     profiles = villagers._latest(found, 0)
     for k in missing:
@@ -623,6 +625,7 @@ def post(room: Room, data: dict[str, Any]) -> dict[str, Any]:
         raise
     except Exception as exc:  # noqa: BLE001 — the signer or the relay
         log.warning("eventchat: a message was not posted: %s", type(exc).__name__)
+        retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     forget()
     return room.message(_parse(svc, event))
@@ -666,10 +669,11 @@ def register(app: FastAPI) -> None:
 
     async def run(fn: Any, *args: Any) -> Any:
         try:
-            return await run_in_threadpool(fn, *args)
+            # a relay that can't be read or written: 503 relay (retries.py)
+            return await retries.run(fn, *args)
         except ApiError:
             raise
-        except Exception as exc:  # noqa: BLE001 — a relay, the signer: never a trace
+        except Exception as exc:  # noqa: BLE001 — the signer, the register: never a trace
             log.warning("eventchat: %s failed: %s", fn.__name__, type(exc).__name__, exc_info=True)
             raise ApiError(503, "unavailable", "That can't be read just now. Try again.") from exc
 
@@ -708,7 +712,12 @@ def register(app: FastAPI) -> None:
             data = None
         if not isinstance(data, dict):
             raise ApiError(400, "invalid_json", "Send a JSON object.")
-        return JSONResponse(await run(post, room, data), status_code=201, headers=NO_STORE)
+        cid = retries.client_id(data)  # a retry is answered, not posted twice (retries.py)
+
+        async def make() -> JSONResponse:
+            return JSONResponse(await run(post, room, data), status_code=201, headers=NO_STORE)
+
+        return await retries.once(request, room.acct["pubkey"], cid, make)
 
     @app.get(API + "/{link}/photos")
     async def event_photos(request: Request, link: str) -> JSONResponse:

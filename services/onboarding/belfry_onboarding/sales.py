@@ -2689,7 +2689,10 @@ def requests_site(svc: Services) -> tuple[str, dict[str, Any]] | None:
         return None
     try:
         sites = webthreads.sites(svc)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        from . import retries
+
+        retries.soft(exc)  # an API call: 503 relay, never "this belfry has no requests"
         return None
     for slug, site in sites.items():
         if site["channel"] == channel and site.get("list") == "public":
@@ -2717,16 +2720,20 @@ OFFER_KINDS = ("in_kind", "sponsored")
 # What a request is (docs/requests.md, 2026-11-21). The last two ask for a pass or a ticket
 # (an offer: percent, approval, code); the others are plain requests: a thread that is open or
 # closed, nothing to approve.
-PLAIN_TYPES = ("enquiry", "sponsoring", "talk", "meetup")
+PLAIN_TYPES = ("enquiry", "sponsoring", "talk", "workshop", "meetup")
 REQUEST_TYPES = (*PLAIN_TYPES, "in_kind", "sponsored_ticket")
 TYPE_NAMES = {
     "enquiry": "General enquiry",
     "sponsoring": "Sponsoring",
-    "talk": "Talk or workshop",
+    "talk": "Talk",
+    "workshop": "Workshop",
     "meetup": "Meetup",
     "in_kind": "Offer in kind",
     "sponsored_ticket": "Sponsored ticket",
 }
+# Names a type had before, still on older cards' type line (a talk was "Talk or workshop"
+# until workshop became its own type, 2026-11-21): read, never written.
+OLD_TYPE_NAMES = {"talk": ("Talk or workshop",)}
 TYPE_TAG = "request-type"  # on the thread's message: the type survives without the register
 CLOSE_ACTION = "belfry:request-close"
 
@@ -2744,7 +2751,7 @@ def offer_type(f: dict[str, Any]) -> str:
 
 
 def plain_offer(f: dict[str, Any] | None) -> bool:
-    """A plain request (an enquiry, sponsoring, a talk, a meetup): nothing to approve."""
+    """A plain request (enquiry, sponsoring, talk, workshop, meetup): nothing to approve."""
     return bool(f) and offer_type(f) in PLAIN_TYPES
 
 
@@ -2768,6 +2775,13 @@ def message_type(e: dict[str, Any], f: dict[str, Any] | None = None) -> str:
 def type_line(rtype: str) -> str:
     """The line under a plain request's title in the chat: the type's plain name."""
     return f"_{TYPE_NAMES[rtype]}_" if rtype in PLAIN_TYPES else ""
+
+
+def type_lines(rtype: str) -> tuple[str, ...]:
+    """Every line a card of that type may carry: the one written now, then the older ones."""
+    if rtype not in PLAIN_TYPES:
+        return ()
+    return (type_line(rtype), *(f"_{n}_" for n in OLD_TYPE_NAMES.get(rtype, ())))
 
 
 def offer_what(f: dict[str, Any]) -> str:
@@ -3313,8 +3327,8 @@ def close_request(svc: Services, channel: str, root_id: str, closed: bool, by: s
 
 def closable(svc: Services, message: dict[str, Any]) -> str:
     """The requests channel when MESSAGE is a plain request's opening message there (one that
-    asks for no pass: an enquiry, sponsoring, a talk, a meetup, or a thread started in the
-    chat), else ""."""
+    asks for no pass: an enquiry, sponsoring, a talk, a workshop, a meetup, or a thread started
+    in the chat), else ""."""
     found = requests_site(svc) if own(svc) else None
     if found is None or message.get("kind") != 9:
         return ""
@@ -3500,9 +3514,19 @@ def register(app: FastAPI) -> None:
 
     @app.post(API + "/offers")
     async def api_offer(request: Request) -> JSONResponse:
+        from . import retries
+
         s, key, data, site = await _buyer(request)
-        f = await run_in_threadpool(make_offer, s, key, data, client_ip(request), site)
-        return JSONResponse(offer_answer(s, f, site is not None), status_code=201, headers=NO_STORE)
+        cid = retries.client_id(data)  # a retry is answered, not posted twice (retries.py)
+
+        async def make() -> JSONResponse:
+            # a relay that can't be read or written is 503 relay (never "no requests here")
+            f = await retries.run(make_offer, s, key, data, client_ip(request), site)
+            return JSONResponse(
+                offer_answer(s, f, site is not None), status_code=201, headers=NO_STORE
+            )
+
+        return await retries.once(request, key, cid, make)
 
     @app.get(API + "/offers/{fid}")
     async def api_offer_get(fid: str, request: Request) -> JSONResponse:

@@ -35,7 +35,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import events, sales, webthreads
+from . import events, retries, sales, webthreads
 from .core import Services
 from .places import fold
 
@@ -216,6 +216,7 @@ def _reactions(svc: Services, channel: str) -> dict[str, list[dict[str, Any]]]:
     try:
         evs = relay.query([{"kinds": [7, 5], "#h": [channel], "limit": 5000}], sign) or []
     except Exception as exc:  # noqa: BLE001 — the requests read without their reactions
+        retries.soft(exc)  # an API call: 503 relay, never "no reactions"
         log.warning("webrequests: reactions not read: %s", type(exc).__name__)
         return {}
     gone = {
@@ -355,7 +356,8 @@ def _asked(svc: Services, f: dict[str, Any] | None) -> dict[str, Any]:
 
     try:
         link = ticketsales.link(svc, f["event"])
-    except Exception:  # noqa: BLE001 — the event's own id opens it too
+    except Exception as exc:  # noqa: BLE001 — the event's own id opens it too
+        retries.soft(exc)
         link = f.get("event")
     return {
         "ticket": f["ticket"],
@@ -382,7 +384,7 @@ def item(
         "id": root["id"],
         "number": t["number"],
         "title": webthreads._title(root),
-        # what the request is: enquiry, sponsoring, talk, meetup, in_kind, sponsored_ticket
+        # what the request is (sales.REQUEST_TYPES): enquiry, talk, workshop, in_kind…
         "type": sales.message_type(t["root"], f),
         # an offer says which it is: in kind, or a sponsored pass asked for (sales.OFFER_KINDS)
         "kind": sales.offer_kind(asks) if asks else "other",
@@ -591,7 +593,8 @@ def may_comment(svc: Services, snap: dict[str, Any], acct: dict[str, Any] | None
         return False
     try:
         return sitesessions.has_channel(svc, acct, snap["site"]["channel"])
-    except Exception:  # noqa: BLE001 — the relay can't say: no
+    except Exception as exc:  # noqa: BLE001 — the relay can't say: no
+        retries.soft(exc)  # an API call: 503 relay, never "you may not comment"
         return False
 
 
@@ -699,6 +702,7 @@ def _site_comment(
         got = webthreads.add_reply(svc, snap["site"], t["root"]["id"], text, viewer["pubkey"], sign)
     except Exception as exc:  # noqa: BLE001 — the signer or the relay
         log.warning("webrequests: a comment was not posted: %s", type(exc).__name__)
+        retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     if got != "ok":
         raise ApiError(404, "unknown", "No such request.")
@@ -922,6 +926,7 @@ def react(
         relay.publish(event, sign)
     except Exception as exc:  # noqa: BLE001 — the signer or the relay
         log.warning("webrequests: a reaction was not posted: %s", type(exc).__name__)
+        retries.check(exc)  # the relay: 503 relay
         raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
     forget()
     if remove:
@@ -1073,6 +1078,7 @@ def activity(
         ev, _moved = events.resolve(svc, link)
     except Exception as exc:  # noqa: BLE001 — the relay
         log.warning("webrequests: the event could not be read: %s", type(exc).__name__)
+        retries.check(exc)  # 503 relay
         raise ApiError(503, "unavailable", "The event can't be read just now.") from exc
     # only a public event has a public activity: members-only and by-link events answer as
     # an event that does not exist
@@ -1119,11 +1125,13 @@ def _allow(request: Request) -> None:
 
 
 async def _run(fn: Any, *args: Any) -> Any:
-    """FN in a thread; whatever goes wrong with the relay is 503, never a trace."""
+    """FN in a thread. A relay that can't be read or written is 503 ``relay`` (retries.py:
+    never an empty answer); anything else that goes wrong is 503 ``unavailable``, never a
+    trace."""
     from .holder_invites import ApiError
 
     try:
-        return await run_in_threadpool(fn, *args)
+        return await retries.run(fn, *args)
     except ApiError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -1202,29 +1210,49 @@ def register(app: FastAPI) -> None:
             raise ApiError(400, "invalid_json", "Send a JSON object.")
         return s, signer, request.headers.get("x-thread-key") or "", data
 
+    def _retry(signer: str | None, key: str, data: dict[str, Any]) -> tuple[str, str | None]:
+        """(whose retry this is, the body's ``client_id`` taken out of it): the account the
+        call acts as; for an author with no account, the thread's own key they hold. With
+        neither there is nobody to remember an answer for."""
+        cid = retries.client_id(data)
+        who = signer or (f"thread-key:{key}" if KEY_RE.match(key) else "")
+        return who, (cid if who else None)
+
     @app.post(API + "/requests/{ref}/comments")
     async def requests_comment(request: Request, ref: str) -> JSONResponse:
         _allow(request)
         s, signer, key, data = await _posted(request)
         signer, viewer = await _acting(request, signer)
-        await _run(comment, s, ref, signer, key, data.get("text"), viewer)
-        return answer({"ok": True}, NO_STORE, 201)
+
+        async def make() -> JSONResponse:
+            await _run(comment, s, ref, signer, key, data.get("text"), viewer)
+            return answer({"ok": True}, NO_STORE, 201)
+
+        return await retries.once(request, *_retry(signer, key, data), make)
 
     @app.post(API + "/requests/{ref}/edit")
     async def requests_edit(request: Request, ref: str) -> JSONResponse:
         _allow(request)
         s, signer, key, data = await _posted(request)
         signer, viewer = await _acting(request, signer)
-        out = await _run(edit, s, ref, signer, key, data, viewer)
-        return answer(out, NO_STORE)
+        who, cid = _retry(signer, key, data)
+
+        async def make() -> JSONResponse:
+            return answer(await _run(edit, s, ref, signer, key, data, viewer), NO_STORE)
+
+        return await retries.once(request, who, cid, make)
 
     @app.post(API + "/requests/{ref}/react")
     async def requests_react(request: Request, ref: str) -> JSONResponse:
         _allow(request)
         s, signer, key, data = await _posted(request)
         signer, viewer = await _acting(request, signer)
-        out = await _run(react, s, ref, signer, key, data, viewer)
-        return answer(out, NO_STORE)
+        who, cid = _retry(signer, key, data)
+
+        async def make() -> JSONResponse:
+            return answer(await _run(react, s, ref, signer, key, data, viewer), NO_STORE)
+
+        return await retries.once(request, who, cid, make)
 
     @app.get(API + "/events/{link}/activity")
     async def event_activity(request: Request, link: str) -> JSONResponse:

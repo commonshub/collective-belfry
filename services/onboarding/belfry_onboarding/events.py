@@ -684,7 +684,11 @@ def find_by_slug(svc: Services, link: str) -> Event | None:
     if len(_slug_miss) > 2000:
         _slug_miss.clear()
     _slug_miss[link] = now
-    found = community(svc, [{"kinds": list(KINDS), "since": int(time.time()) - 400 * 86400}])
+    try:
+        found = community(svc, [{"kinds": list(KINDS), "since": int(time.time()) - 400 * 86400}])
+    except Exception:
+        _slug_miss.pop(link, None)  # the relay did not answer: that is not "nobody has it"
+        raise
     ds = {tag(e, "d") or "" for e in found if (tag(e, "slug") or "").strip().lower() == link}
     for d in sorted(ds):
         ev = load(svc, d)  # adopts the address when it is this event's to take
@@ -938,7 +942,10 @@ def names(svc: Services, pubkeys: list[str]) -> dict[str, str]:
 
     try:
         return c.names_for(svc, pubkeys)
-    except Exception:  # noqa: BLE001 — names are a nicety
+    except Exception as exc:  # noqa: BLE001 — names are a nicety
+        from . import retries
+
+        retries.soft(exc)  # an API call: a relay that can't be read is 503 relay
         return {}
 
 
@@ -957,7 +964,10 @@ def shown_hosts(svc: Services, ev: Event) -> list[str]:
 
     try:
         by_role = checkin.group_state(svc, ev.group).by_role
-    except Exception:  # noqa: BLE001 — the creator alone is still right
+    except Exception as exc:  # noqa: BLE001 — the creator alone is still right
+        from . import retries
+
+        retries.soft(exc)
         by_role = set()
     service = {checkin.groups_pubkey(svc), community.belfry_pubkey(svc.settings)}
     keys = [ev.creator, *sorted(by_role - {ev.creator})]
@@ -1063,6 +1073,9 @@ def _needs(svc: Services, t: Ticket, viewer: str | None) -> dict[str, Any]:
     try:
         got = required(svc, t, viewer)
     except Exception as exc:  # noqa: BLE001 — the event still shows; taking it asks again
+        from . import retries
+
+        retries.soft(exc)
         log.warning("events: a required ticket was not read: %s", type(exc).__name__)
         got = ({"event_link": None, "event_title": None}, False)
     out: dict[str, Any] = {"requires": got[0] if got else None}
@@ -1081,6 +1094,9 @@ def sale_fields(
     try:
         return ticketsales.fields(svc, ev, tks, ppl, viewer)
     except Exception as exc:  # noqa: BLE001 — the event still shows
+        from . import retries
+
+        retries.soft(exc)
         log.warning("events %s: ticket sales not read: %s", ev.d, type(exc).__name__)
         return {}
 
@@ -2102,8 +2118,13 @@ def register(app: FastAPI) -> None:
             raise ApiError(422, "invalid", "from: a unix time") from None
         cancelled = q.get("cancelled") in ("1", "true")
         s = request.app.state.services
+        from . import retries
+
         try:
-            found = await run_in_threadpool(listing, s, frm, cancelled)
+            # a relay that can't be read: 503 relay, never an empty list (retries.py)
+            found = await retries.run(listing, s, frm, cancelled)
+        except ApiError:
+            raise
         except Exception as exc:  # noqa: BLE001
             log.warning("events api list: %s", exc)
             raise ApiError(503, "unavailable", "The events can't be read just now.") from exc
@@ -2121,14 +2142,17 @@ def register(app: FastAPI) -> None:
 
     @app.get(API + "/{link}")
     async def event_json(request: Request, link: str) -> JSONResponse:
+        from . import retries
+
         s = request.app.state.services
         who, _site = await _acting(s, _viewer(request, f"{API}/{link}"))
-        ev, _moved = await run_in_threadpool(resolve, s, link)
+        # a relay that can't be read: 503 relay, never "no such event" (retries.py)
+        ev, _moved = await retries.run(resolve, s, link)
         if ev is None:
             raise ApiError(404, "not_found", "No such event.")
-        if not await run_in_threadpool(may_read, s, ev, who):
+        if not await retries.run(may_read, s, ev, who):
             raise ApiError(403, "members_only", "This event is for members.")
-        out = await run_in_threadpool(public_json, s, ev, who)
+        out = await retries.run(public_json, s, ev, who)
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     @app.put(API + "/{d}/slug")

@@ -34,8 +34,8 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from starlette.concurrency import run_in_threadpool
 
+from . import retries
 from .core import Services, m2o_id
 from .events import Limiter
 from .holder_invites import ApiError, authenticate
@@ -357,6 +357,7 @@ def profile(
     try:
         tags = sitesessions.tags_of(svc, acct)
     except Exception as exc:  # noqa: BLE001 — the rest still answers
+        retries.soft(exc)  # but a relay that can't be read: 503 relay
         log.info("villagers: tags not read: %s", type(exc).__name__)
         tags = []
     return {
@@ -430,6 +431,7 @@ def _build(svc: Services) -> list[dict[str, Any]]:
         try:
             found += read(svc, [{"kinds": [0], "authors": keys}])
         except Exception as exc:  # noqa: BLE001 — the names on the accounts then
+            retries.soft(exc)  # the API: 503 relay, and no list without its names is kept
             log.info("villagers: profiles not read: %s", type(exc).__name__)
     profiles = _latest(found, 0)
     members = [a["pubkey"] for a, _ in accts if a["role"] != "guest"]
@@ -448,6 +450,7 @@ def _build(svc: Services) -> list[dict[str, Any]]:
                 30078,
             )
         except Exception as exc:  # noqa: BLE001
+            retries.soft(exc)
             log.info("villagers: tags not read: %s", type(exc).__name__)
     rows = []
     for acct, r in accts:
@@ -504,7 +507,8 @@ def register(app: FastAPI) -> None:
     @app.get(API)
     async def villagers_list(request: Request) -> JSONResponse:
         s = ready(request)
-        rows = await run_in_threadpool(listing, s)
+        # a relay that can't be read: 503 relay, never a list without its names (retries.py)
+        rows = await retries.run(listing, s)
         signed = bool(request.headers.get("authorization"))
         cache = "no-store" if signed else f"public, max-age={LIST_SECONDS}"
         return JSONResponse({"villagers": rows}, headers={"Cache-Control": cache})
@@ -516,7 +520,7 @@ def register(app: FastAPI) -> None:
         key = None
         if auth:  # optional; one that is sent must be right
             key = authenticate(s, request.app.state.api_seen, auth, "GET", f"{API}/{slug}", b"")
-        out = await run_in_threadpool(answer, s, slug, key)
+        out = await retries.run(answer, s, slug, key)
         if key is None and out["visibility"] == "public":
             return JSONResponse(out, headers={"Cache-Control": f"public, max-age={PUBLIC_SECONDS}"})
         return JSONResponse(out, headers=NO_STORE)

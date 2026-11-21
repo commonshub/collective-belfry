@@ -166,7 +166,8 @@ def register(app: FastAPI) -> None:
         return JSONResponse(
             {"error": exc.error, "message": exc.message, **exc.extra},
             status_code=exc.status,
-            headers={"Cache-Control": "no-store"},
+            # a relay that can't be read says when to ask again (retries.RelayDown)
+            headers={"Cache-Control": "no-store", **getattr(exc, "headers", {})},
         )
 
     async def signed_holder(request: Request, body: bytes = b"") -> tuple[Services, dict[str, Any]]:
