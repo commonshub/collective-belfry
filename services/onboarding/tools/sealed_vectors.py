@@ -703,6 +703,20 @@ def wraps(ev: dict[str, Any]) -> list[dict[str, Any]]:
         False,
         chain_ref=ALICE_CHAIN,
     )
+    name = "the belfry's key seals a kind 14 of its own"
+    r = rumor("belfry", "alice", 14, "A message from the belfry itself", T0 + 950)
+    case(
+        name,
+        "Author and seal signer are both the belfry's key, but the rumor is a kind 14: the "
+        "exception is for mail (kind 1301) only. Not accepted.",
+        sealed_by(name, "belfry", r, "alice", "alice_lb2"),
+        "alice_lb2",
+        None,
+        True,
+        False,
+        "belfry",
+        r,
+    )
     return out
 
 
@@ -1198,6 +1212,414 @@ def ready() -> dict[str, Any]:
     }
 
 
+# ── what a client remembers: the pin, and who is trusted after a switch (§3.3, §3.4, §5.5) ──
+EXTRA = ("alice_new", "alice_extra")  # two more of alice's devices, for these sections only
+
+
+def pins() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    for n in EXTRA:
+        SECRET[n] = h("key/" + n)
+        PUB[n] = sealed.pubkey_of(SECRET[n])
+    A, P, L, T, N, X = "alice", "alice_phone", "alice_laptop", "alice_tablet", *EXTRA
+    LB1, LB2, LB3 = "alice_lb1", "alice_lb2", "alice_lb3"
+    r1 = roster(P, A, 1, None, LB1, [P], T0)
+    r2 = roster(P, A, 2, r1, LB1, [P, L], T0 + 100)
+    a3 = roster(P, A, 3, r2, LB1, [P, L, T], T0 + 200)  # the phone adds the tablet
+    b3 = roster(L, A, 3, r2, LB1, [P, L, N], T0 + 210)  # the laptop adds a new device
+    b4x = roster(P, A, 4, b3, LB1, [P, L, N, X], T0 + 300)
+    b4k = roster(P, A, 4, b3, LB1, [P, L, N], T0 + 300, ready=True)
+    b4n = roster(N, A, 4, b3, LB1, [P, L, N, X], T0 + 300)
+    b4d = roster(P, A, 4, b3, LB2, [P, N], T0 + 300)
+    b5r = roster(N, A, 5, b4d, LB2, [P, N, L], T0 + 400)
+    b4early = roster(P, A, 4, b3, LB1, [P, L, N, X], T0 + 150)
+    b4t = roster(N, A, 4, b3, LB1, [P, L, N, T], T0 + 300)
+    a4late = roster(P, A, 4, a3, LB1, [P, L, T, X], T0 + 500)
+    r3 = roster(P, A, 3, r2, LB2, [P], T0 + 200)  # the phone drops the laptop
+    r4 = roster(P, A, 4, r3, LB2, [P, T], T0 + 250)
+    at = T0 + 200
+    while True:  # the dropped laptop's fork, with the lower id
+        evil = roster(L, A, 3, r2, LB3, [L], at)
+        if evil["id"] < r3["id"]:
+            break
+        at += 1
+    other = roster(L, A, 1, None, LB3, [L], T0 + 500)
+    a_none = anchor(A, r1, T0 + 1)
+
+    def ah(head, at=None):
+        return anchor(A, r1, head["created_at"] + 1 if at is None else at, head)
+
+    a_other = anchor(A, other, T0 + 501, other)
+    names = {PUB[n]: n for n in (P, L, T, N, X)}
+
+    def walk(what, pin, steps):
+        """Run STEPS from PIN. A step: (anchor, rosters, event, head, anchored, trusted names or
+        None, switch head or None, devices allowed locally after it). What is expected is
+        written by hand in the step; the pin as a whole is what the code gave."""
+        out, c = [], None
+        for i, (anch, rosters, event, head, anchored, trusted, switch, *allow) in enumerate(steps):
+            c, new, got = sealed.follow(anch, rosters, pin)
+            for d in allow[0] if allow else []:
+                new = sealed.allow_locally(new, PUB[d])
+            agree(
+                f"{what}, step {i + 1}",
+                (
+                    got,
+                    c.head.id if c else None,
+                    new and new["head"],
+                    new and new["anchored"],
+                    new and new["trusted"],
+                    new and new["switch_head"],
+                ),
+                (
+                    event,
+                    head and head["id"],
+                    (new and new["head"]) if head is None else head["id"],
+                    anchored,
+                    None if trusted is None else sorted(PUB[t] for t in trusted),
+                    switch and switch["id"],
+                ),
+            )
+            one = {"anchor": anch, "rosters": rosters}
+            if allow and allow[0]:
+                one["allow_locally"] = [PUB[d] for d in allow[0]]
+            out.append({**one, "expected": {"event": got, "pin": new, "chain": summary(c)}})
+            pin = new
+        return out, c, pin
+
+    def stored(pin):
+        """As a client reads it back after a restart."""
+        return json.loads(json.dumps(pin))
+
+    def pin_after(*steps):
+        return stored(walk("making a pin", None, steps)[2])
+
+    base = [r1, r2, a3]
+    on_r2 = pin_after((ah(r2), [r1, r2], "none", r2, True, None, None))
+    on_tail = pin_after((a_none, [r1, r2], "none", r2, False, None, None))
+    on_a3 = pin_after((ah(a3), base, "none", a3, True, None, None))
+    a3_as_tail = pin_after((ah(r2), base, "none", a3, False, None, None))
+    on_r3 = pin_after((ah(r3), [r1, r2, r3], "none", r3, True, None, None))
+    r4_as_tail = pin_after((ah(r3), [r1, r2, r3, r4], "none", r4, False, None, None))
+    switched = pin_after(
+        (ah(a3), base, "none", a3, True, None, None),
+        (ah(b3), [*base, b3], "switch", b3, True, [P, L], b3),
+    )
+
+    follow_cases = []
+
+    def fcase(name, note, pin, *steps):
+        made, _, _ = walk(name, pin, steps)
+        follow_cases.append({"name": name, "note": note, "pin": pin, "steps": made})
+
+    fcase(
+        "the first pin, on an anchored head",
+        "No pin yet. The anchor names roster 2: root and head are pinned, the head seen anchored.",
+        None,
+        (ah(r2), [r1, r2], "none", r2, True, None, None),
+    )
+    fcase(
+        "the first pin, on a head that is not anchored yet",
+        "The anchor has no head (= the root); roster 2 follows as an unanchored tail. It is "
+        "pinned as head, not seen anchored: anchored_head is the root.",
+        None,
+        (a_none, [r1, r2], "none", r2, False, None, None),
+    )
+    fcase(
+        "nothing changed",
+        "The same anchor and rosters again: the pin stays as it is.",
+        on_r2,
+        (ah(r2), [r1, r2], "none", r2, True, None, None),
+    )
+    fcase(
+        "the head moved forward",
+        "The anchor names roster 3, which descends from the pinned head.",
+        on_r2,
+        (ah(a3), base, "moved", a3, True, None, None),
+    )
+    fcase(
+        "a pinned tail becomes anchored",
+        "The pinned head was an unanchored tail; the anchor now names it. The head is the same "
+        "(event none) and is now seen anchored.",
+        on_tail,
+        (ah(r2), [r1, r2], "none", r2, True, None, None),
+    )
+    fcase(
+        "an anchor that goes back is ignored",
+        "Pinned and seen anchored: roster 3. The anchor names roster 2 again: the client keeps "
+        "roster 3 and its pin.",
+        on_a3,
+        (ah(r2, T0 + 900), base, "ignored_back", a3, True, None, None),
+    )
+    fcase(
+        "an anchor behind a head that was never anchored is the usual state",
+        "The pinned head is an unanchored tail and the anchor still names what is before it: "
+        "the head is kept and nothing is told (event none, not ignored_back: the anchor is not "
+        "behind anything this client saw anchored).",
+        on_tail,
+        (a_none, [r1, r2], "none", r2, False, None, None),
+    )
+    fcase(
+        "a pinned tail is kept against a sibling with a lower id",
+        "The pinned head is the phone's roster 3 (anchored); the anchor goes back to roster 2 "
+        "and the dropped laptop's roster 3 has the lower id: without a pin it would win for "
+        "now, with it the client keeps its head.",
+        on_r3,
+        (ah(r2, T0 + 900), [r1, r2, r3, evil], "ignored_back", r3, True, None, None),
+    )
+    fcase(
+        "a provisional tail gives way silently",
+        "The pinned head (the phone's roster 3) was only ever an unanchored tail after roster "
+        "2. The anchor names the laptop's roster 3 on the same roster 2: followed, nothing told "
+        "(moved), nobody distrusted.",
+        a3_as_tail,
+        (ah(b3), [*base, b3], "moved", b3, True, None, None),
+    )
+    fcase(
+        "a switch: the anchor leaves a head seen anchored",
+        "The pinned head (the phone's roster 3, with the tablet) was seen anchored. The anchor "
+        "names the laptop's roster 3 (with a new device), another branch of the same root: "
+        "followed and told like a fresh start. trusted = the devices of the head held before "
+        "that the new head still has (phone, laptop); switch_head = the head followed now.",
+        on_a3,
+        (ah(b3), [*base, b3], "switch", b3, True, [P, L], b3),
+    )
+    fcase(
+        "a switch away from an anchored head the pin had moved past",
+        "Roster 3 was seen anchored; the pin then moved onto roster 4, an unanchored tail. The "
+        "anchor names the dropped laptop's fork from roster 2, which leaves roster 3 too: a "
+        "switch, although the pinned head itself was never anchored. Nobody is trusted: no "
+        "device of the head held is in the new one. (A reading beyond the contract's letter, "
+        "flagged to its author.)",
+        r4_as_tail,
+        (ah(evil), [r1, r2, r3, r4, evil], "switch", evil, True, [], evil),
+    )
+    fcase(
+        "a fresh start",
+        "The anchor names another root: a new pin, the root held before kept as prev_root, "
+        "nobody distrusted (trusted null).",
+        on_a3,
+        (a_other, [*base, other], "fresh_start", other, True, None, None),
+    )
+    fcase(
+        "a pin read back after a restart, then an older anchor",
+        "The pin comes from storage (plain JSON). The anchor has no head at all: ignored, the "
+        "pinned head stays.",
+        stored(on_a3),
+        (anchor(A, r1, T0 + 900), base, "ignored_back", a3, True, None, None),
+    )
+    fcase(
+        "a pin read back after a restart, then a new root",
+        "The stored pin is one from after a switch (trusted and switch_head set). The anchor "
+        "names another root: fresh start, trusted and switch_head are cleared.",
+        stored(switched),
+        (a_other, [*base, b3, other], "fresh_start", other, True, None, None),
+    )
+    fcase(
+        "going back while the pinned head's rosters are not there",
+        "The anchor names an ancestor of the pinned head and the relay did not give the pinned "
+        "head's roster: nothing to follow (no chain), the pin stays; never the older head.",
+        on_a3,
+        (ah(r2, T0 + 900), [r1, r2], "ignored_back", None, True, None, None),
+    )
+    fcase(
+        "no anchor to follow",
+        "The anchor's signature is bad: no chain, the pin stays as it is.",
+        on_a3,
+        (
+            {**a_none, "sig": a_none["sig"][:-2] + ("00" if a_none["sig"][-2:] != "00" else "01")},
+            base,
+            "none",
+            None,
+            True,
+            None,
+            None,
+        ),
+    )
+    fcase(
+        "moved, then the tail is anchored, then on",
+        "Three reads in a row from no pin: a head-less anchor with roster 2 as tail; the anchor "
+        "names roster 2; the anchor names roster 3.",
+        None,
+        (a_none, [r1, r2], "none", r2, False, None, None),
+        (ah(r2), [r1, r2], "none", r2, True, None, None),
+        (ah(a3), base, "moved", a3, True, None, None),
+    )
+
+    trust_cases = []
+    switch_step = (ah(b3), [*base, b3], "switch", b3, True, [P, L], b3)
+    req = T0 + 2000  # a request made well after every roster here
+
+    def tcase(name, note, pin, steps, asks):
+        made, c, new = walk(name, pin, steps)
+        shown = []
+        for who, want, *more in asks:
+            o = {"live": [P, L, T, N, X], "request_created_at": req, "last_handover_at": None}
+            o |= more[0] if more else {}
+            live = [PUB[d] for d in o["live"]]
+            got = sealed.answer_without_prompt(
+                c, new, PUB[who], live, o["request_created_at"], None, o["last_handover_at"]
+            )
+            agree(f"{name}: {who} asks", got, want)
+            added = c.added.get(PUB[who]) if c else None
+            shown.append(
+                {
+                    "device": PUB[who],
+                    "device_name": who,
+                    "live_chat_devices": live,
+                    "request_created_at": o["request_created_at"],
+                    "added_at": added.created_at if added else None,
+                    "last_handover_at": o["last_handover_at"],
+                    "expected": want,
+                }
+            )
+        trust_cases.append({"name": name, "note": note, "pin": pin, "steps": made, "asks": shown})
+
+    tcase(
+        "no switch: every device of the head is answered",
+        "trusted is null. The laptop, in the anchored head, live, asks after it was added.",
+        on_a3,
+        [(ah(a3), base, "none", a3, True, None, None)],
+        [(L, True), (T, True), (N, False)],
+    )
+    tcase(
+        "after a switch the newcomer goes through Allow",
+        "The new device of the head followed at the switch was not in the head held before.",
+        on_a3,
+        [switch_step],
+        [(N, False)],
+    )
+    tcase(
+        "after a switch a device held before is answered",
+        "Phone and laptop were in the head held before and are in the new one.",
+        on_a3,
+        [switch_step],
+        [(P, True), (L, True)],
+    )
+    tcase(
+        "a trusted device adds a device: trusted",
+        "After the switch the phone (trusted) signs a roster that ADDS one more device: that "
+        "device is trusted. The newcomer of the switch still is not.",
+        on_a3,
+        [switch_step, (ah(b4x), [*base, b3, b4x], "moved", b4x, True, [P, L, X], b3)],
+        [(X, True), (N, False)],
+    )
+    tcase(
+        "a trusted device's roster that only keeps the newcomer vouches for nothing",
+        "After the switch the phone publishes a roster with the same devices (for ready).",
+        on_a3,
+        [switch_step, (ah(b4k), [*base, b3, b4k], "moved", b4k, True, [P, L], b3)],
+        [(N, False), (P, True)],
+    )
+    tcase(
+        "the untrusted newcomer adds a third device: neither is trusted",
+        "After the switch the newcomer signs the roster that adds one more device.",
+        on_a3,
+        [switch_step, (ah(b4n), [*base, b3, b4n], "moved", b4n, True, [P, L], b3)],
+        [(X, False), (N, False), (L, True)],
+    )
+    tcase(
+        "dropped after the switch, added back by an untrusted signer: not trusted",
+        "The phone drops the laptop (new letterbox); the newcomer then adds it back.",
+        on_a3,
+        [
+            switch_step,
+            (ah(b5r), [*base, b3, b4d, b5r], "moved", b5r, True, [P], b3),
+        ],
+        [(L, False), (P, True), (N, False)],
+    )
+    tcase(
+        "allowed on this device: trusted",
+        "After the switch the person taps Allow for the newcomer (allow_locally).",
+        on_a3,
+        [(ah(b3), [*base, b3], "switch", b3, True, [P, L, N], b3, [N])],
+        [(N, True)],
+    )
+    tcase(
+        "chain order, not dates: a descendant dated before the switch head counts",
+        "The phone's roster that adds a device descends from the switch head but is dated "
+        "before it (T0+150, the switch head T0+210): it counts.",
+        on_a3,
+        [switch_step, (ah(b4early), [*base, b3, b4early], "moved", b4early, True, [P, L, X], b3)],
+        [(X, True)],
+    )
+    tcase(
+        "chain order, not dates: a later roster that does not descend from it does not",
+        "On the branch the anchor left, the phone (trusted) adds the same device, dated later "
+        "(T0+500). On the followed chain it is the newcomer that adds it. Only the followed "
+        "chain counts: not trusted.",
+        on_a3,
+        [switch_step, (ah(b4n), [*base, b3, b4n, a4late], "moved", b4n, True, [P, L], b3)],
+        [(X, False)],
+    )
+    tcase(
+        "a device the switch left out comes back untrusted",
+        "The tablet was in the head held before, but not in the head followed at the switch: "
+        "it is not kept as trusted, so the newcomer adding it back gives it nothing. (trusted "
+        "at a switch = the devices held before that the new head still has; a reading, flagged "
+        "to the contract's author.)",
+        on_a3,
+        [switch_step, (ah(b4t), [*base, b3, b4t], "moved", b4t, True, [P, L], b3)],
+        [(T, False)],
+    )
+    tcase(
+        "trusted, but added past the anchored end: not yet",
+        "The phone's roster adding a device is published and not anchored (the anchor still "
+        "names the switch head): the device is trusted and in the head, but not on the anchored "
+        "end.",
+        on_a3,
+        [switch_step, (ah(b3), [*base, b3, b4x], "moved", b4x, False, [P, L, X], b3)],
+        [(X, False), (P, True)],
+    )
+    tcase(
+        "the request must be newer, and the session live",
+        "The laptop was added by roster 2 (T0+100). A request dated then is not newer; one "
+        "dated at the last hand-over to it is not newer either; a later one is answered; no "
+        "live chat session: not answered.",
+        on_a3,
+        [(ah(a3), base, "none", a3, True, None, None)],
+        [
+            (L, False, {"request_created_at": T0 + 100}),
+            (L, True, {"request_created_at": T0 + 101}),
+            (L, False, {"request_created_at": T0 + 1500, "last_handover_at": T0 + 1500}),
+            (L, True, {"request_created_at": T0 + 1501, "last_handover_at": T0 + 1500}),
+            (L, False, {"live": [P, T]}),
+        ],
+    )
+    del names
+    return follow_cases, trust_cases
+
+
+def pin_sections() -> dict[str, Any]:
+    follow_cases, trust_cases = pins()
+    shape = (
+        "A case starts from 'pin' (null: none yet) and runs its 'steps' in order: each is one "
+        "read (anchor, rosters) given to follow(anchor, rosters, pin) → (chain, pin', event); "
+        "'allow_locally' lists devices the person then allows on this device. 'expected' holds "
+        "the event, the pin after the step (with what was allowed) and the chain followed "
+        "(same shape as in 'chains'; all null when there is none). A pin is plain JSON: root, "
+        "head, path (roster ids root → head), anchored (the head was seen as the end of the "
+        "anchored path), anchored_head (the furthest roster of the path seen so), trusted (null, "
+        "or the sorted device keys answered without a prompt after a switch), switch_head, "
+        "prev_root."
+    )
+    return {
+        "follow": {
+            "note": shape,
+            "keys": {n: {"secret": SECRET[n].hex(), "pubkey": PUB[n]} for n in EXTRA},
+            "cases": follow_cases,
+        },
+        "trust": {
+            "note": "Who is answered without a prompt (§5.5), mostly after a switch (§3.3). "
+            "Steps as in 'follow' (the keys alice_new and alice_extra are listed there). "
+            "After the last step each of 'asks' is a device request: "
+            "answer_without_prompt(chain, pin, device, live_chat_devices, request_created_at, "
+            "added_at, last_handover_at). added_at is the created_at of the first roster of the "
+            "followed chain that has the device (null: not in it).",
+            "cases": trust_cases,
+        },
+    }
+
+
 def build() -> dict[str, Any]:
     chain_cases, ev = chains()
     return {
@@ -1229,6 +1651,7 @@ def build() -> dict[str, Any]:
         "link": link(),
         "history": history(),
         "ready": ready(),
+        **pin_sections(),
     }
 
 

@@ -210,6 +210,98 @@ def test_every_ready_case(v):
         assert got is case["expected"]["may_carry_ready"], case["name"]
 
 
+def run_steps(case):
+    """The steps of a follow / trust case from its pin: (chain, pin) after the last one. Each
+    step's event, pin and chain are checked on the way; the pin goes through JSON each time, as
+    a client that stores it would have it."""
+    pin, c = case["pin"], None
+    for i, step in enumerate(case["steps"]):
+        c, pin, event = sealed.follow(step["anchor"], step["rosters"], pin)
+        for device in step.get("allow_locally", []):
+            pin = sealed.allow_locally(pin, device)
+        want = step["expected"]
+        where = f"{case['name']}, step {i + 1}"
+        assert event == want["event"] and event in sealed.EVENTS, where
+        assert pin == want["pin"], where
+        assert summary(c) == want["chain"], where
+        pin = json.loads(json.dumps(pin))
+    return c, pin
+
+
+def test_every_follow_case(v):
+    cases = v["follow"]["cases"]
+    assert len(cases) >= 12 and len({c["name"] for c in cases}) == len(cases)
+    seen = set()
+    for case in cases:
+        run_steps(case)
+        seen |= {s["expected"]["event"] for s in case["steps"]}
+    assert seen == set(sealed.EVENTS)
+    for pair in v["follow"]["keys"].values():
+        assert sealed.pubkey_of(bytes.fromhex(pair["secret"])) == pair["pubkey"]
+
+
+def test_every_trust_case(v):
+    cases = v["trust"]["cases"]
+    assert len(cases) >= 8
+    for case in cases:
+        c, pin = run_steps(case)
+        for ask in case["asks"]:
+            for added_at in (ask["added_at"], None):  # given, or taken from the chain
+                if added_at is None and ask["added_at"] is None:
+                    continue
+                got = sealed.answer_without_prompt(
+                    c,
+                    pin,
+                    ask["device"],
+                    ask["live_chat_devices"],
+                    ask["request_created_at"],
+                    added_at,
+                    ask["last_handover_at"],
+                )
+                assert got is ask["expected"], (case["name"], ask["device_name"])
+
+
+def test_a_pin_is_plain_json_and_the_server_keeps_none(v, monkeypatch):
+    case = v["follow"]["cases"][0]
+    step = case["steps"][0]
+    c, pin, event = sealed.follow(step["anchor"], step["rosters"], None)
+    assert json.loads(json.dumps(pin)) == pin and event == "none"
+    assert set(pin) == {
+        "root",
+        "head",
+        "path",
+        "anchored",
+        "anchored_head",
+        "trusted",
+        "switch_head",
+        "prev_root",
+    }
+    assert pin["path"] == c.valid_ids and c.anchored == pin["anchored_head"]
+    # allowing a device where nobody is distrusted changes nothing; no chain, no pin: no answer
+    assert sealed.allow_locally(pin, "ab" * 32) == pin
+    assert not sealed.answer_without_prompt(None, pin, c.devices[0], list(c.devices), 2**40)
+    assert not sealed.answer_without_prompt(c, None, c.devices[0], list(c.devices), 2**40)
+    assert sealed.answer_without_prompt(c, pin, c.devices[-1], list(c.devices), 2**40)
+    assert sealed.follow(None, [], None) == (None, None, "none")
+    # the server follows the anchor alone: chain_for gives chain() no pin
+    asked = []
+    monkeypatch.setattr(sealed, "chain", lambda *a: asked.append(a) or None)
+    monkeypatch.setattr(sealed, "newest_anchor", lambda events, account: {"id": "x"})
+
+    class Relay:
+        def query(self, filters, sign):
+            return []
+
+    class Svc:
+        relay = Relay()
+
+        class settings:  # noqa: N801
+            belfry_nsec = BELFRY.secret.hex()
+
+    assert sealed.read_chain(Svc(), "ab" * 32) is None
+    assert len(asked) == 1 and len(asked[0]) == 2
+
+
 def test_an_event_is_checked_by_its_hash_not_the_id_it_carries(v):
     case = next(c for c in v["chains"] if c["name"] == "a valid root")
     e = case["rosters"][0]

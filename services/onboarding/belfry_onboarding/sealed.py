@@ -127,6 +127,9 @@ class Chain:
     # device no longer in the head → the roster that dropped it (the latest, if it came back
     # and left again)
     dropped: dict[str, Roster] = field(default_factory=dict, compare=False)
+    # the id of the end of the anchored path, as the anchor gives it (the root when the anchor
+    # names no usable head); what comes after it in ``rosters`` is not anchored yet
+    anchored: str = ""
 
     @property
     def root(self) -> Roster:
@@ -278,6 +281,7 @@ def chain(
         return path
 
     rosters = path_to(anchor_head(anchor_event)) or [root]
+    anchored = rosters[-1].id
     held = path_to(pinned_head) if pinned_head else None
     if held and len(held) > len(rosters) and held[len(rosters) - 1].id == rosters[-1].id:
         rosters = held  # the anchor went back to an ancestor of the pinned head: not followed
@@ -303,7 +307,159 @@ def chain(
         for d in r.devices:
             added.setdefault(d, r)
             dropped.pop(d, None)
-    return Chain(account=account, rosters=tuple(rosters), added=added, dropped=dropped)
+    return Chain(
+        account=account, rosters=tuple(rosters), added=added, dropped=dropped, anchored=anchored
+    )
+
+
+# ── what a client remembers of a person's chain: the pin (§3.3 "No going back", §3.4) ────────
+# A pin is plain JSON, kept for good (it survives restarts; a pin a restart forgets protects
+# nothing):
+#   root           the root first accepted
+#   head, path     the head last accepted and the roster ids from the root to it
+#   anchored_head  the furthest roster of the path this client saw as the end of the anchored
+#                  path (the root at least); anchored = (anchored_head == head)
+#   trusted        None, or after a switch the devices that are answered without a prompt
+#                  (sorted); switch_head = the head followed at the switch
+#   prev_root      the root pinned before a fresh start, or None
+# The server keeps none and calls none of this: it is the reference the apps and the vectors
+# share.
+EVENTS = ("none", "moved", "ignored_back", "switch", "fresh_start")
+
+
+def _pin(c: Chain, seen: str, was: dict[str, Any] | None = None, **change: Any) -> dict[str, Any]:
+    was = was or {}
+    trusted = change.get("trusted", was.get("trusted"))
+    return {
+        "root": c.root.id,
+        "head": c.head.id,
+        "path": c.valid_ids,
+        "anchored": seen == c.head.id,
+        "anchored_head": seen,
+        "trusted": None if trusted is None else sorted(trusted),
+        "switch_head": change.get("switch_head", was.get("switch_head")),
+        "prev_root": change.get("prev_root", was.get("prev_root")),
+    }
+
+
+def _trust_step(trusted: set[str], before: Roster, r: Roster) -> None:
+    """One roster after a switch: a device it drops is no longer trusted; a device it adds is
+    trusted only when its signer is (as the signer stood before this roster); a device it
+    merely keeps: nothing."""
+    vouches = r.signer in trusted
+    trusted.difference_update(d for d in before.devices if d not in r.devices)
+    if vouches:
+        trusted.update(d for d in r.devices if d not in before.devices)
+
+
+def _carry(pin: dict[str, Any], c: Chain, seen: str) -> dict[str, Any]:
+    """PIN moved onto chain C (same root, no switch): the new head and path, and, after a
+    switch, trust carried over the rosters that are new to this client and descend from the
+    switch head, in chain order (never by their dates)."""
+    ids = c.valid_ids
+    if seen not in ids or ids.index(c.anchored) > ids.index(seen):
+        seen = c.anchored
+    trusted = pin.get("trusted")
+    if trusted is not None and pin.get("switch_head") in ids:
+        known = 0
+        while known < min(len(ids), len(pin["path"])) and ids[known] == pin["path"][known]:
+            known += 1
+        trusted = set(trusted)
+        for i in range(max(known, ids.index(pin["switch_head"]) + 1), len(ids)):
+            _trust_step(trusted, c.rosters[i - 1], c.rosters[i])
+    return _pin(c, seen, pin, trusted=trusted)
+
+
+def follow(
+    anchor_event: Any, roster_events: list[Any], pin: dict[str, Any] | None
+) -> tuple[Chain | None, dict[str, Any] | None, str]:
+    """(chain, pin', event): the chain a client that holds PIN follows now, what it remembers
+    after, and what happened: ``none``, ``moved`` (the head changed, nothing to tell),
+    ``ignored_back`` (the anchor went back behind a head seen anchored: not followed),
+    ``switch`` (the anchor left a head seen anchored for another branch of the same root: told
+    like a fresh start, and only the devices held before stay trusted) or ``fresh_start``
+    (another root)."""
+    c = chain(anchor_event, roster_events)
+    if c is None:
+        return None, pin, "none"  # nothing to follow: what is remembered stays
+    if pin is None:
+        return c, _pin(c, c.anchored), "none"
+    if c.root.id != pin["root"]:
+        fresh = _pin(c, c.anchored, trusted=None, switch_head=None, prev_root=pin["root"])
+        return c, fresh, "fresh_start"
+    path, seen = pin["path"], pin.get("anchored_head") or pin["root"]
+    if c.anchored in path[:-1]:
+        # the anchor names an ancestor of the pinned head: the pinned head is kept (with what
+        # follows it); told as going back only when it is behind what was seen anchored
+        kept = chain(anchor_event, roster_events, pin["head"])
+        back = seen in path and path.index(c.anchored) < path.index(seen)
+        if kept is None or pin["head"] not in kept.valid_ids:
+            return None, pin, "ignored_back" if back else "none"  # its rosters are not there
+        new = _carry(pin, kept, seen)
+        return kept, new, "ignored_back" if back else _changed(pin, new)
+    if pin["head"] in c.valid_ids:
+        new = _carry(pin, c, seen)
+        return c, new, _changed(pin, new)
+    if seen in c.valid_ids:
+        return c, _carry(pin, c, seen), "moved"  # a tail that was never anchored gave way
+    # the anchor left a head this client saw anchored: a switch
+    account = anchor_event["pubkey"]
+    held = next(
+        (
+            r
+            for r in (parse_roster(e, account) for e in roster_events or [])
+            if r is not None and r.id == pin["head"]
+        ),
+        None,
+    )
+    before = set(held.devices) if held is not None else set()
+    if pin.get("trusted") is not None:
+        before &= set(pin["trusted"])  # a second switch never widens the first
+    # a device the new head does not have is not trusted when it comes back
+    trusted = before & set(c.devices)
+    return c, _pin(c, c.anchored, pin, trusted=trusted, switch_head=c.head.id), "switch"
+
+
+def _changed(pin: dict[str, Any], new: dict[str, Any]) -> str:
+    return "moved" if new["head"] != pin["head"] else "none"
+
+
+def allow_locally(pin: dict[str, Any], device: str) -> dict[str, Any]:
+    """The person allowed DEVICE on this device (the Allow prompt): trusted from now on."""
+    if pin.get("trusted") is None:
+        return dict(pin)
+    return {**pin, "trusted": sorted({*pin["trusted"], device})}
+
+
+def answer_without_prompt(
+    c: Chain | None,
+    pin: dict[str, Any] | None,
+    device: str,
+    live_chat_devices: set[str] | list[str],
+    request_created_at: int,
+    added_at: int | None = None,
+    last_handover_at: int | None = None,
+) -> bool:
+    """§5.5: whether a device request (kind 8562) of a device that is in the head already is
+    answered with the keys at once. C and PIN: my own chain as ``follow`` gave it. The device
+    must be on the anchored end, in the head this client holds, trusted (after a switch), the
+    client key of a live chat session, and its request newer than the roster that added it
+    (ADDED_AT; from the chain when not given) and than the last hand-over this client made to
+    it (LAST_HANDOVER_AT, None: never)."""
+    if c is None or pin is None or c.head.id != pin["head"] or c.root.id != pin["root"]:
+        return False
+    end = next((r for r in c.rosters if r.id == c.anchored), None)
+    if end is None or device not in end.devices or device not in c.devices:
+        return False
+    if pin.get("trusted") is not None and device not in pin["trusted"]:
+        return False
+    if device not in set(live_chat_devices):
+        return False
+    if added_at is None:
+        added_at = c.added[device].created_at
+    if request_created_at <= added_at:
+        return False
+    return last_handover_at is None or request_created_at > last_handover_at
 
 
 # ── wraps (§4) ──────────────────────────────────────────────────────────────────────────────
