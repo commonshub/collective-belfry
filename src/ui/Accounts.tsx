@@ -10,6 +10,7 @@ import { BELFRY, NAME } from '../config'
 import { accounts, activeId, addAccount, addOtherBelfry, otherBelfries, removeOtherBelfry, switchTo, type Account } from '../core/accounts'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
+import { allSocks, sendTraces } from '../core/conn'
 import { Avatar, back, Btn, Form, go, Sheet } from './common'
 import { useCommunityName } from './community'
 import { CheckIcon, ChevronRightIcon, CloseIcon, GlobeIcon, PeopleIcon } from './icons'
@@ -236,7 +237,46 @@ export function AboutBelfry() {
               ? <a className="home-row" href={`https://chat.${HOME}/`}><span className="row-ico"><PeopleIcon /></span><span className="t"><b>Switch to the belfry of Belfry</b><small>Another account of this browser is in {HOME}</small></span><ChevronRightIcon /></a>
               : <a className="home-row" href={`https://chat.${HOME}/apply`}><span className="row-ico"><PeopleIcon /></span><span className="t"><b>Join the belfry of Belfry</b><small>Apply to join {HOME}</small></span><ChevronRightIcon /></a>}
         </div>
+        <div className="home-card">
+          <button className="home-row" onClick={() => go('about/diagnostics')}><span className="t"><b>Diagnostics</b><small>How the last messages were sent</small></span><ChevronRightIcon /></button>
+        </div>
         <p className="hint about-foot">Belfry is open source software a community runs on its own server.</p>
+      </div>
+    </div>
+  )
+}
+
+// ---- #/about/diagnostics: the connections and the last 20 sends, timed (no content) ----
+
+/** About Belfry › Diagnostics: each socket (up, quiet for how long) and the last 20 sends, step by
+ *  step with their times. No message content, no keys: what someone can show when sending is slow. */
+export function Diagnostics() {
+  useVersion()
+  const [, tick] = useState(0)
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 2000); return () => clearInterval(t) }, [])
+  const traces = sendTraces()
+  const secs = (ms: number) => (ms / 1000).toFixed(1) + ' s'
+  return (
+    <div className="screen about-screen">
+      <div className="topbar"><button className="icon-btn" aria-label="Back to About Belfry" onClick={() => back('about')}>‹</button><h1>Diagnostics</h1></div>
+      <div className="scroll pad diag">
+        <div className="place-section"><h3>Connections</h3></div>
+        <ul className="diag-list">
+          {allSocks().map((s) => (
+            <li key={s.url}><b>{s.url.replace(/^wss?:\/\//, '').replace(/\?.*$/, '')}</b><small>{s.connected ? `Connected · last heard ${secs(s.quietFor())} ago` : 'Not connected'}{s.drops ? ` · dropped ${s.drops}× (last: ${s.lastDrop})` : ''}</small></li>
+          ))}
+        </ul>
+        <div className="place-section"><h3>Last sends</h3></div>
+        {!traces.length && <p className="hint">Nothing sent from this browser yet.</p>}
+        <ul className="diag-list">
+          {traces.map((t, i) => (
+            <li key={i}>
+              <b>{t.what}</b>
+              <small>{new Date(t.at).toLocaleTimeString()} · {t.result === 'sent' ? 'sent' : 'not sent: ' + t.result} in {secs(t.ms)}{t.tries > 1 ? ` · try ${t.tries}` : ''}</small>
+              <small className="diag-steps">{t.steps.map(([n, ms]) => `${n} ${secs(ms)}`).join(' → ') || '—'}</small>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   )

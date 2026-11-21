@@ -1,6 +1,7 @@
 import { replaceHash } from './nav'
-import { finalizeEvent, generateSecretKey, getPublicKey, nip04, nip44, type EventTemplate, type NostrEvent } from 'nostr-tools'
-import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46'
+import { finalizeEvent, generateSecretKey, getPublicKey, nip04, nip44, verifyEvent, type EventTemplate, type NostrEvent, type VerifiedEvent } from 'nostr-tools'
+import { parseBunkerInput } from 'nostr-tools/nip46'
+import { remoteSigner } from './nip46'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { BELFRY, SIGNIN, type Backend } from '../config'
@@ -304,65 +305,28 @@ export async function makeSigner(s: Session): Promise<Signer> {
   if (!s.bunkerUrl) throw new Error('Not signed in.')
   const bp = await parseBunkerInput(s.bunkerUrl)
   if (!bp) throw new Error('Belfry sent a signer link this app does not understand.')
-  // The connection to the signer is a WebSocket on the bunker relay: a phone that sleeps or
-  // changes network can leave it dead without telling. Every request gets a timeout; on a
-  // timeout the connection is rebuilt and the request fails (the outbox tries again).
-  const secret = hexToBytes(s.clientSecret)
-  let bunker = new BunkerSigner(secret, bp)
-  let connected: Promise<void> | null = null
-  const ensure = () => (connected ??= bunker.connect().catch((e) => { connected = null; throw e }))
-  // A deploy restarts the proxy and every socket drops (Xavier, 2026-11-11: "very slow to send").
-  // BunkerSigner never resubscribes after its socket closes: answers then go nowhere until a
-  // timeout. So a dead socket is replaced before asking, and a request that times out is asked
-  // once more on a fresh connection (signing and decrypting again is harmless).
-  const TIMEOUT = 10_000
-  const rebuild = () => {
-    const old = bunker
-    bunker = new BunkerSigner(secret, bp)
-    connected = null
-    void old.close().catch(() => { /* already gone */ })
-  }
-  const norm = (u: string) => u.replace(/\/+$/, '')
-  const alive = () => {
-    try {
-      const st = (bunker as unknown as { pool: { listConnectionStatus(): Map<string, boolean> } }).pool.listConnectionStatus()
-      return bp.relays.every((u) => [...st].some(([k, up]) => up && norm(k) === norm(u)))
-    } catch { return true } // can't tell: ask, the timeout covers it
-  }
-  const once = async <T,>(fn: () => Promise<T>): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      return await Promise.race([
-        (async () => { await ensure(); return fn() })(),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout: the signer did not answer')), TIMEOUT) }),
-      ])
-    } finally {
-      clearTimeout(timer)
-    }
-  }
-  const call = async <T,>(fn: () => Promise<T>): Promise<T> => {
-    if (connected && !alive()) rebuild()
-    try {
-      return await once(fn)
-    } catch (e) {
-      if (!(e instanceof Error && e.message.startsWith('timeout'))) throw e
-      rebuild()
-      return once(fn)
-    }
-  }
+  // The signer is reached through the connection manager's socket to the bunker relay (conn.ts,
+  // nip46.ts): checked when quiet, dropped on a timeout, the request asked once more.
+  const remote = remoteSigner(hexToBytes(s.clientSecret), bp)
+  const call = async <T,>(method: string, params: string[], parse: (v: string) => T): Promise<T> => parse(await remote.call(method, params))
+  const text = (v: string) => v
   // The pubkey is cached so the app opens offline; the bunker is reached only to sign.
   let pubkey = await kvGet<string>('pubkey')
   if (!pubkey && s.pubkey) { pubkey = s.pubkey; await kvSet('pubkey', pubkey) }
   if (!pubkey) {
-    pubkey = await call(() => bunker.getPublicKey())
+    pubkey = await call('get_public_key', [], text)
     await kvSet('pubkey', pubkey)
   }
   const pk = pubkey
   return {
     pubkey: pk,
-    sign: (t) => call(() => bunker.signEvent({ ...t, pubkey: pk })),
-    encrypt: (peer, text) => call(() => bunker.nip44Encrypt(peer, text)),
-    decrypt: (peer, payload) => call(() => bunker.nip44Decrypt(peer, payload)),
-    decrypt04: (peer, payload) => call(() => bunker.nip04Decrypt(peer, payload)),
+    sign: (t) => call('sign_event', [JSON.stringify({ ...t, pubkey: pk })], (v) => {
+      const ev = JSON.parse(v) as VerifiedEvent
+      if (!verifyEvent(ev)) throw new Error('the signer returned an event that is not properly signed')
+      return ev
+    }),
+    encrypt: (peer, text2) => call('nip44_encrypt', [peer, text2], text),
+    decrypt: (peer, payload) => call('nip44_decrypt', [peer, payload], text),
+    decrypt04: (peer, payload) => call('nip04_decrypt', [peer, payload], text),
   }
 }

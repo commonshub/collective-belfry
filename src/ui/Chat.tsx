@@ -12,7 +12,7 @@ import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
-import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
+import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
 import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName, SheetOrPopover, takeAnchor } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
@@ -79,6 +79,7 @@ function eventTags(text: string): string[][] {
 
 /** The community's name from the belfry (/.well-known/belfry.json), else the domain. */
 import { useCommunityName } from './community'
+import { SendingLine } from './Sending'
 export { useCommunityName }
 
 /** Who is signed in, at the bottom of the Town drawer (and bottom left on a laptop): opens
@@ -1159,7 +1160,9 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
           {p && p.status === 'failed' && (
             <div className="state failed">Not sent: {p.error} · <button className="link" onClick={() => retry(p.localId)}>Retry</button></div>
           )}
-          {p && p.status === 'queued' && <div className="state">{p.tries && !relaysUp() ? 'Waiting for connection…' : p.tries ? 'Sending again…' : 'Sending…'}</div>}
+          {p && p.status === 'queued' && <div className="state">{p.tries && !relaysUp()
+            ? <SendingLine className="" since={p.queuedAt ?? p.created_at * 1000} step="waiting for the connection" onRetry={() => void retry(p.localId)} />
+            : <SendingLine className="" since={p.queuedAt ?? p.created_at * 1000} step={sendStep(p.localId) ?? (p.error ? 'waiting to try again' : undefined)} onRetry={() => void retry(p.localId)} />}</div>}
         </div>
         {!p && !frozen && (
           <div className="msg-tools" role="toolbar" aria-label="Message actions">

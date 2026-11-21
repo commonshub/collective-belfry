@@ -14,6 +14,7 @@ import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
+import { SendingLine } from './Sending'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
 // by e-mail through the belfry. Your address here is name@domain; mail to it lands here too.
@@ -213,7 +214,7 @@ function DmState({ d, r }: { d: Dm; r?: ReturnType<typeof report> }) {
   const q = queueState(d)
   if (d.failed) return <span className="dm-state failed">Not sent: {d.failed} · <button className="link" onClick={() => void retryDm(d)}>Retry</button></span>
   if (d.pending || q.waiting)
-    return <span className="dm-state queued" title={q.error}>{q.error || !navigator.onLine ? 'Saved · waiting for the connection' : 'Sending…'}</span>
+    return <span title={q.error}><SendingLine className="dm-state queued" since={q.since} step={q.step} onRetry={() => void retryDm(d)} /></span>
   if (d.kind !== 1301) return null
   const label = r?.status === 'delivered' ? 'Delivered' : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, retrying' : r?.details || 'Sent'
   return <span className={'dm-state ' + (r?.status ?? 'queued')}>{label}</span>

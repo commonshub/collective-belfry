@@ -23,7 +23,7 @@ import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/sto
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
-import { AboutBelfry, AccountsScreen } from './Accounts'
+import { AboutBelfry, AccountsScreen, Diagnostics } from './Accounts'
 import { BrandingScreen } from './Branding'
 import { SettingsScreen } from './Settings'
 import { MembersDirectory } from './Directory'
@@ -321,6 +321,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'accounts') view = <AccountsScreen />
+  else if (section === 'about' && a === 'diagnostics') view = <Diagnostics />
   else if (section === 'about') view = <AboutBelfry />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
   else if (section === 'archived') view = <ArchivedScreen />

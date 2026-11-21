@@ -1992,3 +1992,10 @@ a.buy .ico { width: 14px; height: 14px; }
 .link-phone .qr-box { margin: 6px auto; }
 .link-phone .drop-qr { width: 220px; height: 220px; }
 .dir-hit { font-weight: 650; color: var(--text); }
+
+/* About Belfry › Diagnostics */
+.diag-list { list-style: none; margin: 0 0 12px; padding: 0; background: var(--surface); border-radius: 16px; overflow: hidden; }
+.diag-list li { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-top: 1px solid var(--line, rgba(0,0,0,.08)); overflow-wrap: anywhere; }
+.diag-list li:first-child { border-top: 0; }
+.diag-list small { color: var(--muted); font-size: 13px; }
+.diag-list .diag-steps { font-variant-numeric: tabular-nums; }

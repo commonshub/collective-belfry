@@ -7,7 +7,7 @@ import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
-import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
+import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce, retryNow, sendStep } from './sync'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
 // e-mail as Nostr Mail (kind 1301 in gift wraps, nogringo/nostr-mail). The belfry is the e-mail
@@ -363,16 +363,28 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
 /** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
  *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
 async function deliver(rumor: NostrEvent, to: string[], self = true) {
-  const wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
-  if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
-  for (const w of wraps) await enqueueSigned('main', w, rumor.id)
+  const people = [...new Set([...to, ...(self ? [me()] : [])])]
+  const conv = [...new Set([...to, me()])].sort().join(',') // its order is kept within the conversation (sync.ts)
+  dmStep.set(rumor.id, 'encrypting')
+  try {
+    const wraps = await Promise.all(people.map((p) => giftWrap(rumor, p)))
+    if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
+    for (const w of wraps) await enqueueSigned('main', w, rumor.id, conv)
+  } finally {
+    dmStep.delete(rumor.id)
+  }
 }
+/** a message being signed and wrapped, before its wraps are in the outbox */
+const dmStep = new Map<string, string>()
 
-/** Where a message stands in the outbox: waiting (and why, after a failed try). */
-export function queueState(d: Dm): { waiting: boolean; error?: string } {
+/** Where a message stands in the outbox: waiting (and why, after a failed try); since when (ms)
+ *  and the step it is at (the UI's "Still sending… · <step>"). */
+export function queueState(d: Dm): { waiting: boolean; error?: string; since: number; step?: string } {
   const mine = outboxItems().filter((o) => o.dm === d.rid)
   const err = mine.find((o) => o.error)?.error
-  return { waiting: mine.length > 0, error: err }
+  const since = Math.min(d.at * 1000, ...mine.map((o) => o.queuedAt ?? o.created_at * 1000))
+  const step = dmStep.get(d.rid) ?? mine.map((o) => sendStep(o.localId)).find(Boolean) ?? (err ? 'waiting to try again' : undefined)
+  return { waiting: mine.length > 0, error: err, since, step }
 }
 
 /** Put a refused message back in the outbox. */
@@ -384,7 +396,7 @@ export async function retryDm(d: Dm) {
   if (it) { it.failed = undefined; it.pending = true }
   if (d.emailId) reports.set(d.emailId, { status: 'queued', details: 'Waiting for the connection…' })
   save()
-  void flush()
+  retryNow()
 }
 
 let watching = false
