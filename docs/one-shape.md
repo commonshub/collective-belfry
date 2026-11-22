@@ -186,3 +186,37 @@ Someone who writes by e-mail has no profile. Apps show their Gravatar picture wh
 - Apps cache by hash (the HTTP cache does it; honour the `max-age` of a 404 too) and never call Gravatar or any other service with the address or its hash.
 
 On the server (mailfaces.py): pictures are kept 30 days and "no picture" 7 days in the folder `faces/` next to the register, at most 5000 entries; a failure is remembered 10 minutes; one request to Gravatar per hash at a time. `AVATARS=0` in `infra/.env` turns it off: always `404`, nothing is asked.
+
+## Notes to myself
+
+Xavier, 2026-11-22 / 23: "add as a default pinned thread in messages a message to yourself for
+personal notes. And explain it's encrypted only for your own devices. No one can read them."
+"…pinned at the top of messages on all platforms with the lock at the top showing that
+everything is e2e encrypted to all your devices."
+
+- **The row.** The first row of Messages on every platform, always, also when empty: "Notes
+  to myself" (the person's own face with a small lock, or the notes icon the board shows), then
+  the last note or "Only you can read these". It cannot be unpinned, archived or deleted, never
+  counts as unread, never notifies. For everyone who has Messages (members, guests, agents).
+- **The conversation** is the ordinary direct conversation whose only participant is me: no
+  new kind. A note = a kind 14 rumor, `pubkey` = my account, exactly one `p` tag = my account;
+  files = kind 15 the same way; replies (e root), reactions (7), deletions (5) and edits as in
+  any direct conversation. No typing events. Conversation id = the DM id of {me}.
+- **Sealed** (docs/sealed.md) whenever I have a chain and this device is in its head: wrapped
+  to my own head letterbox, seal signed by this device, no signer call. Unlike other
+  conversations this does NOT wait for my chain to be `ready` (the only reader is me; a device
+  of mine outside the head shows the usual waiting banner until it is added). A device makes
+  my chain when I have none, exactly as it does for any first sealed conversation.
+- **The lock.** When sealed, the header shows the lock and the screen starts with one fixed
+  line: "Encrypted for your own devices. Nobody else can read your notes, not the belfry's
+  admins either." Tapping the lock opens the Encryption screen, as in any sealed conversation.
+- **Not sealed** (an agent, an account that holds its own key, or a device that cannot seal):
+  the notes are NIP-17 wraps to my own account through the signer, as old direct messages;
+  no lock, and the line reads "Private to your account. Not end-to-end encrypted on this
+  account." Never the "nobody else" sentence there. Old unsealed notes stay readable and are
+  marked like any old message once the conversation is sealed.
+- **Reading.** A device shows every note any of my devices wrote (the letterbox history it
+  can open); a device added later reads what its keys open (5.5 hands it the chain's keys).
+  Read state: none needed.
+- Not in the first version: to-dos and pins inside Notes, sharing a message into Notes from
+  the hold menu ("Save to Notes": next).
