@@ -48,7 +48,8 @@ default while it needs me) and full.
   message: a kind 14 with `["e", "<root rumor id>", "", "root"]`, wrapped like any other; apps
   show such messages under their root, older apps show them in line.
 - **Pin** in a group: the existing `belfry/pin` label. Not offered in direct messages in this
-  version, and neither is Make a to-do (both need sealed rules first).
+  version, and neither is Make a to-do (both need sealed rules first). Copy link is not offered
+  there either: a direct message has no address. The menu there is reactions, Reply, Copy text.
 - **Activity lines**: an action about an item (to-do made or done, RSVP, meeting, vote) shows as
   one line with a hook to open a small preview of the item with its quick action. Open or
   closed is remembered per item on the device only. A preview that needs me starts open.
