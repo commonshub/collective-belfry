@@ -729,7 +729,8 @@ const DEMO: ApiEvent = {
   ],
 }
 
-export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: { link: string; backend: Backend; onJoined: (s: Session) => void; onSignIn: () => void; onDemo: (name: string) => void }) {
+export function EventJoinScreen({ link, backend, onJoined, onSignIn, onApply, onDemo }: { link: string; backend: Backend; onJoined: (s: Session) => void; onSignIn: () => void; /** members only: the start screen's application */ onApply?: () => void; onDemo: (name: string) => void }) {
+  const community = useCommunityName(NAME)
   const [ev, setEv] = useState<ApiEvent | null>(null)
   const [error, setError] = useState('')
   const [t, setT] = useState<ReturnType<typeof apiTicket> | null>(null)
@@ -754,7 +755,7 @@ export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: {
     return (
       <div className="screen login">
         <Logo />
-        {error ? <><h2>{error === 'members' ? 'This event is for members' : 'There is no such event here'}</h2><button className="btn" onClick={onSignIn}>I have an account: sign in</button></> : <p role="status">Opening the event…</p>}
+        {error ? <><h2>{error === 'members' ? 'This event is for members' : 'There is no such event here'}</h2><button className="btn" onClick={onSignIn}>I have an account: sign in</button>{error === 'members' && onApply && <button className="link start-apply" onClick={onApply}>Apply to join {community}</button>}</> : <p role="status">Opening the event…</p>}
       </div>
     )
   const start = ev.start ? new Date(ev.start) : undefined

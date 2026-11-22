@@ -52,4 +52,6 @@ export async function switchToLogin() {
 }
 /** sessionStorage: the start screen opens on this step once */
 export const START_AT = 'start-at'
+/** The start screen opens on STEP ('login': the e-mail to log in; 'apply') the next time it shows. */
+export function startAt(step: 'login' | 'apply') { try { sessionStorage.setItem(START_AT, step) } catch { /* private mode: the start screen's first step */ } }
 export function takeStartAt(): string { try { const v = sessionStorage.getItem(START_AT) ?? ''; sessionStorage.removeItem(START_AT); return v } catch { return '' } }

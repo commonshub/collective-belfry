@@ -11,7 +11,7 @@ import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demo
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, MemberInviteScreen, MemberNameScreen, OpeningScreen } from './GuestJoin'
 import { nameNext } from '../core/guestjoin'
-import { SIGNED_IN_AS, takeSignedInAs } from '../core/signedin'
+import { SIGNED_IN_AS, startAt, takeSignedInAs } from '../core/signedin'
 import { releaseApplicantKey } from '../core/direct'
 import type { SignedIn } from '../core/guestjoin'
 import { CheckIcon } from './icons'
@@ -161,7 +161,8 @@ export function App() {
   }
   // an event's URL opened in the chat by someone with no account: the event, RSVP or apply
   if (phase.p === 'out' && eventLinkFromUrl() && !signInFirst && !phase.error)
-    return <EventJoinScreen link={eventLinkFromUrl()} backend={backend} onSignIn={() => { setPendingEvent(eventLinkFromUrl()); setSignInFirst(true) }}
+    return <EventJoinScreen link={eventLinkFromUrl()} backend={backend} onSignIn={() => { setPendingEvent(eventLinkFromUrl()); startAt('login'); setSignInFirst(true) }}
+      onApply={() => { setPendingEvent(eventLinkFromUrl()); startAt('apply'); setSignInFirst(true) }}
       onJoined={async (s) => { await wipe(); await enter(s) }}
       onDemo={(name) => void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`))} />
   if (phase.p === 'out') return <WelcomeScreen invited={!!pendingInvite()} backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} onIn={directIn} />

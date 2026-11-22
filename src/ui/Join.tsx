@@ -55,7 +55,7 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
   // chat.<domain>/login/<username> (the proxy makes it #/login/<username>; "Link your phone"): Log
   // in with <username>@<domain> filled in. Only a username by the rule is used, never the raw text.
   const [linked] = useState(() => { const u = takeLoginLink(); return u ? `${u}@${BELFRY.domain}` : '' })
-  const [step, setStep] = useState<Step>(() => linked ? { s: 'login-email' } : hasApplicantKey() ? { s: 'checking' } : takeStartAt() === 'login' ? { s: 'login-email' } : atApply ? { s: 'apply' } : { s: 'start' })
+  const [step, setStep] = useState<Step>(() => linked ? { s: 'login-email' } : hasApplicantKey() ? { s: 'checking' } : ((at) => at === 'login' ? { s: 'login-email' } : at === 'apply' || atApply ? { s: 'apply' } : { s: 'start' })(takeStartAt()))
   const [email, setEmail] = useState(linked || appliedEmail())
   const [code, setCode] = useState('')
   const [why, setWhy] = useState('')
