@@ -523,9 +523,13 @@ export function isInbox(g: Group | undefined): boolean {
   // belfry:inbox for this channel, cached before a newer one for another channel replaced it on
   // the relay, still counted (OSV's #hello showed on, 2026-11-22). Then: the new d counts; the old
   // d only when one of its h tags is this channel; admins only; the latest wins.
+  // the groups key too: the lead copied every old-style setting into its per-channel d with it
+  // (OSV, belfry.sh, 2026-11-22), so an old app's bare-d write can't switch another channel off
+  const evs = all(me())
+  const relayKey = evs.find((e) => e.kind === 39000 && tag(e, 'd') === g.id)?.pubkey
   const latest = new Map<string, Ev>()
-  for (const e of all(me())) {
-    if (e.kind !== 30078 || !g.admins.has(e.pubkey)) continue
+  for (const e of evs) {
+    if (e.kind !== 30078 || !(g.admins.has(e.pubkey) || e.pubkey === relayKey)) continue
     const d = tag(e, 'd')
     if (d !== inboxD(g.id) && d !== INBOX_D) continue
     const k = e.pubkey + ' ' + d
