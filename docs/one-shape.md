@@ -10,7 +10,7 @@ events that already exist.
   and tablet keep the left column.
 - **No "follow".** The Town list is: channels pinned for everyone, channels I pinned, then
   channels where **I was mentioned, posted or reacted in the last 30 days** (opening one does
-  not count), newest activity first. Computed on the device from the events it holds.
+  not count), ordered by the channel's newest message, thread reply or reaction. Computed on the device from the events it holds.
 - **Pinned for everyone**: `"pinned": ["<group id>", …]` in the content of the existing kind
   30078 `d=belfry:channel-order` event (belfry admins write it; a writer keeps every other
   key). Unknown ids are skipped.
@@ -28,8 +28,8 @@ events that already exist.
 Two lines at most: the title, then one row of one-colour icons with counts (each left out at
 zero): the lead item in the accent colour (open e-mails, an event's date, "From <sender>"),
 people, pinned, to-dos, files, photos, comments. No avatars and no message count in the row.
-When the row does not fit, items leave in this order: the owner, files, to-dos; the lead item
-and people stay. Every item has a spoken label ("3 open to-dos").
+When the row does not fit, items leave in this order: the owner, files, to-dos, photos, comments,
+pinned; the lead item and people stay. Every item has a spoken label ("3 open to-dos").
 
 Pulled down, the thing itself is on top (the e-mails, the to-do, the event, the channel's
 description and pins) and the conversation about it below. A message thread hides nothing: its
@@ -61,7 +61,7 @@ default while it needs me) and full.
   Cards from before 2026-11-22 have neither: Reply all then answers the sender only.
 - **Reply all is the only reply.** The kind 1301 has one `rcpt-to` per person: the sender
   (`mail-from` of the latest received e-mail of the thread) plus its `to` and `cc`, without any
-  address at the belfry's own domain, without duplicates. Headers: `To` = the sender, `Cc` =
+  address at the belfry's own domain or one of its subdomains, lowercased, without duplicates. Headers: `To` = the sender, `Cc` =
   the others, `In-Reply-To` and `References` as before. The bridge takes at most 20 recipients.
 - **Answered is automatic.** After the delivery report says delivered, the app that sent the
   reply labels the thread's first card `answered` (the existing `belfry/inbox` label). A thread
