@@ -53,6 +53,10 @@ default while it needs me) and full.
 - **Activity lines**: an action about an item (to-do made or done, RSVP, meeting, vote) shows as
   one line with a hook to open a small preview of the item with its quick action. Open or
   closed is remembered per item on the device only. A preview that needs me starts open.
+- **To-do description**: `["description", "<Markdown, at most 2000 characters>"]` on the kind
+  2100, optional; the title stays where it is today. Changed by the author's kind 1010 edit,
+  like the due date. A to-do without one shows the text of the message it was made from (its
+  `q` tag) when that says more than the title.
 - **To-do due date**: `["due", "<unix seconds>"]` on the kind 2100; changed by the author's
   kind 1010 edit, which keeps every other tag. Shown first in the pull-down, never in the header.
 
