@@ -545,3 +545,22 @@ def test_without_the_own_register_the_endpoints_say_so(services, monkeypatch):
         for path in ("/apply/start", "/apply/verify", "/apply/status", "/login/start"):
             r = call(c, PrivateKey(), path, {})
             assert r.status_code == 409 and r.json()["error"] == "unsupported", path
+
+
+def test_an_accepted_applicant_is_never_an_admin(belfry, monkeypatch):
+    """Enspiral, 2026-11-22: both people accepted that day turned out to be admins."""
+    from belfry_onboarding import console
+
+    rsvc, _k, ada, rule, _g = belfry
+    bound_keys(rsvc, monkeypatch)
+    nora = PrivateKey()
+    with TestClient(create_app(rsvc)) as c:
+        apply(c, nora, rule, name="Nora New")
+        [row] = apps_of(rsvc)
+        r = call(c, ada, "/applications", {"decide": row["id"], "approve": True})
+        assert r.status_code == 200, r.text
+        call(c, nora, "/apply/status", {})
+    [p] = rsvc.odoo.search_read("res.partner", [["email", "=", NORA]], ["belfry_role"])
+    console._admins["at"] = 0.0
+    assert NORA not in console.admin_emails(rsvc)
+    assert p.get("belfry_role") != "admin"
