@@ -79,3 +79,44 @@ default while it needs me) and full.
   author edits it with kind 1010. Sending it = the kind 1301 with `["draft", "<draft id>"]`; the
   sent card carries the same tag and apps then hide the draft. The author may also delete it.
 - Cc'd outsiders are addresses only: no account, no guest.
+
+## Joining the belfry: a line in the main channel (2026-11-22)
+
+Xavier: "when someone joins the belfry there is a message in town square to make sure everyone
+can see who entered the room." When a membership opens (a new member, an accepted application, a
+member link, a guest who becomes a member, a member's own agent), the belfry publishes once per
+person, as the groups key (`joined.py`):
+
+```
+kind 9000
+["h", "general"], ["p", <pubkey>, "member"], ["joined", "belfry"], ["name", <name>]
+["agent", "1"]            for an agent
+```
+
+Apps draw it as an activity line in the main channel: "‹name› joined ‹the belfry's name›" (an
+agent: "‹name›, ‹owner›'s agent, joined"), the face and name opening the profile. The name comes
+from the profile when there is one, else from the tag. A `9000` in `general` without the
+`joined` tag draws no such line (older ones, and guests': theirs carry `guest` and `invited-by`
+and keep their own line). A person removed since (`9001` later) who never wrote keeps no line.
+Not for guests of one channel, reading guests, or a buyer whose address is not proven yet.
+People who joined before this date have no line.
+
+## Groups: open, closed, private (2026-11-22)
+
+The New group form asks only the name, what it is working on, and who can join:
+
+| Choice | In the form | On the group's metadata (9007 / 9002) |
+|---|---|---|
+| Open | "Any member can join" | `open`, `public` |
+| Closed | "Members apply to join" | `closed`, `public` (+ `prompt`, `vouches` from Settings) |
+| Private | "Only invited people" | `closed`, `private` |
+
+Private: no Apply button, no card or list entry for someone who is not in it, nobody asks to
+join (a `9021` for a private group is not shown and not answered); an admin adds people (`9000`,
+or `POST /group-roles` role `member` for an admin by role). `POST /group-meta` takes
+`"private": true|false` next to `closed`. The question people answer and how requests are
+accepted (by its stewards / when members vouch) are in the group's Settings, shown for Closed
+only; a new Closed group starts with no question and "by its stewards".
+
+After the form, the creator picks people from a grid of the belfry's members (the directory;
+not guests) and adds them: one `9000` per person, `["p", <pubkey>, "member"]`.

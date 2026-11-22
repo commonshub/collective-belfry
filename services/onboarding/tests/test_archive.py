@@ -47,6 +47,7 @@ def test_archive_and_unarchive_through_group_meta(rsvc, cw, keycast):
             "name": "Garden",
             "about": "Roof",
             "closed": True,
+            "private": False,
             "archived": True,
         }
         e = cw.grp.events[-1]

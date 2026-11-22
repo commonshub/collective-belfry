@@ -1123,6 +1123,12 @@ def _finish_activation(
             roles.give_default(svc, partner_id)
         except Exception:  # noqa: BLE001 — the membership is open; the role is a label
             log.exception("activate_pass: no default role for partner %s", partner_id)
+    if tier != "guest" and not (partner.get("belfry_pending_email") and not partner.get("email")):
+        # everyone sees who came in: a line in the main channel (joined.py); never for a buyer
+        # whose address is not proven yet, never for a guest of one channel
+        from . import joined
+
+        joined.announce(svc, pubkey, partner.get("name") or "", agent=tier == "agent")
     log.info(
         "activate_pass: pass %s active for partner %s (%s), npub %s, %s..%s",
         pass_row["id"],

@@ -15,8 +15,11 @@ person's devices. The signer is never asked: sealing, opening and signing happen
 
 - Protected: everything stored (relay, backups, database). The server and admins cannot read it.
 - Not protected: a device that is compromised; the web app's code is served by the belfry;
-  an admin can still make a *new* device appear for someone, which everybody sees as a notice
-  and which cannot read earlier messages.
+  an admin can still make a *new* device appear for someone. Since 2026-11-22 (§5.2 step 2,
+  Xavier's choice of no tap over a prompt) the person's own devices add it and hand it the
+  keys by themselves, so such a device reads what the person can read; the person sees
+  "‹device› was added · Not you? Remove it" on every device (§5.2 step 2a). Before that
+  date a new device had to be allowed by hand.
 - E-mail: sealed on arrival and in the thread; in clear at the moment it enters or leaves the
   belfry's mail server, and at the other side's provider.
 - A removed or stolen device can no longer read, but it can still write messages dated before
@@ -217,8 +220,30 @@ Until it is allowed it reads no sealed message at all, old or new (it has no let
 An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}`:
 1. `GET /api/me/sessions`: the request's pubkey must be the `client_pubkey` of a live session with `"chat": true`;
    otherwise ignore it. The prompt's device name comes from that session.
-2. With a valid `link` for a code this device showed in the last 15 minutes: allow at once.
-   Otherwise ask: Allow / Not me.
+2. Allow at once, without a prompt (Xavier, 2026-11-22: "If I'm connecting a new device to my
+   account it should automatically consider it as a sealed device"), when ALL of these hold;
+   otherwise ask: Allow / Not me.
+   - the sessions list of step 1 was read for this request (never a cached copy), and the
+     session is live and `"chat": true`;
+   - the request's `created_at` is not before that session's `created_at` minus 120 s, and
+     not more than 30 days old;
+   - this device is in the head it holds (pinned), on the anchored end, and trusted (§3.4);
+   - fewer than 3 devices were added to my head without a prompt in the last 24 hours
+     (counted from the rosters' own times, whoever added them). A fourth asks.
+   A valid `link` (a code this device showed in the last 15 minutes) allows at once too and
+   does not count toward the 3.
+   Two devices of mine may both see the request: each first reads the chain again; a roster
+   that already has the new device means there is nothing to add, only the keys to hand over
+   (5.5, which is idempotent per device).
+2a. The notice. Every device of mine that sees a roster add a device WITHOUT this device
+   having shown a prompt or a link code for it shows, on top of Messages and in Devices:
+   "‹session name› was added ‹time› · Not you? Remove it". It stays, across restarts, until
+   the person taps "It was me" or Remove, or the device leaves the head. Remove = 5.6
+   (revoke the session first, then the roster without it and a new letterbox). The device
+   that did the adding shows it as well. One notice per added device.
+   What this gives up, said plainly (§1): whoever can open a chat session on my account (the
+   belfry's server, so its admins; or someone with my mailbox) gets my sealed messages the
+   next time one of my devices is online, and I learn it from the notice, not before.
 3. Allow: when the roster already has 20 devices, refuse and say so. Else publish roster n+1 = same `lb`, devices + the new one, with its anchor; only when that
    change is done (§3.2: accepted and on the anchored path) send the keys (5.5) to the new device.
    Never the keys first: a device that ends in no roster must not hold them.

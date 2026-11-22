@@ -377,6 +377,7 @@ def test_group_meta_keeps_the_other_tags(rsvc, cw):
             "name": "Roof garden",
             "about": "New",
             "closed": True,
+            "private": False,
             "archived": False,
         }
         e = cw.grp.events[-1]
@@ -465,3 +466,18 @@ def test_an_admin_by_role_answers_a_request_to_a_closed_channel(rsvc, cw, keycas
         # an event's requests go through the event
         r = decide_post(c, ada, {"channel": GROUP, "pubkey": pk(cy), "action": "approve"})
         assert r.status_code == 409 and r.json()["error"] == "event"
+
+
+def test_group_meta_makes_a_group_private_and_public_again(rsvc, cw):
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    cw.put(ada, 9007, [["h", "pod-garden"]])
+    cw.put(cw.gkey, 39000, [["d", "pod-garden"], ["name", "Garden"], ["open"], ["public"]])
+    with TestClient(create_app(rsvc)) as c:
+        r = meta_post(c, ada, {"channel": "pod-garden", "closed": True, "private": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["private"] is True and r.json()["closed"] is True
+        e = cw.grp.events[-1]
+        assert e["kind"] == 9002 and ["private"] in e["tags"] and ["closed"] in e["tags"]
+        assert ["public"] not in e["tags"] and ["open"] not in e["tags"]
+        assert ["name", "Garden"] in e["tags"]
+        assert meta_post(c, ada, {"channel": "pod-garden", "private": "yes"}).status_code == 422

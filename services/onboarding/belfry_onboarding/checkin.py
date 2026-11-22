@@ -450,7 +450,8 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         if not archivable(group):
             raise ApiError(422, "invalid", "Events and proposals can't be archived.")
     was_archived = is_archived(svc, group)
-    others = [k for k in ("name", "about", "picture", "closed", "prompt", "vouches") if k in data]
+    editable = ("name", "about", "picture", "closed", "private", "prompt", "vouches")
+    others = [k for k in editable if k in data]
     if was_archived and (others or data.get(ARCHIVED) is not False):
         raise ApiError(409, "archived", "This group is archived. Unarchive it first.")
 
@@ -477,6 +478,13 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
             raise ApiError(422, "invalid", "closed: true or false.")
         tags = [t for t in tags if t[0] not in ("closed", "open")]
         tags.append(["closed"] if data["closed"] else ["open"])
+    if "private" in data:
+        # NIP-29 `private`: only its members read it. With `closed`, "Private · only invited
+        # people" (docs/one-shape.md "Groups"): nobody asks to join, an admin adds people.
+        if not isinstance(data["private"], bool):
+            raise ApiError(422, "invalid", "private: true or false.")
+        tags = [t for t in tags if t[0] not in ("private", "public")]
+        tags.append(["private"] if data["private"] else ["public"])
     if "prompt" in data:
         put("prompt", str(data["prompt"] or "")[:500])
     if "vouches" in data:
@@ -499,6 +507,7 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         "name": meta.get("name", ""),
         "about": meta.get("about", ""),
         "closed": "closed" in meta,
+        "private": "private" in meta,
         "archived": archived,
     }
 
