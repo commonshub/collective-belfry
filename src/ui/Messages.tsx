@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { openProfile } from './Profile'
-import { MailIcon } from './icons'
+import { LockIcon, MailIcon } from './icons'
 import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { cancelHeld, heldFailure, heldFor, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, LookupFailed, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { cancelHeld, heldFailure, heldFor, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, LookupFailed, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, isNotes, notesConv, type Conv, type Dm } from '../core/dm'
 import { previewOf, sendDmFiles } from '../core/dm'
 import { MAX_FILE, MAX_FILE_GUEST, bubbles, tooLarge } from '../core/dmfiles'
 import { isGuest } from '../core/invite'
@@ -49,7 +49,8 @@ export function MessagesList() {
   const [, tick] = useState(0)
   useEffect(() => onTyping(() => tick((n) => n + 1)), [])
   const [creating, setCreating] = useState(false)
-  const list = threads()
+  const all = threads()
+  const list = all.filter((t) => !isNotes(t.conv))
   return (
     <div className="screen">
       <div className="topbar">
@@ -61,6 +62,7 @@ export function MessagesList() {
       <div className="scroll">
         <AddedBanner />
         {anyLockedHere() && <LockedBanner />}
+        <NotesRow last={all.find((t) => isNotes(t.conv))?.last} />
         {list.length === 0 && (
           <div className="empty">
             No messages yet.<br />
@@ -88,6 +90,29 @@ export function MessagesList() {
       </div>
       {creating && <NewMessage onClose={() => setCreating(false)} />}
     </div>
+  )
+}
+
+/** Notes to myself (docs/one-shape.md, board messages/notes-list): always the first row, pinned,
+ *  never unread; my own face with the lock when sealed; the last note or "Only you can read these". */
+export const NOTES = 'Notes to myself'
+export const NOTES_SEALED = 'Encrypted for your own devices. Nobody else can read your notes, not the belfry’s admins either.'
+export const NOTES_OPEN = 'Private to your account. Not end-to-end encrypted on this account.'
+function NotesRow({ last }: { last?: Dm }) {
+  const conv = notesConv()
+  const sealed = isSealed(conv)
+  return (
+    <button className="chan dm-row notes-row" onClick={() => go('dm/' + enc(conv))}>
+      <span className="notes-face"><Avatar pubkey={me()} size={36} />{sealed && <span className="notes-lock" aria-label="End-to-end encrypted"><LockIcon /></span>}</span>
+      <span className="t">
+        <b>{NOTES}</b>
+        <small>{last ? plainRefs(previewOf(last)).split('\n')[0] : 'Only you can read these'}</small>
+      </span>
+      <span className="dm-meta">
+        {last && <time>{fmtTime(last.at)}</time>}
+        <span className="notes-pin" aria-label="Pinned">📌</span>
+      </span>
+    </button>
   )
 }
 
@@ -144,6 +169,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const sub = mail ? (who !== addr ? `${who} · ${addr}` : `E-mail · ${addr}`) : peers(conv).map((p) => profiles().get(p)?.nip05).filter(Boolean).join(', ')
   const title = mail ? (isNewMail(conv) ? `New e-mail to ${who}` : threadName(conv)) : convName(conv)
   const sealed = isSealed(conv)
+  const notes = isNotes(conv)
   // the device lines between the messages, by time (core/sealed.ts; none unless sealed)
   const lines = sealed && !locked ? deviceLines(conv) : []
   // pictures sent together and their caption are one bubble (dmfiles.ts bubbles)
@@ -158,14 +184,17 @@ export function MessageThread({ conv }: { conv: Conv }) {
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button>
-        {!mail && peers(conv).length === 1
+        {notes
+          ? <><span className="notes-face"><Avatar pubkey={me()} size={30} /></span><h1><span className="seal-title">{NOTES}{sealed && <LockButton conv={conv} />}</span></h1></>
+          : !mail && peers(conv).length === 1
           ? <PersonHead pubkey={peers(conv)[0]} sealed={sealed ? conv : undefined} />
           : <><Who conv={conv} size={30} /><h1><span className="seal-title">{title}{sealed && <LockButton conv={conv} />}</span>{sub && <small>{sub}</small>}</h1></>}
         {mail && !isNewMail(conv) && <button className="icon-btn" aria-label={`New e-mail to ${who}`} title="New e-mail (a new thread)" onClick={() => go('dm/' + enc('m:' + addr))}>＋</button>}
       </div>
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
-          {list.length === 0 && !locked && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
+          {notes && <div className="notes-line" role="note">{sealed ? NOTES_SEALED : NOTES_OPEN}</div>}
+          {list.length === 0 && !locked && !notes && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
           {rows.map((r) => {
             const t = 'd' in r ? r.d.at * 1000 : r.l.at
             const dd = fmtDay(new Date(t))
@@ -462,7 +491,7 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
       )}
       <div className="bar">
         {canFiles && <button type="button" className="plus" aria-label="Add a picture, a file or a recording" onClick={() => setMenu(true)}>＋</button>}
-        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? (needsSubject ? 'Write an e-mail' : 'Reply by e-mail') : files.length ? 'Add a caption' : 'Message'} value={text}
+        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? (needsSubject ? 'Write an e-mail' : 'Reply by e-mail') : files.length ? 'Add a caption' : isNotes(conv) ? 'Note to myself' : 'Message'} value={text}
           onChange={(e) => { const v = e.target.value; setText(v); if (tplace) { if (v.trim()) typed(tplace, v); else cleared(tplace) } }}
           onPaste={(e) => { const pasted = canFiles ? [...e.clipboardData.files] : []; if (!pasted.length) return; if (!e.clipboardData.getData('text/plain')) e.preventDefault(); add(pasted) }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() } }} />

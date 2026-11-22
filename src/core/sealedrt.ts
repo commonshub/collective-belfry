@@ -350,6 +350,8 @@ export const readyChain = (pk: string) => { const c = chainOf(pk); return !!c &&
 // ---- conversations --------------------------------------------------------------------------
 
 const participants = (conv: Conv): string[] => (conv.startsWith('n:') ? conv.slice(2).split(',') : [])
+/** Notes to myself: the direct conversation whose only participant is me. */
+export const isNotesConv = (conv: Conv) => conv === 'n:' + me()
 const peopleOf = (conv: Conv) => (conv.startsWith('m:') ? [me()] : [...new Set([...participants(conv), me()])])
 
 function markSealed(conv: Conv) {
@@ -364,6 +366,8 @@ function markSealed(conv: Conv) {
 export function isSealedConv(conv: Conv): boolean {
   if (!active()) return false
   if (sealedSet().has(conv)) return true
+  // Notes to myself (docs/one-shape.md): sealed as soon as I have a chain, never waiting for ready
+  if (isNotesConv(conv)) { if (!chainOf(me())) return false; markSealed(conv); return true }
   if (!peopleOf(conv).every(readyChain)) { void ensureChains(conv); return false }
   markSealed(conv)
   return true
@@ -395,6 +399,14 @@ export async function sendMode(conv: Conv, refresh = true): Promise<'sealed' | '
   if (!active()) return 'old' // demo, guest, or no device key: today's way
   if (refresh) await refreshChains(conv)
   if (sealedSet().has(conv)) return 'sealed'
+  // Notes to myself: sealed whenever I have a chain (this device in its head or not: out of it, the
+  // note is held like any sealed one), never the old way for want of a chain: with a definite "no
+  // chain" this device makes it now (first-device path) and the note waits, shown as sending
+  if (isNotesConv(conv)) {
+    if (chainOf(me())) { markSealed(conv); return 'sealed' }
+    if (known(me())) scheduleMyDevice(0)
+    return 'undecided'
+  }
   const people = peopleOf(conv)
   if (people.every(readyChain)) { markSealed(conv); return 'sealed' }
   if (people.some((p) => !readyChain(p) && known(p))) return 'old'

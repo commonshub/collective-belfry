@@ -126,7 +126,8 @@ function realLines(conv: Conv): DeviceLine[] {
   return out.sort((a, b) => a.at - b.at)
 }
 
-export const isSealed = (conv: Conv) => (real() ? R.isSealedConv(conv) : state.sealed.has(conv))
+// demo: Notes to myself is sealed as soon as I have devices (window.demoSealed), like the real rule
+export const isSealed = (conv: Conv) => (real() ? R.isSealedConv(conv) : state.sealed.has(conv) || (conv === 'n:' + me() && state.mine.length > 0))
 export const myDevices = () => (real() ? realMine() : state.mine)
 export const hasDevices = () => myDevices().length > 0
 /** canvas v117: this browser is my only device for sealed conversations (never for a guest; not

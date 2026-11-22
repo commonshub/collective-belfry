@@ -386,13 +386,18 @@ function notePartners(list: Thread[]) {
   if (key !== partnersSent) { partnersSent = key; setPartners(ps) }
 }
 
+/** Notes to myself (docs/one-shape.md): the direct conversation whose only participant is me
+ *  (kind 14 / 15, one p = my account). Pinned first in Messages, never unread. */
+export const notesConv = (): Conv => 'n:' + me()
+export const isNotes = (conv: Conv) => conv === notesConv()
+
 export function threads(): Thread[] {
   const by = new Map<Conv, Dm[]>()
   for (const d of items.values()) (by.get(d.conv) ?? by.set(d.conv, []).get(d.conv)!).push(d)
   const out = [...by.entries()].map(([conv, list]) => {
     list.sort((a, b) => a.at - b.at)
     const last = list[list.length - 1]
-    return { conv, last, count: list.length, unread: list.filter((d) => !d.mine && d.at > readUpTo('d', conv)).length }
+    return { conv, last, count: list.length, unread: isNotes(conv) ? 0 : list.filter((d) => !d.mine && d.at > readUpTo('d', conv)).length }
   }).sort((a, b) => b.last.at - a.last.at)
   notePartners(out)
   return out
