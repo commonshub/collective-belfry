@@ -7,8 +7,9 @@ their free pass, ``... steward-passes`` for the passes of all stewards;
 ``... accounting-check`` for the ticket seller's Odoo and its ids, ``... accounting-book [pass id]``
 to book paid tickets there (accounting.py); ``... setup-reset [--all-admins] [--dry-run]`` to
 open /setup again after a stranger claimed a new belfry (setup.reset; prints JSON, run by
-``belfry setup-reset``); ``... mailcheck`` for port 25 of the MX over IPv4 and IPv6 (mailcheck.py,
-run at the end of ``belfry apply``)."""
+``belfry setup-reset``); ``... mailcheck`` for port 25 of the MX over IPv4 and IPv6
+(mailcheck.py, run at the end of ``belfry apply``); ``... inbox <channel> [on|off]`` for a
+channel's shared inbox."""
 
 from __future__ import annotations
 
@@ -173,6 +174,13 @@ def main(argv: list[str] | None = None) -> int:
         help="connect to port 25 of the belfry's MX over IPv4 and IPv6 (EHLO, MAIL, RCPT, no "
         "DATA): one line per family, exit 1 on any failure (belfry apply runs it)",
     )
+    ib = sub.add_parser(
+        "inbox",
+        help="a channel's shared inbox (E-mails from anyone): its state as the server reads "
+        "it, or turn it on / off (a setting signed by the groups key)",
+    )
+    ib.add_argument("channel")
+    ib.add_argument("state", nargs="?", choices=["on", "off"])
     imp = sub.add_parser(
         "register-import",
         help="copy people, passes and invites from Odoo into the belfry's own register",
@@ -195,6 +203,31 @@ def main(argv: list[str] | None = None) -> int:
         print(register_import(odoo, Register(settings.register_path, settings), args.force))
         return 0
     services = build_services(settings)
+    if args.command == "inbox":
+        from . import mail
+
+        try:
+            if args.state:
+                on = mail.set_inbox(services, args.channel, args.state == "on")
+            else:
+                if not mail.channel_exists(services, args.channel):
+                    raise LookupError(args.channel)
+                on = mail.inbox_now(services, args.channel)
+        except LookupError:
+            print(f"no channel {args.channel} on the groups relay", file=sys.stderr)
+            return 2
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"{args.channel}: e-mails from anyone {'on' if on else 'off'}")
+        if args.state and on != (args.state == "on"):
+            print(
+                "the relay did not take it as expected (is the groups key in the channel's "
+                "admins, kind 39001?)",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
     if args.command == "mailcheck":
         from . import mailcheck
 

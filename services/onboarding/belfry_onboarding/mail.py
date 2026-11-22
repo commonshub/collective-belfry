@@ -291,6 +291,43 @@ def inbox_on(svc: Services, channel: str) -> bool:
     return on
 
 
+def inbox_now(svc: Services, channel: str) -> bool:
+    """inbox_on as the relay says it now (the minute's cache skipped)."""
+    with _lock:
+        _cache.pop("inbox:" + channel, None)
+    return inbox_on(svc, channel)
+
+
+def set_inbox(svc: Services, channel: str, on: bool) -> bool:
+    """Turn CHANNEL's shared inbox on or off without a client (``belfry inbox``, the console):
+    the 30078 setting signed by the groups key, which is in every channel's 39001 (so inbox_on
+    counts it). Returns the state read back from the relay. Raises RuntimeError without a groups
+    relay, LookupError for an unknown channel."""
+    got = followers._relay(svc)
+    if got is None:
+        raise RuntimeError("no groups relay")
+    if not channel_exists(svc, channel):
+        raise LookupError(channel)
+    relay, sign = got
+    # newer than any setting there (a replaceable event of the same second: the lower id wins)
+    before = relay.query([{"kinds": [30078], "#d": [inbox_d(channel)], "limit": 40}], sign)
+    at = max([int(time.time())] + [int(e.get("created_at") or 0) + 1 for e in before])
+    event = sign(
+        {
+            "kind": 30078,
+            "created_at": at,
+            "tags": [["d", inbox_d(channel)], ["h", channel]],
+            "content": json.dumps({"on": bool(on)}),
+        }
+    )
+    relay.publish(event, sign)
+    with _lock:
+        _cache.pop("inbox:" + channel, None)
+        _cache.pop(channel, None)
+    log.info("mail: shared inbox of %s turned %s by the belfry", channel, "on" if on else "off")
+    return inbox_now(svc, channel)
+
+
 def resolve(svc: Services, address: str) -> dict[str, Any] | None:
     """What ADDRESS is here: a member, a channel or the admins (cached a minute), else None."""
     local, _, dom = address.strip().lower().rpartition("@")
