@@ -197,12 +197,13 @@ export async function startSealed(clientSecret: string) {
     setHoldBack((o) => !!o.dm && !!o.signed && o.signed.kind === C.WRAP && !!C.wrapLb(o.signed) && notInHead())
     onOutbox((item) => { if (item.dm && packs.has(item.dm)) void dropPack(item.dm) }, () => {})
     // the relay answered after AUTH: what was waiting for an answer runs (my own path, held messages)
-    onEose((t) => { if (t === 'main' && relayAuthed('main')) { if (pathDue) scheduleMyDevice(0); decidable() } })
+    onEose((t) => { if (t === 'main' && relayAuthed('main')) { if (pathDue) scheduleMyDevice(0); decidable(); kick() } })
     let t: ReturnType<typeof setTimeout> | null = null
     subscribe(() => { t ??= setTimeout(() => { t = null; void onStore() }, 400) })
     // a pass also on coming back to the tab and every minute: a request read while the tab slept,
     // or one put off (notNow), never waits for the next relay event (Xavier's Android, 2026-11-22)
     const again = () => { t ??= setTimeout(() => { t = null; void onStore() }, 400) }
+    kick = again
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') again() })
     addEventListener('focus', again)
     setInterval(again, 60e3)
@@ -851,8 +852,18 @@ function noteAuto(name: string, result: string) {
   lastAuto = { at: Date.now(), name: plainName(name), result }
   try { localStorage.setItem(KEY_AUTO, JSON.stringify(lastAuto)) } catch { /* private window */ }
 }
+/** The same reason for the same request is written once (the pass runs every minute). */
+const notedFor = new Map<string, string>()
+function noteAutoOnce(r: NostrEvent, why: string) {
+  if (notedFor.get(r.id) === why) return
+  notedFor.set(r.id, why)
+  noteAuto('A device ' + r.pubkey.slice(0, 8), why)
+}
 const plainName = (s: string) => s.replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 60)
 
+/** A pass soon (set at start): after AUTH's EOSE, on return, every minute. */
+let kick = () => {}
+const autoFails = new Map<string, number>() // request id → failed automatic tries
 const autoTried = new Map<string, string>() // request id → my head when step 2 was checked for it
 
 async function markPrompted(dev: string) {
@@ -928,8 +939,9 @@ async function onStorePass() {
   }
   for (const r of [...newest.values()].sort((a, b) => b.created_at - a.created_at)) {
     if (answering.has(r.pubkey)) continue // its Allow / Not me is running: never a second card or answer
-    if (doneRequests.has(r.id) || asking?.id === r.id) continue
-    if (Date.now() - (requestLater.get(r.id) ?? 0) < 60e3) continue
+    if (asking?.id === r.id) continue
+    if (doneRequests.has(r.id)) continue
+    if (Date.now() - (requestLater.get(r.id) ?? 0) < 50e3) continue // < the minute tick: the next tick tries again
     const pin = st.pins[me()] ?? null
     const inBoth = anchoredEnd(c).devices.includes(r.pubkey) && C.headOf(c).devices.includes(r.pubkey)
     if (inBoth && (!pin?.trusted || pin.trusted.includes(r.pubkey))) {
@@ -958,12 +970,12 @@ async function onStorePass() {
       continue
     }
     // in the head but not trusted after a switch: the person decides (the Allow card below)
-    if (!C.validEvent(r as unknown)) { requestDone(r.id); continue }
+    if (!C.validEvent(r as unknown)) { noteAutoOnce(r, 'its request is not a valid event'); requestDone(r.id); continue }
     let sessions = await mySessions(30e3)
     if (sessions && !sessions.some((s) => s.client_pubkey === r.pubkey && s.chat === true)) sessions = await mySessions(0) // a session newer than the cache
-    if (!sessions) { notNow(r.id); continue } // can't tell now: next time
+    if (!sessions) { noteAutoOnce(r, 'not now: the sessions list could not be read'); notNow(r.id); continue } // can't tell now: next time
     const row = sessions.find((s) => s.client_pubkey === r.pubkey && s.chat === true)
-    if (!row) { notNow(r.id); continue } // not listed (yet): asked again later, never remembered
+    if (!row) { const any = sessions.find((s) => s.client_pubkey === r.pubkey); noteAutoOnce(r, any ? `its session is listed but not as a chat app (${plainName(any.application_name || '')})` : `its session is not in your sessions list (${sessions.length} listed)`); notNow(r.id); continue } // not listed (yet): asked again later, never remembered
     const fresh = shownCodes.filter((x) => Date.now() - x.at < 15 * 60e3)
     if (fresh.some((x) => C.linkOk(x.secret, r))) {
       await markPrompted(r.pubkey) // a code this device showed: no notice here
@@ -973,17 +985,28 @@ async function onStorePass() {
     // §5.2 step 2 (Xavier, 2026-11-22): a device signing in to my account is allowed at once, without a
     // prompt, when every condition holds; the other devices of mine show the notice (2a)
     if (asking?.device !== r.pubkey && autoTried.get(r.id) !== head.id) {
-      const now = await mySessions(0) // read for this request, never a cached copy
       const name = row.device || row.application_name || 'A new device'
+      // a tab just back from the background (iOS Safari stops a hidden tab): the relay is still
+      // reconnecting and a roster can't go out yet. Wait for AUTH (the EOSE after it runs a pass),
+      // never the card for that (Xavier's Android, 2026-11-22)
+      if (!relayAuthed('main')) { noteAutoOnce(r, 'not now: waiting for the connection'); continue }
+      const now = await mySessions(0) // read for this request, never a cached copy
       if (!now) { noteAuto(name, 'not now: the sessions list could not be read'); notNow(r.id); continue } // asked again, no card yet
-      autoTried.set(r.id, head.id) // once per request and head: a refusal here leaves it to the card
       const live = now.find((s) => s.client_pubkey === r.pubkey && s.chat === true)
       const why = live ? autoRefusal(c, r, live) : 'its session is not live'
-      let done = false
-      if (!why) {
-        try { await allow(r.pubkey); requestDone(r.id); done = true; noteAuto(name, 'added') } catch { noteAuto(name, 'adding it failed: asked on this device instead') }
-      } else noteAuto(name, 'asked on this device: ' + why)
-      if (done) { touch(); continue }
+      if (why) { autoTried.set(r.id, head.id); noteAuto(name, 'asked on this device: ' + why) } // a refusal: the card
+      else {
+        try { await allow(r.pubkey); requestDone(r.id); noteAuto(name, 'added'); touch(); continue } catch (e) {
+          // a failed try (the relay refused or dropped the roster…) is tried again at the next
+          // passes; only the third failure for this request shows the card
+          const n = (autoFails.get(r.id) ?? 0) + 1
+          autoFails.set(r.id, n)
+          const msg = plainName(e instanceof Error ? ((e as Error & { why?: string }).why ?? e.message) : 'error')
+          if (n < 3 && e instanceof Error && e.message !== FULL) { noteAuto(name, `adding it failed (${msg}): trying again`); notNow(r.id); continue }
+          autoTried.set(r.id, head.id)
+          noteAuto(name, `adding it failed (${msg}): asked on this device instead`)
+        }
+      }
       if (answering.has(r.pubkey)) continue
     }
     // the card: one device at a time; the same device again only moves to its newer request
@@ -1070,7 +1093,7 @@ async function allowOnce(newDevice: string) {
       const devices = [...head.devices, newDevice]
       return { n: head.n + 1, prev: head.id, lb: head.lb, devices, ready: C.isReady(c) || C.mayCarryReady(sessions, devices) }
     }))
-  } catch (e) { throw e instanceof NotDone ? new Error('Not allowed yet: the change didn’t go through. Try again in a moment.') : e }
+  } catch (e) { throw e instanceof NotDone ? Object.assign(new Error('Not allowed yet: the change didn’t go through. Try again in a moment.'), { why: e.message }) : e }
   // §5.2 step 3: the keys only now the device is on the anchored path (this change, or a roster of
   // mine this change finished anchoring); lost on the way: it asks again and is answered at once (§5.5)
   void ev
