@@ -86,7 +86,7 @@ function realMine(): MyDevice[] {
   // no chain yet: where I'm signed in is still my list (the chat sessions, canvas v88)
   if (!c) return rows.filter((r) => r.chat === true && r.client_pubkey).map((r) => {
     const name = r.device || r.application_name || 'A device'
-    return { id: r.client_pubkey!, name, kind: kindOf(name), added: r.created_at ? Date.parse(r.created_at) : 0, active: r.last_activity ? Date.parse(r.last_activity) : undefined, here: r.client_pubkey === R.devicePub() }
+    return { id: r.client_pubkey!, name, kind: kindOf(name), added: r.created_at ? (SC.whenOf(r.created_at) * 1000 || 0) : 0, active: r.last_activity ? (SC.whenOf(r.last_activity) * 1000 || undefined) : undefined, here: r.client_pubkey === R.devicePub() }
   })
   return SC.headOf(c).devices.map((d) => {
     const at = c.added.get(d)
@@ -94,7 +94,7 @@ function realMine(): MyDevice[] {
     const row = rows.find((x) => x.client_pubkey === d)
     const named = R.deviceNames()[d]
     const name = (typeof named?.name === 'string' && named.name) || sessionName(d) || 'A device'
-    return { id: d, name, kind: kindOf(name), added: (at?.created_at ?? 0) * 1000, from: by, active: row?.last_activity ? Date.parse(row.last_activity) : undefined, here: d === R.devicePub() }
+    return { id: d, name, kind: kindOf(name), added: (at?.created_at ?? 0) * 1000, from: by, active: row?.last_activity ? (SC.whenOf(row.last_activity) * 1000 || undefined) : undefined, here: d === R.devicePub() }
   })
 }
 function realTheirs(pk: string): TheirDevices | undefined {

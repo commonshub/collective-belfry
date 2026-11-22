@@ -200,6 +200,12 @@ export async function startSealed(clientSecret: string) {
     onEose((t) => { if (t === 'main' && relayAuthed('main')) { if (pathDue) scheduleMyDevice(0); decidable() } })
     let t: ReturnType<typeof setTimeout> | null = null
     subscribe(() => { t ??= setTimeout(() => { t = null; void onStore() }, 400) })
+    // a pass also on coming back to the tab and every minute: a request read while the tab slept,
+    // or one put off (notNow), never waits for the next relay event (Xavier's Android, 2026-11-22)
+    const again = () => { t ??= setTimeout(() => { t = null; void onStore() }, 400) }
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') again() })
+    addEventListener('focus', again)
+    setInterval(again, 60e3)
     scheduleMyDevice(3000)
     setInterval(() => scheduleMyDevice(0), 6 * 3600e3)
   } finally { loadedResolve() }
@@ -812,21 +818,40 @@ export function addedLastDay(c: C.Chain, now = nowS()): number {
   return n
 }
 
-/** §5.2 step 2: every condition for allowing request R at once. LIVE is its session's row from a
- *  sessions list read for this request (live, "chat": true). */
-function autoAllowOk(c: C.Chain, r: NostrEvent, live: SessionRow): boolean {
-  if (!device || live.chat !== true) return false
-  const since = live.created_at ? Date.parse(live.created_at) / 1000 : NaN
-  if (!Number.isFinite(since)) return false // no session start: the person decides
-  if (r.created_at < since - 120 || r.created_at < nowS() - 30 * 86400) return false
+/** §5.2 step 2: why request R can't be allowed at once ('' when every condition holds). LIVE is its
+ *  session's row from a sessions list read for this request (live, "chat": true). The reasons are
+ *  shown in Diagnostics: plain words, never a key. */
+function autoRefusal(c: C.Chain, r: NostrEvent, live: SessionRow): string {
+  if (!device) return 'this browser has no device key'
+  if (live.chat !== true) return 'its session is not one of the chat apps'
+  const since = C.whenOf(live.created_at)
+  if (!Number.isFinite(since)) return `its sign-in time could not be read (${live.created_at == null ? 'none' : typeof live.created_at})`
+  if (r.created_at < since - 120) return 'it asked before it signed in'
+  if (r.created_at < nowS() - 30 * 86400) return 'its request is older than 30 days'
   // the chain never had it (e39e2e8): a removed device whose session outlived its removal asks
-  if (C.allDevices(c).has(r.pubkey)) return false
+  if (C.allDevices(c).has(r.pubkey)) return 'it was one of your devices before'
   // this device: in the head it holds (pinned), on the anchored end, and trusted (§3.4)
   const pin = st.pins[me()]
-  if (!C.headOf(c).devices.includes(device.pub) || !anchoredEnd(c).devices.includes(device.pub)) return false
-  if (pin?.trusted && !pin.trusted.includes(device.pub)) return false
-  return addedLastDay(c) < 3 // a fourth in 24 h asks
+  if (!C.headOf(c).devices.includes(device.pub)) return 'this browser is not in your newest device list'
+  if (!anchoredEnd(c).devices.includes(device.pub)) return 'this browser is not in your confirmed device list'
+  if (pin?.trusted && !pin.trusted.includes(device.pub)) return 'this browser is not trusted since your devices changed'
+  if (addedLastDay(c) >= 3) return 'three devices were added in the last 24 hours' // a fourth in 24 h asks
+  return ''
 }
+
+/** Diagnostics: the last automatic pass's outcome (no keys; device names only). Kept in this
+ *  browser across reloads (a convenience: nothing depends on it). */
+export interface AutoPass { at: number; name: string; result: string }
+const KEY_AUTO = 'belfry:sealed:lastauto'
+let lastAuto: AutoPass | null = (() => { try { return JSON.parse(localStorage.getItem(KEY_AUTO) || 'null') } catch { return null } })()
+export const lastAutoPass = () => lastAuto
+let lastPassAt = 0
+export const lastStorePass = () => lastPassAt
+function noteAuto(name: string, result: string) {
+  lastAuto = { at: Date.now(), name: plainName(name), result }
+  try { localStorage.setItem(KEY_AUTO, JSON.stringify(lastAuto)) } catch { /* private window */ }
+}
+const plainName = (s: string) => s.replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 60)
 
 const autoTried = new Map<string, string>() // request id → my head when step 2 was checked for it
 
@@ -879,6 +904,7 @@ function devDone(dev: string, before = nowS()) {
 
 async function onStorePass() {
   if (!active()) return
+  lastPassAt = Date.now()
   // a head changed (mine or someone's) with sealed wraps waiting: the flush re-seals them (§9)
   const recipients = queuedRecipients()
   const heads = [me(), ...recipients].map((pk) => pk + headId(pk)).join()
@@ -947,19 +973,22 @@ async function onStorePass() {
     // §5.2 step 2 (Xavier, 2026-11-22): a device signing in to my account is allowed at once, without a
     // prompt, when every condition holds; the other devices of mine show the notice (2a)
     if (asking?.device !== r.pubkey && autoTried.get(r.id) !== head.id) {
-      autoTried.set(r.id, head.id) // once per request and head: a refusal here leaves it to the card
       const now = await mySessions(0) // read for this request, never a cached copy
-      const live = now?.find((s) => s.client_pubkey === r.pubkey && s.chat === true)
+      const name = row.device || row.application_name || 'A new device'
+      if (!now) { noteAuto(name, 'not now: the sessions list could not be read'); notNow(r.id); continue } // asked again, no card yet
+      autoTried.set(r.id, head.id) // once per request and head: a refusal here leaves it to the card
+      const live = now.find((s) => s.client_pubkey === r.pubkey && s.chat === true)
+      const why = live ? autoRefusal(c, r, live) : 'its session is not live'
       let done = false
-      if (live && autoAllowOk(c, r, live)) {
-        try { await allow(r.pubkey); requestDone(r.id); done = true } catch { /* any error here: the Allow card below */ }
-      }
+      if (!why) {
+        try { await allow(r.pubkey); requestDone(r.id); done = true; noteAuto(name, 'added') } catch { noteAuto(name, 'adding it failed: asked on this device instead') }
+      } else noteAuto(name, 'asked on this device: ' + why)
       if (done) { touch(); continue }
       if (answering.has(r.pubkey)) continue
     }
     // the card: one device at a time; the same device again only moves to its newer request
     if (asking && asking.device !== r.pubkey) break
-    const signedIn = row.created_at ? Date.parse(row.created_at) : NaN
+    const signedIn = C.whenOf(row.created_at) * 1000
     asking = { id: r.id, device: r.pubkey, name: row.device || row.application_name || 'A new device', at: r.created_at * 1000, signedIn: Number.isFinite(signedIn) ? signedIn : undefined }
     touch()
     break

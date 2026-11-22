@@ -1,4 +1,4 @@
-import { active as sealedActive, newLinkCode } from '../core/sealedrt'
+import { active as sealedActive, lastAutoPass, lastStorePass, newLinkCode } from '../core/sealedrt'
 import { clearLinked, linkedByScan } from '../core/sealed'
 import { LinkedByScan } from './Sealed'
 // #/accounts (board home/accounts; the web's limits from the lead, 2026-11-18): opened from the
@@ -266,6 +266,8 @@ export function Diagnostics() {
   const [, tick] = useState(0)
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 2000); return () => clearInterval(t) }, [])
   const traces = sendTraces()
+  const auto = lastAutoPass(), pass = lastStorePass()
+  const build = [...document.querySelectorAll<HTMLScriptElement>('script[type=module][src]')].map((x) => /index-([A-Za-z0-9_-]+)\.js/.exec(x.src)?.[1]).find(Boolean)
   const secs = (ms: number) => (ms / 1000).toFixed(1) + ' s'
   return (
     <div className="screen about-screen">
@@ -276,6 +278,11 @@ export function Diagnostics() {
           {allSocks().map((s) => (
             <li key={s.url}><b>{s.url.replace(/^wss?:\/\//, '').replace(/\?.*$/, '')}</b><small>{s.connected ? `Connected · last heard ${secs(s.quietFor())} ago` : 'Not connected'}{s.drops ? ` · dropped ${s.drops}× (last: ${s.lastDrop})` : ''}</small></li>
           ))}
+        </ul>
+        <div className="place-section"><h3>New devices</h3></div>
+        <ul className="diag-list">
+          <li className="diag-auto"><b>Last automatic add</b><small>{auto ? `${new Date(auto.at).toLocaleString()} · ${auto.name}: ${auto.result}` : 'No new device has asked in this browser.'}</small></li>
+          <li><b>Last check</b><small>{pass ? new Date(pass).toLocaleTimeString() : 'Not yet'}{build ? ` · build ${build}` : ''}</small></li>
         </ul>
         <div className="place-section"><h3>Last sends</h3></div>
         {!traces.length && <p className="hint">Nothing sent from this browser yet.</p>}

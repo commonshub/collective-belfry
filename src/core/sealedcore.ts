@@ -398,13 +398,28 @@ export function historyRumors(h: Rumor, receiver: string, have: Set<string> = ne
 
 // ---- ready (§6) ------------------------------------------------------------------------------
 
-export interface SessionRow { client_pubkey?: string | null; chat?: boolean; last_activity?: string | null; created_at?: string | null; device?: string; application_name?: string }
+export interface SessionRow { client_pubkey?: string | null; chat?: boolean; last_activity?: string | number | null; created_at?: string | number | null; device?: string; application_name?: string }
 const DAY = 86400
+/** A session time in seconds (NaN when unreadable), in every browser: ISO with "T" or a space,
+ *  any fraction, Z / an offset / none (UTC, as the server reads it: sealed.py _when), or a number
+ *  (seconds; milliseconds when that large). Safari's Date.parse gives NaN for "2026-11-21 17:44:00". */
+export function whenOf(v: unknown): number {
+  if (typeof v === 'number') return Number.isFinite(v) ? (v > 1e12 ? v / 1000 : v) : NaN
+  if (typeof v !== 'string') return NaN
+  const t = v.trim()
+  if (/^\d+(\.\d+)?$/.test(t)) return whenOf(Number(t))
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i.exec(t)
+  if (!m) return NaN
+  const [, y, mo, d, h = '0', mi = '0', se = '0', fr = '', tz = 'Z'] = m
+  let at = Date.UTC(+y, +mo - 1, +d, +h, +mi, +se) / 1000 + (fr ? Number('0.' + fr) : 0)
+  if (tz.toUpperCase() !== 'Z') { const sign = tz[0] === '-' ? -1 : 1; const z = tz.slice(1).replace(':', ''); at -= sign * (Number(z.slice(0, 2)) * 3600 + Number(z.slice(2, 4) || 0) * 60) }
+  return Number.isFinite(at) ? at : NaN
+}
 /** Counted: a chat session whose last activity (its creation when never active) is within the
  *  last 30 days, strictly (the lead, 20 Nov). */
 export function counted(s: SessionRow, now: number): boolean {
   const t = s.last_activity || s.created_at
-  return s.chat === true && !!t && now - Date.parse(t) / 1000 < 30 * DAY
+  return s.chat === true && !!t && now - whenOf(t) < 30 * DAY
 }
 /** A roster may carry ready when every counted session's client key is one of its devices. */
 export const mayCarryReady = (sessions: SessionRow[], devices: string[], now = Math.floor(Date.now() / 1000)) =>

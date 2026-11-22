@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { watchBuilds } from './core/freshbuild'
 import { App } from './ui/App'
 import './styles.css'
 import { NAME, THEME } from './config'
@@ -86,6 +87,8 @@ addEventListener('vite:preloadError', (e) => { e.preventDefault(); reloadOnce() 
 
 createRoot(document.getElementById('root')!).render(<Guard whole><App /></Guard>)
 ;(window as unknown as { __belfryStarted?: boolean }).__belfryStarted = true // boot.js: no fallback needed
+
+watchBuilds()
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   navigator.serviceWorker.register(import.meta.env.BASE_URL + 'sw.js').catch(() => { /* offline shell is a bonus */ })
