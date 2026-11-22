@@ -513,6 +513,11 @@ class Watcher:
         if source == "community":
             if not live or e.get("kind") != 1059:
                 return []
+            # a wrap its sender marked as only for themselves (a copy of what they sent, a
+            # note to self, a confirmation between their own devices; docs/sealed.md §4):
+            # nobody is told. A request, not a proof: the message still arrives.
+            if ["silent", "1"] in [t[:2] for t in e.get("tags", []) if isinstance(t, list)]:
+                return []
             return self.dm(e)
         if e.get("created_at", 0) < self.clock() - MAX_AGE:
             return []

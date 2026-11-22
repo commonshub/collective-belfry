@@ -609,3 +609,15 @@ def test_settings_for_two_channels_changed_at_once_both_stay(scene):
     finally:
         push.get_settings = real_get
     assert push.get_settings(rsvc, bob)["channels"] == {"garden": "all", "kitchen": "all", "bikes": "all"}
+
+
+def test_a_wrap_marked_silent_is_never_pushed(scene):
+    rsvc, keys, devkeys, relay, gw, w = scene
+    cy = pk(keys["Cy"])
+    before = len(gw.sent)
+    quiet = ev(PrivateKey(), 1059, [["p", cy], ["lb", "ab" * 32], ["silent", "1"]], "…")
+    assert w.handle(quiet, "community") == []
+    assert len(gw.sent) == before
+    # another value is not the mark: the push goes out
+    loud = ev(PrivateKey(), 1059, [["p", cy], ["silent", "0"]], "…")
+    assert w.handle(loud, "community") == [(cy, "dm")]

@@ -189,3 +189,5 @@ Private by design: the gateway sees no content; Apple and Google see ciphertext.
   Direct messages / Mentions and replies / Announcements / Pinned / All messages, Android 13+
   `POST_NOTIFICATIONS`. Builds without `google-services.json` keep working with push off.
 - Tapping a notification opens the channel at the message (or the conversation list for a DM).
+
+A gift wrap tagged `["silent", "1"]` (a wrap only for its own sender: docs/sealed.md §4, Silent wraps) is never pushed.

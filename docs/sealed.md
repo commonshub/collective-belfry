@@ -171,6 +171,18 @@ Gift wrap, kind 1059:
 
 A wrap with an `lb` tag is sealed; one without is the old kind and goes to the signer as before.
 
+**Silent wraps** (2026-11-23). A wrap that addresses only its own sender carries one more tag,
+`["silent", "1"]`: the copy to myself of a message I send (sealed or old-style), a note to
+myself, an 8563, the keys and history wraps to my own devices. The belfry sends no push for a
+wrap that carries it (it cannot see who sent a wrap, so without the tag every device of mine
+would say "New message" for my own notes and copies). Readers ignore the tag, and every other
+wrap tag they do not know; only the exact tag `["silent", "1"]` counts (another value is
+read as absent: the wrap stays valid, a push goes out). It is a request, not a proof: a sender who puts it
+on a wrap to someone else only keeps their own message from being announced; it arrives all
+the same. Given up, said plainly: the relay can tell which wraps to an account are that
+account's own (it already sees them published on the sender's authenticated connection next
+to the copy for the other side).
+
 Before each send, and when a sealed conversation is opened, ask the relay again for every
 participant's anchor and rosters (keep them on the live subscription too; wait at most 3 s, then
 use what is known): sealing to a letterbox its owner has left lets the removed device read.
