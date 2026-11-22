@@ -699,3 +699,36 @@ def test_the_inbox_setting_is_per_channel_and_old_settings_still_count(m, monkey
     assert mail.inbox_on(m, "kitchen") is False
     assert mail.inbox_on(m, "garden") is False
     assert mail.inbox_d("hello") == "belfry:inbox:hello"
+
+
+def test_an_inbox_card_says_who_the_mail_was_for_and_who_was_copied(m, inbox):
+    raw = (
+        b"From: Marie Dubois <marie@example.org>\r\n"
+        b"To: garden@belfry.test, Lou <LOU@example.org>\r\n"
+        b"Cc: Dev Patel <dev@example.org>, lou@example.org\r\n"
+        b"Bcc: hidden@example.org\r\n"
+        b"Subject: Renting the hall\r\nMessage-ID: <m9@example.org>\r\n\r\nHello\r\n"
+    )
+    code, _ = mail.deliver(m, raw, "203.0.113.5", "h", "", ["garden@belfry.test"])
+    assert code == 250
+    people = [t for t in inbox[-1]["tags"] if t[0] in ("to", "cc", "bcc")]
+    assert people == [
+        ["to", "garden@belfry.test", ""],
+        ["to", "lou@example.org", "Lou"],
+        ["cc", "dev@example.org", "Dev Patel"],
+    ]
+
+
+def test_a_sent_card_names_the_draft_it_was_sent_from(m, inbox, monkeypatch):
+    monkeypatch.setattr(mail, "smtp_send", lambda svc, frm, rcpts, data: (250, "OK"))
+    card, draft = "c" * 64, "d" * 64
+    mail.handle_wrap(
+        m,
+        outgoing_wrap(
+            "garden@belfry.test",
+            "Ana for Garden <garden@belfry.test>",
+            "g7",
+            [["e", card], ["draft", draft]],
+        ),
+    )
+    assert ["draft", draft] in inbox[-1]["tags"]

@@ -760,6 +760,22 @@ def _mail_tags(msg: EmailMessage) -> list[list[str]]:
     return out
 
 
+def _people_tags(msg: EmailMessage) -> list[list[str]]:
+    """Who the mail was addressed to, one tag a person: ``["to", address, name]`` and
+    ``["cc", address, name]`` (at most 20 in all). What "Reply all" answers to; never Bcc."""
+    out: list[list[str]] = []
+    seen: set[str] = set()
+    for header in ("To", "Cc"):
+        values = [str(v) for v in (msg.get_all(header) or [])]
+        for name, address in email.utils.getaddresses(values):
+            address = address.strip().lower()
+            if len(out) >= MAX_RCPT or "@" not in address or len(address) > 254 or address in seen:
+                continue
+            seen.add(address)
+            out.append([header.lower(), address, " ".join(name.split())[:100]])
+    return out
+
+
 def thread_of(svc: Services, channel: str, refs: list[str]) -> dict[str, Any] | None:
     """The message in CHANNEL a reply belongs under: the newest one whose ``message-id`` is in
     REFS (an e-mail card, what went out, a member's mail), or, when that is itself a thread
@@ -906,6 +922,7 @@ def to_inbox(
         *_original(svc, raw),
         ["mail-from", sender],
         ["mail-name", name[:100]],
+        *_people_tags(msg),
         *_mail_tags(msg),
         ["belfry-auth", "pass" if auth.get("aligned") else "none"],
     ]
@@ -1043,18 +1060,28 @@ def outgoing(
 
 
 def sent_card(
-    svc: Services, channel: str, sender: str, msg: EmailMessage, rcpts: list[str], reply_to: str
+    svc: Services,
+    channel: str,
+    sender: str,
+    msg: EmailMessage,
+    rcpts: list[str],
+    reply_to: str,
+    draft: str = "",
 ) -> None:
-    """What went out as the channel, in the channel: only the bridge posts these."""
+    """What went out as the channel, in the channel: only the bridge posts these. ``draft`` is
+    the id of the internal draft this mail was sent from (docs/one-shape.md): apps hide it."""
     subject = str(msg["Subject"] or "").strip()
     tags_ = [
         ["subject", subject[:300]],
         ["mail-to", ", ".join(rcpts)[:600]],
         ["sent-by", sender],
+        *_people_tags(msg),
         ["message-id", str(msg["Message-ID"] or "").strip()[:300]],
     ]
     if re.fullmatch(r"[0-9a-f]{64}", reply_to or ""):
         tags_.append(["e", reply_to, "", "reply"])
+    if re.fullmatch(r"[0-9a-f]{64}", draft or ""):
+        tags_.append(["draft", draft])
     drops.post(
         svc, channel, text_of(msg)[:8000] or "(empty)", tags_, None, client="belfry-mail-out"
     )
@@ -1161,7 +1188,7 @@ def handle_wrap(svc: Services, wrap: dict[str, Any]) -> None:
     report(svc, sender, email_id, rcpts, code, answer, chain)
     if sent and 200 <= code < 300:
         try:
-            sent_card(svc, sent[0], sender, sent[1], rcpts, tag(rumor, "e"))
+            sent_card(svc, sent[0], sender, sent[1], rcpts, tag(rumor, "e"), tag(rumor, "draft"))
         except Exception as exc:  # noqa: BLE001 — the mail is gone; the card is a courtesy
             log.warning("mail: sent card in %s failed: %r", sent[0], exc)
 
@@ -1275,6 +1302,7 @@ async def running(app: FastAPI):
 
 # ── the routes ──────────────────────────────────────────────────────────────────────────────
 
+
 async def member_name(services: Any, name: str) -> JSONResponse:
     """NIP-05 for a member's username, read from the signer: ``{"names": {<name>: <pubkey>}}``
     (the name in lowercase, as NIP-05 asks), or no names."""
@@ -1294,6 +1322,7 @@ async def member_name(services: Any, name: str) -> JSONResponse:
     return JSONResponse(
         {"names": {low: pub}}, headers={**cors, "Cache-Control": "public, max-age=60"}
     )
+
 
 def register(app: FastAPI) -> None:
     def svc(request: Request) -> Services:
