@@ -518,11 +518,21 @@ export const INBOX_NS = 'belfry/inbox'
 
 export function isInbox(g: Group | undefined): boolean {
   if (!g) return false
-  const own = all(me()).filter((e) => {
-    if (e.kind !== 30078 || tag(e, 'h') !== g.id || !g.admins.has(e.pubkey)) return false
+  // A 30078 is replaced by the author's newer one with the same d: the store keeps every event it
+  // ever saw, so take the newest per author + d first, as the relay does. Otherwise an old
+  // belfry:inbox for this channel, cached before a newer one for another channel replaced it on
+  // the relay, still counted (OSV's #hello showed on, 2026-11-22). Then: the new d counts; the old
+  // d only when one of its h tags is this channel; admins only; the latest wins.
+  const latest = new Map<string, Ev>()
+  for (const e of all(me())) {
+    if (e.kind !== 30078 || !g.admins.has(e.pubkey)) continue
     const d = tag(e, 'd')
-    return d === inboxD(g.id) || d === INBOX_D
-  }).sort(byTime)
+    if (d !== inboxD(g.id) && d !== INBOX_D) continue
+    const k = e.pubkey + ' ' + d
+    const was = latest.get(k)
+    if (!was || byTime(was, e) < 0) latest.set(k, e)
+  }
+  const own = [...latest.values()].filter((e) => tag(e, 'd') === inboxD(g.id) || e.tags.some((t) => t[0] === 'h' && t[1] === g.id)).sort(byTime)
   try { return !!own.length && !!JSON.parse(own.at(-1)!.content || '{}').on } catch { return false }
 }
 

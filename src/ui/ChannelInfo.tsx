@@ -177,6 +177,8 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState<{ closed: boolean; prompt: string; vouches?: number }>({ closed: !!g?.closed, prompt: g?.prompt ?? '', vouches: g?.vouches ?? 0 })
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
+  // touched: Save sends it even when it matches the reading (a stale reading must be correctable, #hello 2026-11-22)
+  const [mailTouched, setMailTouched] = useState(false)
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.rawName ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   // who can read it, one choice of three (Xavier, 2026-11-18, canvas "Settings-A/B"): members only,
@@ -232,7 +234,7 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
               if (taken) { setWebError(`${BELFRY.domain}/${slug} is the page of #${taken.name}: pick another address.`); return }
               web.slug = slug
             }
-            if (openMail !== isInbox(g)) await setInbox(id, openMail)
+            if (mailTouched || openMail !== isInbox(g)) await setInbox(id, openMail)
             const was = webPage(group(id))
             if (was) { web.visibility = was.visibility; web.periods = was.periods; if (was.visibility === 'public') web.on = web.on || was.on }
             if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public') || (web.posts ?? '') !== (was?.posts ?? '')) await setWebPage(id, web)
@@ -262,7 +264,7 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
             </div>}
             <label className="switch-row">
               <span><b>E-mails from anyone</b><small>Mail to {mailLocal(g)}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
-              <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
+              <input type="checkbox" role="switch" checked={openMail} onChange={(e) => { setOpenMail(e.target.checked); setMailTouched(true) }} />
             </label>
             <MailForwardRow id={g.id} />
             <label className="switch-row">
