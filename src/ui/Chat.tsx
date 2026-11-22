@@ -9,8 +9,8 @@ import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
-import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage } from '../core/model'
+import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -53,8 +53,9 @@ import { inOrder, mayOrder, setChannelOrder, shownCategories, LIFE } from '../co
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
-import { requestCount } from '../core/requests'
-import { amGuest, CreateSheet, isTownChannel, myGuestChannels, placesOn, takeCreate, CREATE_EVENT, TO_NEWEST } from './Places'
+import { directory, loadDirectory, requestCount } from '../core/requests'
+import { relayAdmin, setGroupRole } from '../core/checkin'
+import { amGuest, isTownChannel, myGuestChannels, placesOn, TO_NEWEST } from './Places'
 import { MEMBERS, SECTION_TITLE } from '../core/places'
 import { CategoryHead, placeNewChannel, townCategories, useCategoryDrag } from './Categories'
 import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
@@ -117,7 +118,6 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
   const steward = THEME === 'belfry' && isBelfryAdmin(me())
   const brand = useBranding()
   const [creating, setCreating] = useState<string | null>(null) // the category a new channel goes into
-  const [making, setMaking] = useState(false) // the Create sheet (＋ in the header, laptop)
   const guest = amGuest()
   const town = groups().filter((g) => isTownChannel(g.id))
   const square = town.find((g) => g.id === 'general')
@@ -179,10 +179,8 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
       <div className="topbar">
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
         <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span className="belfry-title">{community}</span><small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>
-        {/* Create: a plain + above everything, on a laptop (Xavier, 2026-11-17: not the black
-            "+ Create" under the places); the phone has it in its bottom bar */}
-        {top && !guest && <button className="icon-btn side-create" aria-label="Create" title="Create" onClick={() => setMaking(true)}><PlusIcon /></button>}
-        {making && <CreateSheet onClose={() => setMaking(false)} where={current} />}
+        {/* no Create sheet any more (Xavier, 2026-11-22): each thing is made where it lives (the
+            composer's +, Calendar's +, Groups' +, a section's +, Messages' +) */}
         {/* the belfry's settings (its admins), where the + used to be (the owner, 2026-11-17) */}
         {steward && <button className={'icon-btn settings-gear' + (section === 'settings' ? ' on' : '')} aria-label="Belfry settings" onClick={() => closeDrawer('settings')}><GearIcon /></button>}
       </div>
@@ -227,7 +225,7 @@ function OldChannelList({ current, side = false, section, drawer = false }: List
   const all = groups()
   const chans = all.filter((g) => !g.isEvent && !g.isPod && !g.isProposal)
   const mineEvents = yourEvents()
-  const pods = all.filter((g) => g.isPod || g.isProposal)
+  const pods = all.filter((g) => (g.isPod || g.isProposal) && !hiddenFromMe(g))
   const ids = new Set(all.map((g) => g.id))
   const last = (id: string) => {
     const m = messages(id).at(-1)
@@ -528,6 +526,8 @@ function JoinBar({ g }: { g: Group }) {
   const [answer, setAnswer] = useState('')
   const applied = group(g.id)?.applications.some((a) => a.pubkey === me())
   const what = g.isPod ? 'group' : 'channel'
+  if (g.inviteOnly)
+    return <div className="join-bar"><span>This group is private: its stewards add the people in it.</span></div>
   if (!g.closed)
     return (
       <div className="join-bar">
@@ -570,6 +570,13 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
       </div>
     )
   }
+  // private, and I'm not in it: no name, nothing to open (not listed to me)
+  if (hiddenFromMe(g)) return (
+    <div className="ev-card pod-card gone" aria-disabled="true">
+      <div className="date pod-ic"><PodShape members={0} size={26} /></div>
+      <span className="info"><b>A private group</b><small>Only the people its stewards add</small></span>
+    </div>
+  )
   // nothing known of it yet (first load, offline): the post as it was written, no guess
   if (!g) return <div className="text">{fallback}</div>
   // archived: greyed, still opens (read only)
@@ -587,10 +594,10 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
       <span className="info">
         <b><GroupName g={g} /></b>
         {g.about && <small><Linkify text={g.about} /></small>}
-        <small>{g.closed ? 'Group · by request' : 'Group · open'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : pending ? ' · request sent' : ''}</small>
+        <small>{g.inviteOnly ? 'Group · private' : g.closed ? 'Group · by request' : 'Group · open'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : pending ? ' · request sent' : ''}</small>
       </span>
       {!inIt && !g.closed && <button className="btn small" onClick={(e) => { e.stopPropagation(); void joinGroup(id) }}>Join</button>}
-      {!inIt && g.closed && !pending && <button className="btn small ghost" onClick={(e) => { e.stopPropagation(); go(`c/${encodeURIComponent(id)}/group`) }}>Apply</button>}
+      {!inIt && g.closed && !g.inviteOnly && !pending && <button className="btn small ghost" onClick={(e) => { e.stopPropagation(); go(`c/${encodeURIComponent(id)}/group`) }}>Apply</button>}
       {!inIt && pending && <span className="badge">Pending</span>}
     </div>
   )
@@ -604,63 +611,104 @@ export function nameInCard(text: string): string {
   return name ? name.slice(0, 100) : 'A group'
 }
 
-type Access = { closed: boolean; prompt: string; vouches?: number }
-export function AccessFields({ closed, prompt, vouches = 0, set }: Access & { set: (a: Access) => void }) {
-  return (
-    <>
-      <div className="field"><span>Who can join</span></div>
-      <div className="choice" style={{ marginTop: -8 }}>
-        <button type="button" className={!closed ? 'on' : ''} onClick={() => set({ closed: false, prompt, vouches })}><b>Open</b><small>Any member joins</small></button>
-        <button type="button" className={closed ? 'on' : ''} onClick={() => set({ closed: true, prompt, vouches })}><b>Closed</b><small>Members apply to join</small></button>
-      </div>
-      {closed && (
-        <label className="field"><span>Question people answer when they ask</span>
-          <textarea className="input" rows={2} placeholder={DEFAULT_PROMPT} value={prompt} onChange={(e) => set({ closed, prompt: e.target.value, vouches })} /></label>
-      )}
-      {closed && (
-        <div className="field vouch-rule"><span>Requests are accepted</span>
-          <div className="pick-group" role="radiogroup" aria-label="How requests are accepted">
-            <button type="button" role="radio" aria-checked={!vouches} className={'pick-row' + (!vouches ? ' on' : '')} onClick={() => set({ closed, prompt, vouches: 0 })}>
-              <span className="radio" aria-hidden="true" /><span className="t"><b>By its stewards</b><small>A steward accepts or declines each request</small></span>
-            </button>
-            <button type="button" role="radio" aria-checked={!!vouches} className={'pick-row' + (vouches ? ' on' : '')} onClick={() => set({ closed, prompt, vouches: vouches || 2 })}>
-              <span className="radio" aria-hidden="true" /><span className="t"><b>When members vouch</b><small>Once enough of its members vouch, they’re in. Stewards can still answer.</small></span>
-            </button>
-          </div>
-          {!!vouches && (
-            <div className="seg small vouch-n" role="group" aria-label="How many vouches">
-              {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" className={vouches === n ? 'on' : ''} aria-pressed={vouches === n} onClick={() => set({ closed, prompt, vouches: n })}>{n}</button>)}
-            </div>
-          )}
-          {!!vouches && <small className="hint">{vouches === 1 ? 'One vouch' : `${vouches} vouches`} from different members of the group (not guests, not agents).</small>}
-        </div>
-      )}
-    </>
-  )
-}
+/** Who can join a new group (Xavier, 2026-11-22): Open, Closed (people apply; the question and how
+ *  requests are accepted are in the group's Settings), Private (only the people its stewards add). */
+export type JoinKind = 'open' | 'closed' | 'private'
+const JOIN: [JoinKind, string, string][] = [
+  ['open', 'Open', 'Any member can join'],
+  ['closed', 'Closed', 'Members apply to join'],
+  ['private', 'Private', 'Only invited people'],
+]
 
-function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
+/** New group (canvas groups/new, groups/new-pick): the form, then the people to add (faces, a
+ *  search, tap to pick) or Skip. PARENT: the channel it was made in, else the main channel. */
+export function NewPod({ parent, onClose }: { parent?: string; onClose: () => void }) {
+  useVersion()
   const [name, setName] = useState('')
   const [about, setAbout] = useState('')
   // closed by default: members apply, its stewards (the creator first) let them in (Xavier, 2026-11-17)
-  const [access, setAccess] = useState<Access>({ closed: true, prompt: '', vouches: 0 })
-  const where = group(parent)
+  const [join, setJoin] = useState<JoinKind>('closed')
+  // from inside a channel it hangs off that channel; from the Groups screen it is announced in the
+  // main channel (unless Private: no announcement at all)
+  const where = parent ?? 'general'
+  const [made, setMade] = useState<string | null>(null)
+  const w = group(where)
+  if (made) return <AddPeople id={made} onDone={() => { onClose(); go('c/' + encodeURIComponent(made)) }} />
   return (
     <Sheet title="New group" onClose={onClose}>
+      <div className="steps">1 of 2</div>
       <Form onSubmit={async (e) => {
         e.preventDefault()
-        const id = await createPod(name.trim(), about.trim(), parent, access)
-        onClose()
-        go('c/' + encodeURIComponent(id))
+        const id = await createPod(name.trim(), about.trim(), where, { closed: join !== 'open', inviteOnly: join === 'private', prompt: '', vouches: 0 })
+        setMade(id)
       }}>
         <label className="field"><span>Name</span>
           <input className="input" autoFocus placeholder="e.g. Garden crew" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>What is it working on?</span>
           <textarea className="input" rows={3} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
-        <AccessFields closed={access.closed} prompt={access.prompt} vouches={access.vouches} set={setAccess} />
-        <button className="btn" disabled={!name.trim()}>Create group</button>
-        <p className="hint" style={{ marginTop: 10 }}>A group inside {channelIcon(where)} {where?.name ?? parent}, with its own members, chat, events, photos, to-dos and groups. You run it: you let people in. It doesn’t make anyone a member of the belfry.</p>
+        <div className="field join-rule"><span>Who can join</span>
+          <div className="pick-group" role="radiogroup" aria-label="Who can join">
+            {JOIN.map(([k, title, line]) => (
+              <button key={k} type="button" role="radio" aria-checked={join === k} className={'pick-row' + (join === k ? ' on' : '')} onClick={() => setJoin(k)}>
+                <span className="radio" aria-hidden="true" /><span className="t"><b>{title}</b><small>{line}</small></span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <button className="btn" disabled={!name.trim()}>Next</button>
+        <p className="hint" style={{ marginTop: 10 }}>{join === 'private' ? 'A private group' : <>A group inside {channelIcon(w)} {w?.name ?? where}</>}, with its own members, chat, events, photos, to-dos and groups. You run it: you let people in. It doesn’t make anyone a member of the belfry.</p>
       </Form>
+    </Sheet>
+  )
+}
+
+/** After New group: the belfry's members as faces with their names, a search, tap to pick;
+ *  "Add N people" puts them in (9000 when I may publish the group's moderation events, else the
+ *  belfry's POST /group-roles with role member), or Skip. */
+function AddPeople({ id, onDone }: { id: string; onDone: () => void }) {
+  useVersion()
+  const [q, setQ] = useState('')
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(!directory())
+  useEffect(() => { void loadDirectory().finally(() => setLoading(false)) }, [])
+  const ps = profiles()
+  const nameOf = (pk: string, fallback: string) => ps.get(pk)?.name || fallback || displayName(pk)
+  const needle = q.trim().toLowerCase()
+  const people = (directory() ?? []).filter((m) => m.pubkey !== me())
+    .map((m) => ({ pubkey: m.pubkey, shown: nameOf(m.pubkey, m.name) }))
+    .filter((m) => !needle || m.shown.toLowerCase().includes(needle))
+    .sort((a, b) => a.shown.localeCompare(b.shown))
+  const toggle = (pk: string) => setPicked((s) => { const n = new Set(s); if (n.has(pk)) n.delete(pk); else n.add(pk); return n })
+  const g = group(id)
+  return (
+    <Sheet title="Add people" onClose={onDone}>
+      <div className="steps">2 of 2{g ? ` · ${g.name}` : ''}</div>
+      <input className="input add-people-search" type="search" placeholder="Search members" aria-label="Search members" value={q} onChange={(e) => setQ(e.target.value)} />
+      {loading && !directory() ? <div className="empty">Loading…</div>
+        : people.length === 0 ? <div className="empty">{needle ? 'Nobody by that name.' : 'No other members yet.'}</div>
+        : <div className="face-grid" role="group" aria-label="Members">
+            {people.map((m) => (
+              <button key={m.pubkey} type="button" className={'face' + (picked.has(m.pubkey) ? ' on' : '')} aria-pressed={picked.has(m.pubkey)} onClick={() => toggle(m.pubkey)}>
+                <span className="face-pic"><Avatar pubkey={m.pubkey} size={56} />{picked.has(m.pubkey) && <span className="face-check" aria-hidden="true"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8.5l3 3 7-7" /></svg></span>}</span>
+                <span className="face-name">{m.shown}</span>
+              </button>
+            ))}
+          </div>}
+      {error && <div className="error" role="alert">{error}</div>}
+      <div className="add-people-btns">
+        <Btn className="btn" disabled={picked.size === 0} onClick={async () => {
+          setError('')
+          const by9000 = relayAdmin(id)
+          const failed: string[] = []
+          for (const pk of picked) {
+            try { if (by9000) await admit(id, pk); else await setGroupRole(id, pk, 'member') } catch { failed.push(pk) }
+          }
+          if (failed.length) { setPicked(new Set(failed)); setError(failed.length === 1 ? `${nameOf(failed[0], '')} couldn’t be added. Try again.` : `${failed.length} people couldn’t be added. Try again.`); return }
+          onDone()
+        }}>{picked.size === 0 ? 'Add people' : `Add ${picked.size} ${picked.size === 1 ? 'person' : 'people'}`}</Btn>
+        <button type="button" className="btn ghost" onClick={onDone}>Skip</button>
+      </div>
     </Sheet>
   )
 }
@@ -712,22 +760,6 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     return () => removeEventListener(NEW_TODO_EVENT, on)
   }, [])
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
-  // Create (＋, Places.tsx) chose this channel: open its form here, or put the cursor in the composer
-  useEffect(() => {
-    const take = () => {
-      const k = takeCreate(id)
-      if (!k) return
-      if (k === 'event') setNewEvent(true)
-      else if (k === 'meeting') setNewMeeting(true)
-      else if (k === 'todo') setNewTodo(true)
-      else if (k === 'group') setNewPod(true)
-      else if (k === 'proposal') setNewProp(true)
-      else setTimeout(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(), 50)
-    }
-    take()
-    addEventListener(CREATE_EVENT, take) // Create from inside this channel: same address, no remount
-    return () => removeEventListener(CREATE_EVENT, take)
-  }, [id])
   useVersion()
   // guest mode: reading only; the composer's place says so, with Join (GuestJoin.tsx)
   useGuestMode()
@@ -744,6 +776,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   // a message someone turned into a to-do carries a mark (and its state)
   const todoOf = new Map(tasklist(id).tasks.filter((t) => t.source).map((t) => [t.source!, t]))
   const joins = topic ? [] : guestJoins(id)
+  const entered = topic ? [] : belfryJoins(id)
   // threads unfold in place (no screen of their own): keyed by root id, or "act:<root>" for a
   // thread that resurfaced lower in the feed because someone replied to an older message
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set())
@@ -758,11 +791,12 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   // a shared inbox's e-mails: one row per e-mail thread, where its latest activity is (mailthreads.ts)
   const gkey = knownGroupsKey()
   const mt = mailThreads(id, gkey)
-  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number }
+  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'entered'; j: BelfryJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number }
   const items: Item[] = []
   for (const m of list) if (!mt.of.has(m.ev.id)) items.push({ t: 'msg', m, at: m.ev.created_at })
   if (!topic) for (const x of mt.list) items.push({ t: 'mail', th: x, at: x.last })
   for (const j of joins) items.push({ t: 'join', j, at: j.at })
+  for (const j of entered) items.push({ t: 'entered', j, at: j.at })
   if (!topic) {
     // an old thread resurfaces where its latest reply came, once other messages followed it
     for (const [rootId, info] of th) {
@@ -853,6 +887,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
           {items.map((it, i) => {
             if (it.t === 'join') return <JoinLine key={'j' + it.j.id} j={it.j} />
+            if (it.t === 'entered') return <EnteredLine key={'e' + it.j.id} j={it.j} />
             if (it.t === 'mail') {
               const prevAt = items[i - 1]?.at
               const d = new Date(it.at * 1000)
@@ -1532,6 +1567,24 @@ function NewTodoSheet({ groupId, onClose, initial, from }: { groupId: string; on
         <p className="hint" style={{ marginTop: 10 }}>Everyone in the channel sees it under the channel's name. Anyone can take it or tick it off.</p>
       </Form>
     </Sheet>
+  )
+}
+
+/** "<name> joined <the belfry>" (board one-shape/townsquare-join): an activity line in the main
+ *  channel; an agent: "<name>, <owner>'s agent, joined". The face and the name open the profile. */
+function EnteredLine({ j }: { j: BelfryJoin }) {
+  useVersion()
+  const community = useCommunityName(NAME)
+  const name = plainLabel(profiles().get(j.pubkey)?.name || j.name || displayName(j.pubkey)) || displayName(j.pubkey)
+  const owner = j.agent ? agentOwner(j.pubkey) : undefined
+  const who = <button type="button" className="entered-who" onClick={() => openProfile(j.pubkey)}><Avatar pubkey={j.pubkey} size={20} /><b>{name}</b></button>
+  return (
+    <div className="join-line entered-line" role="note">
+      {j.agent
+        ? <span>{who}, {owner ? (owner === me() ? 'your agent' : <><b>{displayName(owner)}</b>’s agent</>) : 'an agent'}, joined</span>
+        : <span>{who} joined {community}</span>}
+      <time>{fmtTime(j.at)}</time>
+    </div>
   )
 }
 

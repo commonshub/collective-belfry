@@ -10,7 +10,7 @@ import { directory, loadDirectory, loadMembership, loadRequests, mayInviteMember
 import { groups } from '../core/model'
 import { inOrder } from '../core/order'
 import { InviteSheet } from './Invite'
-import { PersonPlusIcon } from './icons'
+import { PlusIcon } from './icons'
 import { useVersion } from '../core/store'
 import { Avatar, back } from './common'
 import { useCommunityName } from './community'
@@ -40,7 +40,7 @@ export function MembersDirectory() {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back(placesOn() ? 'home' : 'c')}>‹</button>
         <h1>{membersName()}<small>{directory() ? `${directory()!.length} in ${community}` : community}</small></h1>
-        {mayInviteMembers() && inviteIn && <button className="icon-btn" aria-label="Invite someone" onClick={() => setInviting(true)}><PersonPlusIcon /></button>}
+        {mayInviteMembers() && inviteIn && <button className="icon-btn round invite-btn" aria-label="Invite someone" title="Invite someone" onClick={() => setInviting(true)}><PlusIcon /></button>}
       </div>
       {inviting && inviteIn && <InviteSheet id={inviteIn} preset="member" onClose={() => setInviting(false)} />}
       <div className="scroll">

@@ -1,7 +1,7 @@
 // Search messages: in one channel (from its header) or in all of them. Every word must appear
 // (accents and case ignored); a result opens its channel on that message.
 import { useMemo, useState } from 'react'
-import { allGroups, channelIcon, displayName, messages, type Message, nameOf, plainRefs } from '../core/model'
+import { allGroups, channelIcon, displayName, messages, type Message, nameOf, plainRefs , hiddenFromMe } from '../core/model'
 import { useVersion } from '../core/store'
 import { Avatar, back, fmtTime, go } from './common'
 import { CloseIcon, SearchIcon } from './icons'
@@ -19,7 +19,7 @@ export function SearchView({ channel }: { channel?: string }) {
   useVersion()
   const [q, setQ] = useState('')
   const [everywhere, setEverywhere] = useState(!channel)
-  const all = allGroups() // archived ones too: they stay readable, and search is one way in
+  const all = allGroups().filter((g) => !hiddenFromMe(g)) // archived ones too: they stay readable, and search is one way in
   const here = channel ? all.find((g) => g.id === channel) : undefined
   const words = fold(q).split(/\s+/).filter(Boolean)
   const results = useMemo(() => {

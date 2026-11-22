@@ -605,10 +605,10 @@ function demoGuestReading(channel: string, pubkey?: string, name?: string) {
 /** Demo only: a group in PARENT made by someone else (Ana) or by me (ADMIN), announced there with
  *  its card; MEMBER puts me in it; APPLICANTS people ask to join (with an answer); VOUCHED of
  *  them got a vouch from Ben (a member). Returns the group id. */
-function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; vouches?: number; admin?: boolean; member?: boolean; applicants?: number; vouched?: number } = {}) {
+function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; private?: boolean; vouches?: number; admin?: boolean; member?: boolean; applicants?: number; vouched?: number } = {}) {
   const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
   const now = Math.floor(Date.now() / 1000)
-  const { name = 'Garden club', parent = 'general', closed = true, vouches = 0, admin = false, member = false, applicants = 0, vouched = 0 } = opts
+  const { name = 'Garden club', parent = 'general', closed = true, private: inviteOnly = false, vouches = 0, admin = false, member = false, applicants = 0, vouched = 0 } = opts
   const id = 'pod-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + hex(2)
   const person = (n: string) => { const pk = getPublicKey(generateSecretKey()); return { pk, ev: { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, created_at: now - 900, tags: [], content: JSON.stringify({ name: n }) } } }
   const ana = person('Ana'), ben = person('Ben')
@@ -616,11 +616,12 @@ function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; vou
   const members = [owner, ben.pk, ...(member && !admin ? [me()] : [])]
   const evs: Record<string, unknown>[] = [ana.ev, ben.ev,
     { id: hex(32), pubkey: owner, sig: hex(64), kind: 9007, created_at: now - 800, tags: [['h', id]], content: '' },
-    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9002, created_at: now - 800, tags: [['h', id], ['name', name], ['about', 'We grow vegetables on the roof. **Wednesdays** at 6.'], closed ? ['closed'] : ['open'], ...(closed ? [['prompt', 'What would you like to grow?']] : []), ...(vouches ? [['vouches', String(vouches)]] : [])], content: '' },
+    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9002, created_at: now - 800, tags: [['h', id], ['name', name], ['about', 'We grow vegetables on the roof. **Wednesdays** at 6.'], closed ? ['closed'] : ['open'], closed && inviteOnly ? ['private'] : ['public'], ...(closed ? [['prompt', 'What would you like to grow?']] : []), ...(vouches ? [['vouches', String(vouches)]] : [])], content: '' },
     { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39001, created_at: now - 790, tags: [['d', id], ['p', owner, 'admin']], content: '' },
     { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39002, created_at: now - 790, tags: [['d', id], ...members.map((p) => ['p', p])], content: '' },
-    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9, created_at: now - 780, tags: [['h', parent], ['pod', id]], content: `⬡ New group: ${name}` },
   ]
+  // a Private group posts no announcement (docs/one-shape.md)
+  if (!(closed && inviteOnly)) evs.push({ id: hex(32), pubkey: owner, sig: hex(64), kind: 9, created_at: now - 780, tags: [['h', parent], ['pod', id]], content: `⬡ New group: ${name}` })
   for (let i = 0; i < applicants; i++) {
     const a = person(['Nora', 'Omar', 'Pia'][i % 3])
     const req = { id: hex(32), pubkey: a.pk, sig: hex(64), kind: 9021, created_at: now - 600 + i, tags: [['h', id]], content: i === 0 ? 'Tomatoes, and <i>basil</i>.' : 'Herbs.' }

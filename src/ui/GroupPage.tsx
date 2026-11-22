@@ -103,7 +103,7 @@ export function GroupPage({ id }: { id: string }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back(parent ? 'c/' + encodeURIComponent(parent.id) : 'c')}>‹</button>
         <h1><span className="gp-title"><PodShape members={g.members.size} size={18} /> {g.name}</span>
-          <small>Group{parent ? ` in ${parent.isPod ? '' : '# '}${parent.name}` : ''} · {g.closed ? 'by request' : 'open to members'}</small></h1>
+          <small>Group{parent ? ` in ${parent.isPod ? '' : '# '}${parent.name}` : ''} · {g.inviteOnly ? 'private' : g.closed ? 'by request' : 'open to members'}</small></h1>
         {!g.archived && <FollowButton channel={id} />}
       </div>
       {g.archived && <ArchivedBar g={g} />}
@@ -116,6 +116,8 @@ export function GroupPage({ id }: { id: string }) {
           </> : mine ? <>
             <span className="badge">Pending</span>
             <span className="hint">Request sent{g.vouches > 0 ? ` · ${groupVouches(g, mine).length} of ${g.vouches} ${g.vouches === 1 ? 'vouch' : 'vouches'}` : ''}. {g.vouches > 0 ? 'Its members vouch, or its admins answer.' : 'Its admins will answer.'}</span>
+          </> : g.inviteOnly ? <>
+            <span className="hint">Private: its stewards add the people in it.</span>
           </> : g.closed ? <>
             <button className="btn" onClick={() => setAsking(true)}>Apply to join</button>
             <button className="btn ghost" onClick={open}>Have a look</button>

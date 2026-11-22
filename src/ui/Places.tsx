@@ -1,6 +1,6 @@
 // One belfry, five places (the owner's canvas, boards iOS-Home / iOS-CalGroups / iOS-Town /
-// Join-Guest / Join-Apply; iOS SPEC 19.31). On a phone a bottom bar: Home · Calendar · Create (＋)
-// · Groups · Town; guests: Home · Calendar · Town. The bar shows only at a place's root: Home,
+// Join-Guest / Join-Apply; iOS SPEC 19.31). On a phone a bottom bar: Today · Calendar · Messages
+// · Groups · Town; guests: Today · Calendar · Town. The bar shows only at a place's root: Home,
 // Calendar, Groups, and a town channel (the Square and the channels of the Town drawer). Chats of
 // groups, events, threads, direct messages and profiles open over it, without the bar. On a laptop
 // the same places sit at the top of the left column (App.tsx).
@@ -8,7 +8,8 @@
 //   Calendar = My calendar · Invited · Discover (guests: Public events · Going); no buttons on rows
 //   Groups   = My groups · Active · All
 //   Town     = the town's channels, with the ☰ drawer
-//   Create   = one sheet: Message, Event, Meeting, To-do, Group, Proposal into a chosen channel
+//   Messages = direct messages and e-mail (the bar's middle since 2026-11-22: no Create sheet; each
+//              thing is made where it lives: the composer's +, Calendar's +, Groups' +)
 import { GroupName } from './GroupName'
 import { AgreementAbout } from './Charter'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
@@ -22,7 +23,7 @@ import { threads, unreadTotal, convName } from '../core/dm'
 import { isPastEvent, myState, publicEvents } from '../core/events'
 import { askToJoin, reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
-import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, isWorking, workingSince, type CalEvent, type Group, type Task } from '../core/model'
+import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, isWorking, workingSince, type CalEvent, type Group, type Task , hiddenFromMe } from '../core/model'
 import { CHARTER_ID, MEMBERS } from '../core/places'
 import { agentRequests, belfryRequests, groupRequests, requestCount, startRequests } from '../core/requests'
 import { useVersion } from '../core/store'
@@ -35,13 +36,13 @@ import { Avatar, Btn, Form, fmtTime, go, Sheet, back, useRoute, useNow, WorkRing
 import { useCommunityName } from './community'
 import { CalendarIcon, ChevronDownIcon, ChevronRightIcon, DocIcon, GateIcon, HexIcon, HomeIcon, MessageIcon, PeopleIcon, PlusIcon, SearchIcon, TodoIcon, TownIcon, AtIcon, ArchiveIcon, PodShape, ClockIcon, CheckCircleIcon } from './icons'
 import { mentions, isNew as isNewMention, preview } from './Mentions'
-import { eventPath, when } from './Calendar'
+import { eventPath, when, NewEventSheet } from './Calendar'
 import { Arms } from './Login'
-import { MenuButton } from './Chat'
+import { MenuButton, NewPod } from './Chat'
 
 // ---- which place, and whether the bar shows ------------------------------------------------
 
-export type Place = 'home' | 'calendar' | 'groups' | 'town'
+export type Place = 'home' | 'calendar' | 'messages' | 'groups' | 'town'
 
 /** Places are the Belfry look's (the OSV look keeps its drawer); not while only reading a guest
  *  link (guest mode: the channel and Join, nothing else). */
@@ -64,6 +65,7 @@ export function placeOf(route: string[]): Place | undefined {
   if (section === '' || section === 'home') return 'home'
   if (section === 'calendar') return 'calendar'
   if (section === 'groups') return 'groups'
+  if (section === 'dm' && !a) return 'messages'
   if (section === 'town') return 'town'
   if (section === 'c' && a && !b && isTownChannel(a)) return 'town'
   return undefined
@@ -77,65 +79,6 @@ export const TO_NEWEST = 'belfry-to-newest'
 function tapTown(route: string[]) {
   if (route[0] === 'c' && route[1] === 'general' && route.length === 2) dispatchEvent(new CustomEvent(TO_NEWEST, { detail: 'general' }))
   else go(townPath())
-}
-
-// ---- Create: one sheet; each row opens its form in the chosen channel -----------------------
-
-export type CreateKind = 'message' | 'event' | 'meeting' | 'todo' | 'group' | 'proposal'
-let pending: { channel: string; kind: CreateKind } | null = null
-/** Open CHANNEL for the pending form. Already on it (Create from inside the channel, to-do
- *  4d298b13): the address doesn't change, so tell the open channel to take the form now. */
-function openCreate(channel: string) {
-  if (location.hash === '#/c/' + encodeURIComponent(channel) || location.hash === '#/c/' + channel) dispatchEvent(new Event(CREATE_EVENT))
-  else go('c/' + encodeURIComponent(channel))
-}
-export const CREATE_EVENT = 'belfry-create'
-/** The form Create asked for, taken once by the channel it opened (Chat.tsx Conversation). */
-export function takeCreate(channel: string): CreateKind | undefined {
-  if (!pending || pending.channel !== channel) return undefined
-  const k = pending.kind
-  pending = null
-  return k
-}
-
-const CREATE_ROWS: { k: CreateKind; title: string; line: (where: string) => string; icon: () => JSX.Element; cls: string }[] = [
-  { k: 'message', title: 'Message', line: (w) => `Post in ${w}`, icon: MessageIcon, cls: 'c-msg' },
-  { k: 'event', title: 'Event', line: () => 'A date, a place, who’s coming', icon: CalendarIcon, cls: 'c-ev' },
-  { k: 'meeting', title: 'Meeting', line: () => 'In a room, online, or both', icon: ClockIcon, cls: 'c-meet' },
-  { k: 'todo', title: 'To-do', line: () => 'Something someone can take on', icon: TodoIcon, cls: 'c-todo' },
-  { k: 'group', title: 'Group', line: () => 'A smaller circle inside the channel', icon: HexIcon, cls: 'c-group' },
-  { k: 'proposal', title: 'Proposal', line: () => 'Something to decide together', icon: DocIcon, cls: 'c-prop' },
-]
-
-/** Create (＋): WHERE = the channel on screen, else the Square; FIRST puts one row on top
- *  (Calendar: Event; Groups: Group). */
-export function CreateSheet({ onClose, where, first }: { onClose: () => void; where?: string; first?: CreateKind }) {
-  useVersion()
-  const choices = [...inOrder(groups().filter((g) => isTownChannel(g.id))), ...groups().filter((g) => g.isPod && g.members.has(me()))]
-  const start = where && choices.some((g) => g.id === where) ? where : choices.some((g) => g.id === 'general') ? 'general' : choices[0]?.id ?? 'general'
-  const [ch, setCh] = useState(start)
-  const g = group(ch)
-  const label = g ? `${g.isPod ? '' : '# '}${g.name}` : '# ' + ch
-  const rows = first ? [...CREATE_ROWS.filter((r) => r.k === first), ...CREATE_ROWS.filter((r) => r.k !== first)] : CREATE_ROWS
-  return (
-    <Sheet title="Create" onClose={onClose}>
-      <label className="create-where">
-        <span>Where</span>
-        <select aria-label="Where" value={ch} onChange={(e) => setCh(e.target.value)}>
-          {choices.map((c) => <option key={c.id} value={c.id}>{c.isPod ? c.name : '# ' + c.name}</option>)}
-        </select>
-        <ChevronDownIcon />
-      </label>
-      <div className="act-group create-rows">
-        {rows.map((r) => (
-          <button key={r.k} className={'act-row ' + r.cls} onClick={() => { pending = { channel: ch, kind: r.k }; onClose(); setTimeout(() => openCreate(ch), 0) }}>
-            <span className="create-ico"><r.icon /></span>
-            <span className="t"><b>{r.title}</b><small>{r.line(label)}</small></span>
-          </button>
-        ))}
-      </div>
-    </Sheet>
-  )
 }
 
 // ---- the bottom bar ----------------------------------------------------------------------
@@ -161,25 +104,24 @@ export function TabBar({ place }: { place?: Place }) {
   useVersion()
   const typing = useTyping()
   const route = useRoute()
-  const [creating, setCreating] = useState(false)
   const guest = amGuest()
   const homeN = homeCount()
-  const here = route[0] === 'c' ? route[1] : undefined
-  const first: CreateKind | undefined = place === 'calendar' ? 'event' : place === 'groups' ? 'group' : undefined
+  const dmN = unreadTotal()
   const Tab = ({ p, label, icon: I, to, n }: { p: Place; label: string; icon: () => JSX.Element; to: string; n?: number }) => (
     <button className={'tab' + (place === p ? ' on' : '')} aria-current={place === p ? 'page' : undefined} onClick={() => { if (p === 'town') tapTown(route); else if (place !== p) go(to) }}>
       <span className="tab-ico"><I />{n ? <span className="tab-n" aria-hidden="true">{n > 99 ? '99+' : n}</span> : null}</span>
       <span>{label}</span>
     </button>
   )
+  // Today · Calendar · Messages · Groups · Town (Xavier, 2026-11-22: the big + became Messages;
+  // what it created is where the phones have it: + on the channel list's sections, + on Groups)
   return (
-    <nav className={'tabbar' + (guest ? ' guest' : '')} aria-label="Places" hidden={typing && !creating}>
-      <Tab p="home" label="Home" icon={HomeIcon} to="home" n={homeN} />
+    <nav className={'tabbar' + (guest ? ' guest' : '')} aria-label="Places" hidden={typing}>
+      <Tab p="home" label="Today" icon={HomeIcon} to="home" n={homeN} />
       <Tab p="calendar" label="Calendar" icon={CalendarIcon} to="calendar" />
-      {!guest && <button className="tab create" aria-label="Create" onClick={() => setCreating(true)}><span className="create-btn"><PlusIcon /></span></button>}
+      {!guest && <Tab p="messages" label="Messages" icon={MessageIcon} to="dm" n={dmN} />}
       {!guest && <Tab p="groups" label="Groups" icon={PeopleIcon} to="groups" />}
       <Tab p="town" label="Town" icon={TownIcon} to={townPath()} />
-      {creating && <CreateSheet onClose={() => setCreating(false)} where={place === 'town' ? here : undefined} first={first} />}
     </nav>
   )
 }
@@ -275,7 +217,7 @@ function recentActivity(): Group[] {
 /** The count on Home's tab: things waiting for me (requests, an agreement, my to-dos, mentions, messages). */
 function homeCount(): number {
   if (amGuest()) return 0
-  return requestCount() + (charter().length ? toAgree().length : 0) + myTodos().mine.length + mentionsNew() + unreadTotal()
+  return requestCount() + (charter().length ? toAgree().length : 0) + myTodos().mine.length + mentionsNew() // unread messages: on Messages
 }
 const mentionsNew = () => mentions(99).filter((e) => isNewMention(e)).length
 
@@ -647,7 +589,7 @@ export function CalendarPlace() {
         ))}
         <div className="place-more"><button className="link" onClick={() => go('events')}>All events, past ones too</button></div>
       </div>
-      {creating && <CreateSheet onClose={() => setCreating(false)} first="event" />}
+      {creating && <NewEventSheet onClose={() => setCreating(false)} />}
     </div>
   )
 }
@@ -662,7 +604,7 @@ function GroupRow({ g }: { g: Group }) {
   const last = lastLine(g.id)
   const parent = g.parent ? group(g.parent)?.name ?? g.parent : undefined
   const applied = g.applications.some((a) => a.pubkey === me())
-  const sub = [parent, `${g.members.size} ${g.members.size === 1 ? 'member' : 'members'}`, !mine && g.closed ? (applied ? 'request sent' : 'by application') : ''].filter(Boolean).join(' · ')
+  const sub = [parent, `${g.members.size} ${g.members.size === 1 ? 'member' : 'members'}`, g.inviteOnly ? 'private' : !mine && g.closed ? (applied ? 'request sent' : 'by application') : ''].filter(Boolean).join(' · ')
   return (
     <div className="group-row">
       <button className="home-row" onClick={() => go('c/' + encodeURIComponent(g.id) + (mine ? '' : '/group'))}>
@@ -681,7 +623,7 @@ export function GroupsScreen() {
   useVersion()
   const [tab, setTab] = useState<GroupTab>('mine')
   const [creating, setCreating] = useState(false)
-  const pods = groups().filter((g) => g.isPod)
+  const pods = groups().filter((g) => g.isPod && !hiddenFromMe(g))
   const mine = pods.filter((g) => g.members.has(me()) || g.admins.has(me()))
   const since = Date.now() / 1000 - 30 * 86400
   const recent = (g: Group) => lastLine(g.id)?.at ?? g.lastActivity
@@ -704,7 +646,7 @@ export function GroupsScreen() {
           </div>
         )}
       </div>
-      {creating && <CreateSheet onClose={() => setCreating(false)} first="group" />}
+      {creating && <NewPod onClose={() => setCreating(false)} />}
     </div>
   )
 }

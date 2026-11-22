@@ -119,7 +119,7 @@ export function About({ id, compact = false }: { id: string; compact?: boolean }
       )}
       {compact && <p className="about-line"><button className="link" onClick={() => setInviting(true)}>Invite people</button>{canAdmin(g) && <> · <button className="link" onClick={() => setSettings(true)}>Settings</button></>}</p>}
       {g.isPod && !compact && parent && (
-        <p className="about-line">Group in <button className="link" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{channelIcon(parent)} {parent.name}</button> · {g.closed ? (g.vouches > 0 ? `by request: ${g.vouches === 1 ? 'one vouch' : `${g.vouches} vouches`} or an admin lets people in` : 'by request: its admins let people in') : 'open: any member joins'} · <button className="link" onClick={() => go(`c/${encodeURIComponent(id)}/group`)}>Group page</button></p>
+        <p className="about-line">Group in <button className="link" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{channelIcon(parent)} {parent.name}</button> · {g.inviteOnly ? 'private: its stewards add people' : g.closed ? (g.vouches > 0 ? `by request: ${g.vouches === 1 ? 'one vouch' : `${g.vouches} vouches`} or an admin lets people in` : 'by request: its admins let people in') : 'open: any member joins'} · <button className="link" onClick={() => go(`c/${encodeURIComponent(id)}/group`)}>Group page</button></p>
       )}
       {g.isPod && g.closed && !compact && <p className="hint" style={{ whiteSpace: 'pre-wrap' }}>Question: {g.prompt || '—'}</p>}
       {g.isPod && (g.members.has(me())
@@ -220,8 +220,8 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   return (
           <Form className="chan-settings-form" onSubmit={async (e) => {
             e.preventDefault()
-            const closed = vis === 'closed'
-            if (g.isPod) await editPod(id, name.trim(), about.trim(), { ...access, closed })
+            const closed = vis === 'closed' || vis === 'private'
+            if (g.isPod) await editPod(id, name.trim(), about.trim(), { ...access, closed, inviteOnly: vis === 'private' })
             else if (closed !== !!g.closed) await editPod(id, name.trim(), about.trim(), { closed, prompt: g.prompt ?? '', vouches: 0 })
             else if (name.trim() !== g.name || about.trim() !== g.about) await editChannel(id, name.trim(), about.trim())
             // public from now on, or not any more (a period opens or closes; never retroactive)
@@ -246,9 +246,9 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
-            <div className="field who-reads"><span className="sec-title">Who can read it</span>
-              <div className="act-group vis-rows" role="radiogroup" aria-label="Who can read it">
-                {VIS.filter(([v]) => v !== 'closed' || g.id !== 'general').map(([v, Icon, title, line]) => (
+            <div className="field who-reads"><span className="sec-title">{g.isPod ? 'Who can join' : 'Who can read it'}</span>
+              <div className="act-group vis-rows" role="radiogroup" aria-label={g.isPod ? 'Who can join' : 'Who can read it'}>
+                {(g.isPod ? POD_VIS : VIS.filter(([v]) => v !== 'closed' || g.id !== 'general')).map(([v, Icon, title, line]) => (
                   <button key={v} type="button" role="radio" aria-checked={vis === v} className={'act vis-row' + (vis === v ? ' on' : '')}
                     onClick={() => { if (v === vis) return; if (v === 'public') setAskPublic(true); else setVis(v) }}>
                     <span className="cmenu-ico"><Icon /></span>
@@ -257,7 +257,7 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
                   </button>
                 ))}
               </div>
-              <small className="hint vis-foot">A change counts from now on. Messages keep the visibility they were posted with.</small>
+              {!g.isPod && <small className="hint vis-foot">A change counts from now on. Messages keep the visibility they were posted with.</small>}
             </div>
             {g.isPod && vis === 'closed' && <ClosedFields prompt={access.prompt} vouches={access.vouches} set={(a) => setAccess({ ...access, ...a })} />}
             {!g.isPod && <div className="field visibility"><span>Posts</span>
@@ -298,8 +298,8 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   )
 }
 
-type Vis = 'members' | 'public' | 'closed'
-const visOf = (g: Group): Vis => (isPublicChannel(g) ? 'public' : g.closed ? 'closed' : 'members')
+type Vis = 'members' | 'public' | 'closed' | 'private'
+const visOf = (g: Group): Vis => (g.isPod ? (g.closed ? (g.inviteOnly ? 'private' : 'closed') : 'members') : isPublicChannel(g) ? 'public' : g.closed ? 'closed' : 'members')
 const chanLabel = (g: Group) => (g.isPod || g.isEvent || g.isProposal ? g.name : '#' + g.name)
 const VisLock = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
 const VisGlobe = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" /></svg>
@@ -309,6 +309,12 @@ const VIS: [Vis, () => JSX.Element, string, string][] = [
   ['members', VisLock, 'Members only', 'Everyone with a pass in this belfry'],
   ['public', VisGlobe, 'Public', 'Anyone on the web can read it. Only members write.'],
   ['closed', VisAsk, 'Closed', 'People ask to join. A steward of this channel approves.'],
+]
+/** A group's Settings: the New group form's three choices (the lead, 2026-11-22, note n-groups-new) */
+const POD_VIS: [Vis, () => JSX.Element, string, string][] = [
+  ['members', VisGlobe, 'Open', 'Any member can join'],
+  ['closed', VisAsk, 'Closed', 'Members apply to join'],
+  ['private', VisLock, 'Private', 'Only invited people'],
 ]
 
 /** A closed group's question and how requests are accepted (by its stewards, or by vouches). */

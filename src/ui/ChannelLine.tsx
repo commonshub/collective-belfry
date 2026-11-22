@@ -5,7 +5,7 @@ import { isPictureMedia } from '../core/pictures'
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { todoParts, todoPartsText, todoTotalText, ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Media, type Message, type Proposal, type ProposalStatus } from '../core/model'
+import { todoParts, todoPartsText, todoTotalText, ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Media, type Message, type Proposal, type ProposalStatus , hiddenFromMe } from '../core/model'
 import { all, touch, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, Btn, Form, fmtDay, go, Lightbox, useMediaUrl, useNow, WorkRing } from './common'
@@ -32,7 +32,7 @@ const day = (d: Date) => (d.toDateString() === new Date().toDateString() ? 'Toda
 export function channelFacts(id: string) {
   const g = group(id)
   const subs = groups().filter((x) => x.parent === id)
-  const pods = subs.filter((x) => x.isPod)
+  const pods = subs.filter((x) => x.isPod && !hiddenFromMe(x))
   const proposals = subs.filter((x) => x.isProposal).map((x) => proposalFor(x.id)).filter((p): p is Proposal => !!p && OPEN_STATUS.includes(p.status))
   const events = upcoming(id)
   const pins = pinned(id, mayPin(g))

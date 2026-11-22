@@ -2142,3 +2142,21 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .seal-fresh { margin-top: 18px; }
 .seal-fresh .home-row { width: 100%; text-align: left; justify-content: space-between; }
 .seal-fresh .seal-fresh-t { color: var(--danger); font-weight: 400; }
+
+/* New group (canvas v183 groups/new, groups/new-pick): the step line, the faces to pick */
+.sheet .steps, .steps { font-size: 13px; color: var(--muted); margin: -4px 0 12px; }
+.join-rule .pick-group { margin-top: 6px; }
+.add-people-search { margin-bottom: 12px; }
+.face-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px 6px; margin-bottom: 14px; }
+.face { display: grid; justify-items: center; gap: 6px; padding: 6px 2px; border-radius: 12px; font-size: 12px; color: var(--text); min-width: 0; }
+.face-pic { position: relative; display: block; border-radius: 50%; }
+.face.on .face-pic { box-shadow: 0 0 0 3px var(--accent); }
+.face-check { position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 10px; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); border: 2px solid var(--bg); }
+.face-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-people-btns { position: sticky; bottom: 0; background: var(--bg); padding-top: 8px; }
+.add-people-btns { display: grid; gap: 8px; padding-bottom: 4px; }
+form .create-where { margin-bottom: 14px; }
+/* someone joined the belfry (board one-shape/townsquare-join): a small face, the name in bold */
+.entered-line .entered-who { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; color: inherit; font: inherit; padding: 0; background: none; border: 0; cursor: pointer; }
+.entered-line .entered-who .avatar, .entered-line .entered-who img { flex: none; }
+.join-line.entered-line { align-items: center; }

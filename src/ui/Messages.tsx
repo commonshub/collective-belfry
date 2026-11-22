@@ -22,6 +22,7 @@ import { refreshChains } from '../core/sealedrt'
 import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow, Pictures, PictureRow } from './common'
+import { placesOn } from './Places'
 import { SendingLine } from './Sending'
 import { TypingDots, TypingLine } from './Typing'
 import { cleared, messageSent, onTyping, typed, typingIn, type Place } from '../core/typing'
@@ -52,7 +53,8 @@ export function MessagesList() {
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => up('c')}>‹</button>
+        {/* a place of its own in the Belfry look (the bottom bar's Messages, the left column's row): no ‹ */}
+        {!placesOn() && <button className="icon-btn" aria-label="Back" onClick={() => up('c')}>‹</button>}
         <h1>Messages{address() && <small>{address()}</small>}</h1>
         <button className="icon-btn" aria-label="New message" onClick={() => setCreating(true)}>＋</button>
       </div>

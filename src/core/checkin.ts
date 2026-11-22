@@ -309,7 +309,7 @@ export async function archiveGroupMeta(groupId: string, tags: string[][], on: bo
 
 /** A group's new metadata: TAGS as a 9002 when I can publish one, else FIELDS through the belfry
  *  (which keeps every other tag of the current metadata). */
-export async function editGroupMeta(groupId: string, tags: string[][], fields: { name?: string; about?: string; picture?: string; closed?: boolean; prompt?: string; vouches?: number }): Promise<void> {
+export async function editGroupMeta(groupId: string, tags: string[][], fields: { name?: string; about?: string; picture?: string; closed?: boolean; private?: boolean; prompt?: string; vouches?: number }): Promise<void> {
   const ev = { kind: 9002, tags: [['h', groupId], ...tags] }
   // both through the outbox: saved at once, shown at once, sent when it can be (a reload or
   // being offline doesn't lose it); a refusal shows next to the channel's name (ChannelHeader)

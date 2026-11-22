@@ -126,6 +126,9 @@ export interface Group {
   /** How many members vouching admits an applicant (our `vouches` tag on the 9002, 1–5;
    *  0: its admins accept). Belfry's vouches.py does the admitting. */
   vouches: number
+  /** Private: `closed` + `private` on the 9007 / 9002 (docs/one-shape.md, 2026-11-22): only the
+   *  people its admins add get in. No Apply, no card, not listed to others; a 9021 isn't shown. */
+  inviteOnly: boolean
   admins: Set<string>
   /** The server's own sets (Belfry's mail.group_admins, webthreads.py): the p keys of the relay's
    *  latest 39001 (undefined until one arrived) and the admins by role. ADMINS adds the 9007
@@ -206,7 +209,7 @@ const groupSets: () => GroupSets = perLog((list) => {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, rawName: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), roleAdmins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
+      g = { id, name: id, rawName: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, inviteOnly: false, admins: new Set(), roleAdmins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -233,7 +236,7 @@ const groupSets: () => GroupSets = perLog((list) => {
       const arch = tag(e, 'archived')
       if (arch !== undefined && archivable(id) && (g.metaAt.archived ?? 0) <= e.created_at) { g.archived = arch === '1'; g.metaAt.archived = e.created_at }
       const access = e.tags.some((t) => t[0] === 'closed') ? true : e.tags.some((t) => t[0] === 'open') ? false : undefined
-      if (access !== undefined && (g.metaAt.closed ?? 0) <= e.created_at) { g.closed = access; g.metaAt.closed = e.created_at }
+      if (access !== undefined && (g.metaAt.closed ?? 0) <= e.created_at) { g.closed = access; g.inviteOnly = access && e.tags.some((t) => t[0] === 'private'); g.metaAt.closed = e.created_at }
       const prompt = tag(e, 'prompt')
       if (prompt !== undefined && (g.metaAt.prompt ?? 0) <= e.created_at) { g.prompt = prompt; g.metaAt.prompt = e.created_at }
       // the vouches rule goes with the access tags: an edit that says open / closed without it means "admins accept"
@@ -294,7 +297,7 @@ const groupSets: () => GroupSets = perLog((list) => {
   for (const [k, on] of byRole) if (on) { const g = map.get(k.slice(0, -64)); g?.admins.add(k.slice(-64)); g?.roleAdmins.add(k.slice(-64)) }
   for (const [k, e] of applied) {
     const g = map.get(k.slice(0, -64))
-    if (!g || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue
+    if (!g || g.inviteOnly || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue
     g.applications.push({ pubkey: e.pubkey, answer: e.content, at: e.created_at, ev: e })
   }
   // … and until then they are in no member list or count (the relay's 39002 has their key)
@@ -1179,3 +1182,34 @@ export function replyRoot(groupId: string, id: string): string | undefined {
 }
 /** Was message ID of GROUP deleted (by its author, or removed by a moderator)? */
 export const deletedMessage = (_groupId: string, id: string) => deleted(all(me())).has(id)
+
+/** A private group I'm not in (nor run): not listed to me, no Join or Apply (the lead, 2026-11-22). */
+export const hiddenFromMe = (g: Group | undefined): boolean => !!g && g.isPod && g.inviteOnly && !g.members.has(me()) && !g.admins.has(me())
+
+/** Someone joined the belfry (docs/one-shape.md "Joining the belfry", 2026-11-22): the groups key's
+ *  9000 in the main channel with ["joined", "belfry"] (+ ["name"], ["agent", "1"]), once per person.
+ *  A 9000 without `joined` draws nothing here (guests keep their own line, guestJoins). Someone
+ *  removed since (a later 9001) who never wrote there keeps no line. */
+/** A name to show as text: no control or direction characters, trimmed, 100 at most. */
+export const plainLabel = (t: string) => t.replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim().slice(0, 100)
+export interface BelfryJoin { id: string; pubkey: string; name: string; agent: boolean; at: number }
+export function belfryJoins(groupId: string): BelfryJoin[] {
+  if (groupId !== 'general') return []
+  const byPk = new Map<string, BelfryJoin>()
+  const gone = new Map<string, number>()
+  const wrote = new Set<string>()
+  for (const e of all(me())) {
+    if (tag(e, 'h') !== groupId) continue
+    if (e.kind === 9000 && tag(e, 'joined') === 'belfry') {
+      const p = tag(e, 'p')
+      if (!p || !/^[0-9a-f]{64}$/.test(p)) continue
+      const was = byPk.get(p)
+      if (was && was.at <= e.created_at) continue // once per person: the first one
+      // the name tag is shown as text only: no control or direction characters, 100 at most
+      const name = plainLabel(tag(e, 'name') ?? '')
+      byPk.set(p, { id: e.id, pubkey: p, name, agent: tag(e, 'agent') === '1', at: e.created_at })
+    } else if (e.kind === 9001) { const p = tag(e, 'p'); if (p) gone.set(p, Math.max(gone.get(p) ?? 0, e.created_at)) }
+    else if (e.kind === 9 || e.kind === 1111) wrote.add(e.pubkey)
+  }
+  return [...byPk.values()].filter((j) => wrote.has(j.pubkey) || (gone.get(j.pubkey) ?? 0) < j.at).sort((a, b) => a.at - b.at)
+}

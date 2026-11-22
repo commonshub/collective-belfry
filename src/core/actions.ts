@@ -41,22 +41,26 @@ export async function createChannel(name: string, about: string, id = addressFor
 
 /** Who joins a group: open, or closed (people apply: `prompt` is the question). Requests are
  *  accepted by its admins, or by VOUCHES members vouching (1–5; 0 = admins accept). */
-export interface PodAccess { closed: boolean; prompt: string; vouches?: number }
+export interface PodAccess { closed: boolean; prompt: string; vouches?: number; /** Private: closed + `private` */ inviteOnly?: boolean }
 export const DEFAULT_PROMPT = 'Why do you want to join, and what would you bring?'
 
 /** NIP-29 metadata tags for a group's access: `open` or `closed`, our `prompt` (the question)
  *  and `vouches` (how many vouches admit someone; Belfry's vouches.py reads it). */
-const accessTags = (a: PodAccess) => [a.closed ? ['closed'] : ['open'], ...(a.closed ? [['prompt', a.prompt.trim() || DEFAULT_PROMPT]] : []),
-  ...(a.closed && (a.vouches ?? 0) > 0 ? [['vouches', String(Math.min(5, Math.max(1, a.vouches!)))]] : [])]
+const accessTags = (a: PodAccess, pod = true) => [a.closed ? ['closed'] : ['open'],
+  // groups: `public` / `private` (docs/one-shape.md "Groups: open, closed, private"); channels keep theirs as they are
+  ...(pod ? [a.closed && a.inviteOnly ? ['private'] : ['public']] : []),
+  ...(a.closed && !a.inviteOnly && a.prompt.trim() ? [['prompt', a.prompt.trim()]] : []),
+  ...(a.closed && !a.inviteOnly && (a.vouches ?? 0) > 0 ? [['vouches', String(Math.min(5, Math.max(1, a.vouches!)))]] : [])]
 
 /** A group (a working group; the protocol keeps its old word: ids `pod-…`, the `pod` tag): its
  *  own NIP-29 group, announced in its parent (channel or group), which is what links the two.
  *  Groups nest: a group can hold groups. Whoever creates it is its admin. */
 export async function createPod(name: string, about: string, parent = 'general', access: PodAccess = { closed: false, prompt: '' }) {
   const id = addressFor(name, 'pod-')
-  await enqueue('groups', { kind: 9007, tags: [['h', id]] })
+  await enqueue('groups', { kind: 9007, tags: [['h', id], ...accessTags(access)] })
   await enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about], ...accessTags(access)] })
-  await enqueue('groups', {
+  // a Private group posts no announcement anywhere (docs/one-shape.md): nobody outside it sees it
+  if (!(access.closed && access.inviteOnly)) await enqueue('groups', {
     kind: 9,
     content: `⬡ New group: ${name}${about ? ' · ' + about : ''}`,
     tags: [['h', parent], ['pod', id]],
@@ -68,16 +72,17 @@ export async function createPod(name: string, about: string, parent = 'general',
  *  metadata with each 9002, so an edit that leaves a setting out would drop it from the relay's
  *  copy (name, about, picture, open / closed with its question and vouches; what the relay's copy
  *  holds that this app doesn't model is kept as it is). `archived` is only ever in CHANGE. */
-const META_KNOWN = new Set(['d', 'h', '-', 'name', 'about', 'picture', 'open', 'closed', 'prompt', 'vouches', 'archived', 'client'])
-const ACCESS_TAGS = ['open', 'closed', 'prompt', 'vouches']
+const META_KNOWN = new Set(['d', 'h', '-', 'name', 'about', 'picture', 'open', 'closed', 'prompt', 'vouches', 'public', 'private', 'archived', 'client'])
+const ACCESS_TAGS = ['open', 'closed', 'public', 'private', 'prompt', 'vouches']
 export function metaTags(id: string, change: string[][]): string[][] {
   const g = group(id)
   const kept: string[][] = []
   if (g) {
     kept.push(['name', g.rawName], ['about', g.about])
     if (g.picture) kept.push(['picture', g.picture])
-    if (g.closed) kept.push(['closed'], ...(g.prompt ? [['prompt', g.prompt]] : []), ...(g.vouches > 0 ? [['vouches', String(g.vouches)]] : []))
-    else if (g.isPod || g.isEvent) kept.push(['open'])
+    if (g.closed) kept.push(['closed'], ...(g.isPod ? [[g.inviteOnly ? 'private' : 'public']] : []), ...(g.prompt ? [['prompt', g.prompt]] : []), ...(g.vouches > 0 ? [['vouches', String(g.vouches)]] : []))
+    else if (g.isPod) kept.push(['open'], ['public'])
+    else if (g.isEvent) kept.push(['open'])
     const copy = all(me()).filter((e) => e.kind === 39000 && e.tags.some((t) => t[0] === 'd' && t[1] === id)).sort((a, b) => b.created_at - a.created_at)[0]
     for (const t of copy?.tags ?? []) if (t[0] && !META_KNOWN.has(t[0])) kept.push(t)
   }
@@ -93,8 +98,11 @@ export async function setArchived(id: string, on: boolean) {
   await archiveGroupMeta(id, metaTags(id, [['archived', on ? '1' : '0']]), on)
 }
 
-export const editPod = (id: string, typed: string, about: string, access: PodAccess, name = wireName(id, typed)) =>
-  editGroupMeta(id, metaTags(id, [['name', name], ['about', about], ...accessTags(access)]), { name, about, closed: access.closed, prompt: access.closed ? access.prompt.trim() || DEFAULT_PROMPT : '', vouches: access.closed ? Math.min(5, Math.max(0, access.vouches ?? 0)) : 0 })
+export const editPod = (id: string, typed: string, about: string, access: PodAccess, name = wireName(id, typed)) => {
+  const pod = !!group(id)?.isPod
+  const priv = pod && access.closed && !!access.inviteOnly
+  return editGroupMeta(id, metaTags(id, [['name', name], ['about', about], ...accessTags(access, pod)]), { name, about, closed: access.closed, ...(pod ? { private: priv } : {}), prompt: access.closed && !priv ? access.prompt.trim() : '', vouches: access.closed && !priv ? Math.min(5, Math.max(0, access.vouches ?? 0)) : 0 })
+}
 
 /** NIP-29 join request: in an open group it lets you in; in a closed one it is your application,
  *  with your answer to the pod's question as its content. */

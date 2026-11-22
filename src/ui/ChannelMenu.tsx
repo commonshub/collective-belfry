@@ -27,7 +27,7 @@ import { NotifyOptions, NotifySheet, useNotifyRow } from './Follow'
 import { InviteSheet } from './Invite'
 import { Markdown } from './markdown'
 import { RichText, TopicsBar } from './Topics'
-import { BellIcon, CalendarIcon, ChevronRightIcon, DocIcon, GearIcon, GlobeIcon, ImageIcon, LinkIcon, PeopleIcon, PersonPlusIcon, PodShape, PushPinIcon, TodoIcon } from './icons'
+import { BellIcon, CalendarIcon, ChevronRightIcon, DocIcon, GearIcon, GlobeIcon, ImageIcon, LinkIcon, PeopleIcon, PersonPlusIcon, PlusIcon, PodShape, PushPinIcon, TodoIcon } from './icons'
 import { stateLabel } from './Calendar'
 
 const LockIcon = () => <svg className="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
@@ -105,7 +105,7 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
         <div className="pull-vis"><b>{v.title}</b>{v.lines.map((l) => <span key={l}>{l}</span>)}</div>
       ) })()}
       {(g.isPod || g.isProposal) && parent && (
-        <button className="link pull-parent" onClick={() => { onPick(); go('c/' + encodeURIComponent(parent.id)) }}>{g.isProposal ? 'Proposal' : 'Group'} in {parent.isPod ? '' : '# '}{parent.name}{g.isPod ? (g.closed ? ' · by request' : ' · open to members') : ''}</button>
+        <button className="link pull-parent" onClick={() => { onPick(); go('c/' + encodeURIComponent(parent.id)) }}>{g.isProposal ? 'Proposal' : 'Group'} in {parent.isPod ? '' : '# '}{parent.name}{g.isPod ? (g.inviteOnly ? ' · private' : g.closed ? ' · by request' : ' · open to members') : ''}</button>
       )}
       {g.isPod && g.closed && g.prompt && <p className="hint pull-prompt">Question for people who ask to join: {g.prompt}</p>}
       {pin && (
@@ -184,7 +184,7 @@ export function ChannelPage({ id, page }: { id: string; page: string }) {
       {f.pods.length === 0 && <div className="empty">No groups in this channel yet.</div>}
       {f.pods.map((p) => (
         <button key={p.id} className="act page-row" onClick={() => go(p.members.has(me()) ? 'c/' + encodeURIComponent(p.id) : `c/${encodeURIComponent(p.id)}/group`)}>
-          <PodShape members={p.members.size} size={20} /><span className="t"><b>{p.name}</b><small>{p.members.size} {p.members.size === 1 ? 'member' : 'members'} · {p.closed ? 'by request' : 'open'}{p.members.has(me()) ? ' · you’re in' : ''}</small></span><ChevronRightIcon />
+          <PodShape members={p.members.size} size={20} /><span className="t"><b>{p.name}</b><small>{p.members.size} {p.members.size === 1 ? 'member' : 'members'} · {p.inviteOnly ? 'private' : p.closed ? 'by request' : 'open'}{p.members.has(me()) ? ' · you’re in' : ''}</small></span><ChevronRightIcon />
         </button>
       ))}
     </div>
@@ -199,7 +199,8 @@ export function ChannelPage({ id, page }: { id: string; page: string }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => up(parent)}>‹</button>
         <h1>{TITLES[page] ?? page}<small>{name}</small></h1>
-        {page === 'members' && mayInvite && <button className="btn small invite-btn" onClick={() => setInviting(true)}><PersonPlusIcon /> Invite</button>}
+        {/* "add one" is an icon top right, like Groups' + (Xavier, 2026-11-22; canvas v185) */}
+        {page === 'members' && mayInvite && <button className="icon-btn round invite-btn" aria-label="Invite someone" title="Invite someone" onClick={() => setInviting(true)}><PlusIcon /></button>}
       </div>
       <div className="scroll">{body}</div>
       {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
