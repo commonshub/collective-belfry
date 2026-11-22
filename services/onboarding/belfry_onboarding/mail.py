@@ -363,6 +363,38 @@ def related(a: str, b: str) -> bool:
     return bool(a and b) and (a == b or a.endswith("." + b) or b.endswith("." + a))
 
 
+_TAG_VALUE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _dkim_tag(header: Any, name: str) -> str:
+    """A DKIM-Signature's d= or s= for the logs: letters, digits, dots, dashes; else "?"."""
+    m = re.search(rf"(?:^|;)\s*{name}\s*=\s*([^;]*)", " ".join(str(header).split()))
+    value = _TAG_VALUE.sub("", m.group(1))[:100] if m else ""
+    return value or "?"
+
+
+class _Why(logging.Logger):
+    """dkimpy's logger for one verify: keeps its first error (why it said no: "body hash
+    mismatch", "missing public key", a DNS timeout), cut short, for mail.authenticate's line."""
+
+    def __init__(self) -> None:
+        super().__init__("belfry_onboarding.mail.dkim", logging.ERROR)
+        self.first = ""
+
+    def error(self, msg: object, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        if not self.first:
+            text = str(msg) % args if args else str(msg)
+            self.first = _short(Exception(re.sub(r"\s*\(got .*", "", text)))
+
+    def debug(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        return None
+
+
+def _short(exc: Exception) -> str:
+    """An error's message for the logs: one line, short, no addresses."""
+    return re.sub(r"\S+@\S+", "…", " ".join(str(exc).split()))[:120]
+
+
 def authenticate(raw: bytes, peer: str, helo: str, mail_from: str, from_addr: str) -> dict:
     """DKIM and SPF results and whether either aligns with the From domain."""
     from_domain = from_addr.rpartition("@")[2]
@@ -370,17 +402,37 @@ def authenticate(raw: bytes, peer: str, helo: str, mail_from: str, from_addr: st
     try:
         import dkim
 
-        sigs = sum(1 for k in email.message_from_bytes(raw).keys() if k.lower() == "dkim-signature")
-        for i in range(min(sigs, 5)):
-            d = dkim.DKIM(raw)
-            ok = d.verify(idx=i, dnsfunc=DNSFUNC) if DNSFUNC else d.verify(idx=i)
-            if ok and d.domain:
-                dom = d.domain.decode() if isinstance(d.domain, bytes) else str(d.domain)
-                if related(dom, from_domain):
-                    dkim_ok = dom
-                    break
-    except Exception as exc:  # noqa: BLE001 — a broken signature is just no signature
-        log.debug("mail: dkim: %s", exc)
+        found = email.message_from_bytes(raw).get_all("DKIM-Signature") or []
+        for i, header in enumerate(found[:5]):
+            # one INFO line per signature: its d= and s= and what came of it, nothing else of
+            # the mail (a Workspace mail "dkim: none" on OSV, 2026-11-22, said nothing more)
+            d_tag, s_tag = _dkim_tag(header, "d"), _dkim_tag(header, "s")
+            why = _Why()
+            try:
+                d = dkim.DKIM(raw, logger=why)
+                ok = d.verify(idx=i, dnsfunc=DNSFUNC) if DNSFUNC else d.verify(idx=i)
+            except Exception as exc:  # noqa: BLE001 — a broken signature is just no signature
+                text = _short(Exception(re.sub(r"\s*\(got .*", "", str(exc))))
+                if isinstance(exc, dkim.DKIMException):  # body hash mismatch, a bad key…
+                    log.info("mail: dkim d=%s s=%s: fail (%s)", d_tag, s_tag, text)
+                else:
+                    log.info("mail: dkim d=%s s=%s: %s %s", d_tag, s_tag, type(exc).__name__, text)
+                continue
+            dom = d.domain.decode() if isinstance(d.domain, bytes) else str(d.domain or "")
+            aligned = bool(ok and dom and related(dom, from_domain))
+            log.info(
+                "mail: dkim d=%s s=%s: %s",
+                d_tag,
+                s_tag,
+                ("ok" if aligned else "ok, not aligned with From")
+                if ok
+                else "fail" + (f" ({why.first})" if why.first else ""),
+            )
+            if aligned:
+                dkim_ok = dom
+                break
+    except Exception as exc:  # noqa: BLE001
+        log.info("mail: dkim: %s", type(exc).__name__)
     spf_result = "none"
     try:
         ip = ipaddress.ip_address(peer)

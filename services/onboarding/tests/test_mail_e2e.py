@@ -292,6 +292,12 @@ def test_a_gmail_mail_from_outside_lands_in_the_shared_inbox_and_is_forwarded(wo
     assert "mail-original" in tags  # the whole e-mail, encrypted on Blossom
 
     # both files: the pasted picture and the PDF, each on Blossom and on the card
+    # three uploads: the picture, the PDF and the whole e-mail (AES-GCM, no name, octet-stream)
+    assert sorted(ctype for _, ctype, _ in world.blossom) == [
+        "application/octet-stream",
+        "application/pdf",
+        "image/png",
+    ]
     kept = sorted((name, ctype) for name, ctype, _ in world.blossom if name)
     assert kept == [("plan.pdf", "application/pdf"), ("poster.png", "image/png")]
     imeta = [t for t in card["tags"] if t[0] == "imeta"]
@@ -356,3 +362,96 @@ def test_a_sender_over_ipv6_gets_the_same_answers(world):
         assert s.rcpt(f"nobody@{DOMAIN}")[0] == 550
         assert s.data(gmail_message())[0] == 250
     assert len([e for e in world.groups.events if e["kind"] == 9]) == 1
+
+
+@pytest.fixture(scope="module")
+def dkim_key():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    der = key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    import base64
+
+    return pem, b"v=DKIM1; k=rsa; p=" + base64.b64encode(der)
+
+
+@pytest.mark.parametrize(
+    "d,result,auth",
+    [
+        ("example.org", "ok", "pass"),
+        # a Google Workspace domain without its own DKIM set up: Google signs for it as
+        # <domain>.<date>.gappssmtp.com, valid but not aligned with From (DMARC says no)
+        ("example-org.20230601.gappssmtp.com", "ok, not aligned with From", "none"),
+    ],
+)
+def test_a_dkim_signed_mail_keeps_its_signature_through_mail_in(
+    world, monkeypatch, caplog, dkim_key, d, result, auth
+):
+    """The bytes mail-in hands over are the bytes that were signed (CRLF, dots, headers)."""
+    import dkim
+
+    pem, txt = dkim_key
+    raw = gmail_message()
+    # a line starting with a dot: SMTP stuffs it, mail-in must unstuff it
+    raw = raw.replace(
+        b"Can we rent the hall on Saturday?", b"Can we rent the hall\r\n.on Saturday?", 1
+    )
+    sig = dkim.sign(
+        raw,
+        b"sel1",
+        d.encode(),
+        pem,
+        include_headers=[b"From", b"To", b"Subject", b"Date", b"Message-ID", b"MIME-Version"],
+    )
+    signed_raw = sig + raw
+    asked = []
+
+    def dns(name, timeout=5):
+        asked.append(name)
+        return txt if name == f"sel1._domainkey.{d}.".encode() else None
+
+    monkeypatch.setattr(mail, "DNSFUNC", dns)
+    caplog.set_level(logging.INFO, logger="belfry_onboarding.mail")
+    code, answer = send(world.port, signed_raw)
+    assert code == 250, answer
+    [card] = [e for e in world.groups.events if e["kind"] == 9]
+    assert ["belfry-auth", auth] in card["tags"]
+    lines = [r.getMessage() for r in caplog.records if "dkim d=" in r.getMessage()]
+    assert lines == [f"mail: dkim d={d} s=sel1: {result}"]
+    assert all("marie" not in r.getMessage() for r in caplog.records)
+
+
+def test_a_broken_dkim_signature_says_why(world, monkeypatch, caplog, dkim_key):
+    import dkim
+
+    pem, txt = dkim_key
+    raw = gmail_message()
+    sig = dkim.sign(raw, b"sel1", b"example.org", pem, include_headers=[b"From", b"Subject"])
+    tampered = sig + raw.replace(b"Saturday", b"Sunday", 1)
+    monkeypatch.setattr(mail, "DNSFUNC", lambda name, timeout=5: txt)
+    caplog.set_level(logging.INFO, logger="belfry_onboarding.mail")
+    assert send(world.port, tampered)[0] == 250
+    [line] = [r.getMessage() for r in caplog.records if "dkim d=" in r.getMessage()]
+    assert line == "mail: dkim d=example.org s=sel1: fail (body hash mismatch)"
+
+
+def test_a_dkim_key_missing_from_dns_says_so(monkeypatch, caplog, dkim_key):
+    import dkim
+
+    pem, _ = dkim_key
+    raw = gmail_message()
+    signed_raw = dkim.sign(raw, b"sel1", b"example.org", pem, include_headers=[b"From"]) + raw
+    monkeypatch.setattr(mail, "DNSFUNC", lambda name, timeout=5: None)
+    caplog.set_level(logging.INFO, logger="belfry_onboarding.mail")
+    got = mail.authenticate(signed_raw, "127.0.0.1", "h", "marie@example.org", "marie@example.org")
+    assert got["dkim"] == "" and not got["aligned"]
+    [line] = [r.getMessage() for r in caplog.records if "dkim d=" in r.getMessage()]
+    assert line.startswith("mail: dkim d=example.org s=sel1: fail (") and "key" in line
