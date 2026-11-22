@@ -8,7 +8,7 @@ import { touch, useVersion } from '../core/store'
 import { FULL, PENDING_OTHER, active as sealedOn, mySessions } from '../core/sealedrt'
 import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
-import { answerElsewhere, freshElsewhere, signOutOthers, canStartFresh, startFresh, canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
+import { answerElsewhere, freshElsewhere, signOutOthers, canStartFresh, startFresh, canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, addedNotices, addedWhen, itWasMe, removeAdded, type AddedNotice, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
 import { MailIcon } from './icons'
 import { Avatar, Sheet, SheetOrPopover, go, up, type Anchor } from './common'
 
@@ -60,11 +60,62 @@ const Fold = ({ open }: { open: boolean }) => <Ico size={14}><path d={open ? 'M6
 /** "Added 2 Oct · from iPhone" */
 const addedLine = (d: MyDevice) => `Added ${dayMonth(d.added)}${d.from ? ` · from ${d.from}` : ''}`
 
+/** §5.2 2a: a device added without this device asking: "Added just now, automatically · Not you? Remove it" */
+function AutoLine({ n }: { n: AddedNotice }) {
+  const [asked, setAsked] = useState(false)
+  return <>Added {addedWhen(n.at)}, automatically · <button type="button" className="link seal-notyou" onClick={() => setAsked(true)}>Not you? Remove it</button>
+    {asked && <RemoveAddedSheet n={n} onClose={() => setAsked(false)} />}</>
+}
+
+/** Remove a device that was added without a prompt: asked first, like Devices' Remove. */
+function RemoveAddedSheet({ n, onClose }: { n: AddedNotice; onClose: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  return (
+    <Sheet title={`Remove ${n.name}?`} onClose={() => { if (!busy) onClose() }}>
+      <div className="seal-share">
+        <p>It will be signed out and stop reading new messages, in all your conversations.</p>
+        {error && <div className="error" role="alert">{error}</div>}
+        <button className="btn seal-red" disabled={busy} aria-busy={busy || undefined} onClick={async () => {
+          setBusy(true); setError('')
+          try { await removeAdded(n.id); onClose() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+        }}>{busy ? <><Spin /> Removing…</> : 'Remove'}</button>
+        <button className="btn ghost" disabled={busy} onClick={onClose}>It was me</button>
+      </div>
+    </Sheet>
+  )
+}
+
+/** Board messages/encryption-device-added: on top of Messages on every device of mine that didn't
+ *  ask about it (§5.2 2a), until "It was me" (×) or Remove, or the device left my devices. */
+export function AddedBanner() {
+  useVersion()
+  const [asked, setAsked] = useState<AddedNotice | null>(null)
+  const list = addedNotices()
+  // the names come from the sessions list: read it when there is a notice to name
+  const any = list.length > 0
+  useEffect(() => { if (any && sealedOn()) void mySessions(60e3).then(() => touch()) }, [any])
+  if (!list.length) return null
+  return <>
+    {list.map((n) => (
+      <div key={n.id} className="seal-banner seal-added" role="status">
+        <DeviceIcon kind={n.kind} size={20} />
+        <span className="t"><b>{n.name} was added {addedWhen(n.at)}</b>It can read your conversations.<br />
+          <button className="seal-how" onClick={() => setAsked(n)}>Not you? Remove it</button></span>
+        <button className="icon-btn seal-x" aria-label="It was me" title="It was me" onClick={() => void itWasMe(n.id)}>×</button>
+      </div>
+    ))}
+    {asked && <RemoveAddedSheet n={asked} onClose={() => setAsked(null)} />}
+  </>
+}
+
 export function MyDeviceRows({ list, extra }: { list: MyDevice[]; extra?: (d: MyDevice) => React.ReactNode }) {
+  useVersion()
+  const auto = new Map(addedNotices().map((n) => [n.id, n]))
   return <>{list.map((d) => (
     <div key={d.id} className="home-row seal-dev">
       <span className="row-ico"><DeviceIcon kind={d.kind} size={22} /></span>
-      <span className="t"><b>{d.name}{d.here && <> </>}{d.here && <span className="seal-here">This device</span>}</b><small>{extra ? extra(d) : addedLine(d)}</small></span>
+      <span className="t"><b>{d.name}{d.here && <> </>}{d.here && <span className="seal-here">This device</span>}</b><small>{auto.has(d.id) ? <AutoLine n={auto.get(d.id)!} /> : extra ? extra(d) : addedLine(d)}</small></span>
     </div>
   ))}</>
 }
@@ -302,11 +353,12 @@ export function DevicesScreen() {
   useVersion()
   useEffect(() => { if (sealedOn()) void mySessions(0).then(() => touch()) }, [])
   const [asked, setAsked] = useState<MyDevice | null>(null)
+  const autoOf = new Map(addedNotices().map((n) => [n.id, n]))
   const [removing, setRemoving] = useState('')
   const [error, setError] = useState('')
   const remove = async (d: MyDevice) => {
     setAsked(null); setRemoving(d.id); setError('')
-    try { await removeDevice(d.id) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setRemoving('') }
+    try { if (autoOf.has(d.id)) await removeAdded(d.id); else await removeDevice(d.id) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setRemoving('') }
   }
   return (
     <div className="screen seal-screen">
@@ -318,7 +370,7 @@ export function DevicesScreen() {
             <div key={d.id} className="home-row seal-dev">
               <span className="row-ico"><DeviceIcon kind={d.kind} size={22} /></span>
               <span className="t"><b>{d.name}{d.here && <> <span className="seal-here">This device</span></>}</b>
-                <small>{[addedLine(d), activeWord(d.active)].filter(Boolean).join(' · ')}</small></span>
+                <small>{autoOf.has(d.id) ? <AutoLine n={autoOf.get(d.id)!} /> : [addedLine(d), activeWord(d.active)].filter(Boolean).join(' · ')}</small></span>
               {!d.here && canRemoveDevices() && (removing === d.id
                 ? <span className="seal-removing"><Spin /> Removing…</span>
                 : <button className="btn small ghost seal-remove" disabled={!!removing} onClick={() => setAsked(d)}>Remove</button>)}

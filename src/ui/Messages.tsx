@@ -20,7 +20,7 @@ import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
 import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
-import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
+import { AddedBanner, DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow, Pictures, PictureRow } from './common'
 import { placesOn } from './Places'
 import { SendingLine } from './Sending'
@@ -59,6 +59,7 @@ export function MessagesList() {
         <button className="icon-btn" aria-label="New message" onClick={() => setCreating(true)}>＋</button>
       </div>
       <div className="scroll">
+        <AddedBanner />
         {anyLockedHere() && <LockedBanner />}
         {list.length === 0 && (
           <div className="empty">

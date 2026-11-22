@@ -39,6 +39,14 @@ interface State {
   asked: number // my last device request
   /** canvas v122: my sealed conversations were started fresh on another device while this one held my keys */
   elsewhere?: Elsewhere
+  /** §5.2 2a: devices added to my head without this device having shown a prompt or a link code for
+   *  them: device → the adding roster's time (s); DONE once "It was me" or Remove was tapped */
+  notices?: Record<string, { at: number; done?: boolean }>
+  /** 2a: rosters dated from this (s) on raise notices (set at this version's first start: devices
+   *  added before it never do) */
+  noticeFrom?: number
+  /** 2a: devices this device tapped Allow for, or showed the link code they used: no notice for them */
+  prompted?: string[]
 }
 export interface Elsewhere { root: string; device: string; at: number; answered?: boolean }
 const emptyState = (): State => ({ keys: {}, pins: {}, convs: [], shared: {}, unshared: [], fresh: {}, first: {}, asked: 0 })
@@ -67,7 +75,11 @@ function merge(a: State, b: State): State {
   for (const r of unshared) delete shared[r]
   const ea = a.elsewhere, eb = b.elsewhere
   const elsewhere = !ea ? eb : !eb ? ea : ea.root === eb.root ? { ...ea, answered: !!(ea.answered || eb.answered) } : ea.at >= eb.at ? ea : eb
-  return { ...(elsewhere ? { elsewhere } : {}), keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked) }
+  const notices: Record<string, { at: number; done?: boolean }> = { ...(a.notices ?? {}) }
+  for (const [d, n] of Object.entries(b.notices ?? {})) { const m = notices[d]; notices[d] = !m ? n : { at: Math.min(m.at, n.at), ...(m.done || n.done ? { done: true } : {}) } }
+  const noticeFrom = a.noticeFrom && b.noticeFrom ? Math.min(a.noticeFrom, b.noticeFrom) : a.noticeFrom ?? b.noticeFrom
+  const prompted = [...new Set([...(a.prompted ?? []), ...(b.prompted ?? [])])]
+  return { ...(elsewhere ? { elsewhere } : {}), notices, ...(noticeFrom ? { noticeFrom } : {}), prompted, keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked) }
 }
 
 let device: { secret: Uint8Array; pub: string } | null = null
@@ -166,6 +178,7 @@ export async function startSealed(clientSecret: string) {
       doneRequests.add(a.id)
     }
     for (const h of await kvPrefix<{ dev: string; at: number }>(KV_HANDED).catch(() => [] as { dev: string; at: number }[])) handedAt.set(h.dev, h.at)
+    if (!st.noticeFrom) { const from = nowS(); await commit((x) => { if (!x.noticeFrom) x.noticeFrom = from }) } // §5.2 2a: from now on
     started = true
     try { channel = new BroadcastChannel('belfry-sealed-' + me()); channel.onmessage = () => void reloadFromKv() } catch { /* old browser: no other tabs told */ }
     currentFilters = () => device ? [
@@ -784,6 +797,70 @@ const handoverTried = new Map<string, string>()
 let headsSeen = ''
 let noKeyNudge = 0
 
+// ---- §5.2 step 2: allowed without a prompt; 2a: the notice ---------------------------------------
+
+/** Devices added to my head by rosters dated in the last 24 h (never the root's own), from the
+ *  rosters' times only, whoever added them (the lead, 2026-11-22: no local memory). */
+export function addedLastDay(c: C.Chain, now = nowS()): number {
+  let n = 0
+  for (let i = 1; i < c.rosters.length; i++) {
+    const r = c.rosters[i]
+    if (r.created_at < now - 86400) continue
+    const before = new Set(c.rosters[i - 1].devices)
+    n += r.devices.filter((d) => !before.has(d)).length
+  }
+  return n
+}
+
+/** §5.2 step 2: every condition for allowing request R at once. LIVE is its session's row from a
+ *  sessions list read for this request (live, "chat": true). */
+function autoAllowOk(c: C.Chain, r: NostrEvent, live: SessionRow): boolean {
+  if (!device || live.chat !== true) return false
+  const since = live.created_at ? Date.parse(live.created_at) / 1000 : NaN
+  if (!Number.isFinite(since)) return false // no session start: the person decides
+  if (r.created_at < since - 120 || r.created_at < nowS() - 30 * 86400) return false
+  // the chain never had it (e39e2e8): a removed device whose session outlived its removal asks
+  if (C.allDevices(c).has(r.pubkey)) return false
+  // this device: in the head it holds (pinned), on the anchored end, and trusted (§3.4)
+  const pin = st.pins[me()]
+  if (!C.headOf(c).devices.includes(device.pub) || !anchoredEnd(c).devices.includes(device.pub)) return false
+  if (pin?.trusted && !pin.trusted.includes(device.pub)) return false
+  return addedLastDay(c) < 3 // a fourth in 24 h asks
+}
+
+const autoTried = new Map<string, string>() // request id → my head when step 2 was checked for it
+
+async function markPrompted(dev: string) {
+  if (st.prompted?.includes(dev)) return
+  await commit((x) => { x.prompted = [...new Set([...(x.prompted ?? []), dev])] })
+}
+
+/** 2a: a roster of my chain (dated from noticeFrom on) added a device this device didn't show a
+ *  prompt or a link code for: one notice per device, kept across restarts. */
+async function noteAdded(c: C.Chain) {
+  if (!device || !st.noticeFrom) return
+  const add: Record<string, number> = {}
+  for (const d of C.headOf(c).devices) {
+    if (d === device.pub || st.notices?.[d] || st.prompted?.includes(d)) continue
+    const by = c.added.get(d)
+    if (!by || by.n === 1 || by.created_at < st.noticeFrom) continue
+    add[d] = by.created_at
+  }
+  if (Object.keys(add).length) await commit((x) => { x.notices = { ...(x.notices ?? {}) }; for (const [d, at] of Object.entries(add)) if (!x.notices[d]) x.notices[d] = { at } })
+}
+
+/** 2a: the notices to show: added devices still in my head, not answered. */
+export function addedNotices(): { device: string; at: number }[] {
+  const c = chainOf(me())
+  if (!c || !device) return []
+  const head = new Set(C.headOf(c).devices)
+  return Object.entries(st.notices ?? {}).filter(([d, n]) => !n.done && head.has(d) && d !== device!.pub).map(([d, n]) => ({ device: d, at: n.at * 1000 })).sort((a, b) => b.at - a.at)
+}
+/** 2a: "It was me" (or after Remove): the notice goes, on every tab, across restarts. */
+export async function answerNotice(dev: string) {
+  await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, done: true } } })
+}
+
 /** One pass at a time: the store changes while a pass waits for the sessions list, and two passes
  *  answered the same device twice. A change during a pass runs one more after it. */
 let storeBusy = false, storeAgain = false
@@ -814,6 +891,7 @@ async function onStorePass() {
   const c = chainOf(me())
   if (!c || !deviceIn()) return
   const head = C.headOf(c)
+  await noteAdded(c)
   // only each device's newest request counts (newest created_at, then the lowest id); the older
   // ones of that device are left as they are
   const newest = new Map<string, NostrEvent>()
@@ -862,8 +940,22 @@ async function onStorePass() {
     if (!row) { notNow(r.id); continue } // not listed (yet): asked again later, never remembered
     const fresh = shownCodes.filter((x) => Date.now() - x.at < 15 * 60e3)
     if (fresh.some((x) => C.linkOk(x.secret, r))) {
+      await markPrompted(r.pubkey) // a code this device showed: no notice here
       try { await allow(r.pubkey); requestDone(r.id); linked = row.device || row.application_name || 'Your new device' } catch { /* not done: next time */ }
       touch(); continue
+    }
+    // §5.2 step 2 (Xavier, 2026-11-22): a device signing in to my account is allowed at once, without a
+    // prompt, when every condition holds; the other devices of mine show the notice (2a)
+    if (asking?.device !== r.pubkey && autoTried.get(r.id) !== head.id) {
+      autoTried.set(r.id, head.id) // once per request and head: a refusal here leaves it to the card
+      const now = await mySessions(0) // read for this request, never a cached copy
+      const live = now?.find((s) => s.client_pubkey === r.pubkey && s.chat === true)
+      let done = false
+      if (live && autoAllowOk(c, r, live)) {
+        try { await allow(r.pubkey); requestDone(r.id); done = true } catch { /* any error here: the Allow card below */ }
+      }
+      if (done) { touch(); continue }
+      if (answering.has(r.pubkey)) continue
     }
     // the card: one device at a time; the same device again only moves to its newer request
     if (asking && asking.device !== r.pubkey) break
@@ -920,6 +1012,12 @@ export const FULL = `You already have ${C.MAX_DEVICES} devices. Remove one in De
  *  relay), then roster n+1 with it and the anchor, done per §3.2. At 20 devices: refused, nothing
  *  sent. Throws (NotDone, or a reason) when it isn't done. */
 const allowing = new Map<string, Promise<void>>()
+/** Allow TAPPED on this device's card (the lead, 2026-11-22: only a tap, or a link code, spares
+ *  this device the notice; a card merely shown while another device added it still gets one). */
+export async function allowTapped(newDevice: string): Promise<void> {
+  await markPrompted(newDevice)
+  return allow(newDevice)
+}
 export function allow(newDevice: string): Promise<void> {
   // a second Allow for the same device (a double tap, the card and a link code) joins the first
   const on = allowing.get(newDevice)

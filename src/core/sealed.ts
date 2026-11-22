@@ -62,9 +62,15 @@ interface State {
   full?: boolean
   /** Link a phone or tablet: the device that just came in by scanning my code */
   linked?: { name: string; kind: DeviceKind }
+  /** §5.2 2a: devices of mine added without this device asking (demo) */
+  notices: AddedNotice[]
 }
 
-const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map(), shared: new Map(), unsealed: new Set() })
+/** §5.2 2a (boards messages/encryption-device-added, -devices-added): a device added to my head
+ *  without this device having shown a prompt or a link code for it. */
+export interface AddedNotice { id: string; name: string; kind: DeviceKind; at: number }
+
+const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map(), shared: new Map(), unsealed: new Set(), notices: [] })
 let state: State = empty()
 
 // Demo mode: the boards' people (setDemoSealed). On a belfry: the real chains (sealedrt.ts).
@@ -191,6 +197,16 @@ export function whenWord(at: number, now = Date.now()): string {
 }
 export const dayMonth = (at: number) => new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(new Date(at).getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) })
 
+/** "just now", "12 min ago", "today at 9:40", else whenWord */
+export function addedWhen(at: number, now = Date.now()): string {
+  const m = (now - at) / 6e4
+  if (m < 2) return 'just now'
+  if (m < 60) return `${Math.round(m)} min ago`
+  const d0 = new Date(now); d0.setHours(0, 0, 0, 0)
+  if (at >= +d0) return 'today at ' + new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return whenWord(at, now)
+}
+
 /** "active now", "active 3 days ago" */
 export function activeWord(at?: number, now = Date.now()): string {
   if (!at) return ''
@@ -220,7 +236,7 @@ const rumorsOf = (conv: Conv) => thread(conv).filter((d) => d.kind === 14 && d.s
 
 /** Allow on an older device: the new one reads everything (its banner goes). */
 export async function allowAsking() {
-  if (real()) { const a = R.pendingAsk(); if (a) await R.allow(a.device); return }
+  if (real()) { const a = R.pendingAsk(); if (a) await R.allowTapped(a.device); return }
   ready()
   if (state.full) { await later(300); throw new Error(R.FULL) } const a = state.asking; if (!a) return
   await later()
@@ -248,6 +264,29 @@ export async function removeDevice(id: string) {
   await later()
   state.mine = state.mine.filter((x) => x.id !== id)
   for (const conv of state.sealed) push(conv, { what: 'removed', who: me(), device: d.name, kind: d.kind })
+  touch()
+}
+
+/** §5.2 2a: the notices to show (newest first), until "It was me" or Remove, or the device left. */
+export const addedNotices = (): AddedNotice[] => (real()
+  ? R.addedNotices().map((n) => { const name = sessionName(n.device) || 'A device'; return { id: n.device, name, kind: kindOf(name), at: n.at } })
+  : state.notices.filter((n) => state.mine.some((d) => d.id === n.id)))
+/** "It was me": the notice goes (on every tab, across restarts). */
+export async function itWasMe(id: string) {
+  if (real()) return R.answerNotice(id)
+  state.notices = state.notices.filter((n) => n.id !== id); touch()
+}
+/** "Not you? Remove it": the device is removed (its session ends first, §5.6), then the notice goes. */
+export async function removeAdded(id: string) {
+  await removeDevice(id)
+  await itWasMe(id)
+}
+/** Demo: NAME was added to my devices without a prompt, AGO ms ago. */
+export function demoAdded(name: string, kind: DeviceKind = 'phone', ago = 0) {
+  demo = true
+  const id = crypto.randomUUID(), at = Date.now() - ago
+  state.mine.push({ id, name, kind, added: at, from: state.mine.find((d) => d.here)?.name })
+  state.notices.push({ id, name, kind, at })
   touch()
 }
 
@@ -289,7 +328,7 @@ export function setDemoSealed(d: DemoSealed) {
   state = {
     mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []), sealedAt: new Map(Object.entries(d.sealedAt ?? {})), shared: new Map(Object.entries(d.shared ?? {})), unsealed: new Set(d.unsealed ?? []),
     lines: new Map(Object.entries(d.lines ?? {}).map(([c, ls]) => [c, ls.map((l) => ({ id: crypto.randomUUID(), ...l }))])),
-    asking: d.asking && { id: crypto.randomUUID(), ...d.asking }, linked: d.linked,
+    asking: d.asking && { id: crypto.randomUUID(), ...d.asking }, linked: d.linked, notices: [],
   }
   touch()
 }

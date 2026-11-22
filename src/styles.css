@@ -2160,3 +2160,7 @@ form .create-where { margin-bottom: 14px; }
 .entered-line .entered-who { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; color: inherit; font: inherit; padding: 0; background: none; border: 0; cursor: pointer; }
 .entered-line .entered-who .avatar, .entered-line .entered-who img { flex: none; }
 .join-line.entered-line { align-items: center; }
+/* §5.2 2a, board messages/encryption-device-added: a device added without this one asking */
+.seal-banner.seal-added { position: relative; padding-right: 44px; }
+.seal-banner.seal-added .seal-x { position: absolute; top: 6px; right: 6px; width: 36px; height: 36px; font-size: 20px; color: var(--muted); }
+.seal-notyou { font-size: inherit; padding: 0; }

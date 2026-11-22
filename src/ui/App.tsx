@@ -36,8 +36,8 @@ import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
 import { AllowPrompt, DevicesScreen, EncryptionScreen, FreshElsewherePrompt, OnlyDeviceAlert, ShowHowScreen } from './Sealed'
-import { askNow, testSignRoster, chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
-import { demoAsk, demoFreshElsewhere, demoLinked, demoUnlockHere, onlyDevice } from '../core/sealed'
+import { addedNotices as sealedNotices, askNow, testSignRoster, chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
+import { demoAdded, demoAsk, demoFreshElsewhere, demoLinked, demoUnlockHere, onlyDevice } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen, eventPath } from './Calendar'
@@ -196,12 +196,12 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
-          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, signRoster: testSignRoster, has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk) } })
+          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, signRoster: testSignRoster, has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk), notices: () => sealedNotices().map((n) => n.device) } })
         }
         watchDms() // others typing to me (typing.ts): one live subscription on the community relay
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, demoSealed, demoAsk, demoLinked, demoUnlockHere, demoFreshElsewhere, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
+        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, demoSealed, demoAsk, demoAdded, demoLinked, demoUnlockHere, demoFreshElsewhere, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
