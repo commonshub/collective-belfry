@@ -5,7 +5,7 @@ import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me, setWriteGuard } from './sync'
 import { plainName, plainOf } from './refs'
-import { agentOwner, belfryAdminKeys, isAdmin as isAdminNow } from './access'
+import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow } from './access'
 import { CHARTER_ID, placeName } from './places'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
@@ -127,6 +127,12 @@ export interface Group {
    *  0: its admins accept). Belfry's vouches.py does the admitting. */
   vouches: number
   admins: Set<string>
+  /** The server's own sets (Belfry's mail.group_admins, webthreads.py): the p keys of the relay's
+   *  latest 39001 (undefined until one arrived) and the admins by role. ADMINS adds the 9007
+   *  creator on top, for the screens before the 39001 arrives; settings the server reads count
+   *  only these. */
+  adminList?: string[]
+  roleAdmins: Set<string>
   /** Open applications to a closed group: the latest 9021 of someone not admitted nor declined. */
   applications: Application[]
   pending: boolean
@@ -200,7 +206,7 @@ const groupSets: () => GroupSets = perLog((list) => {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, rawName: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
+      g = { id, name: id, rawName: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), roleAdmins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -283,8 +289,9 @@ const groupSets: () => GroupSets = perLog((list) => {
     const c = made.get(g.id)
     if (c) g.admins.add(c)
     for (const k of listed.get(g.id) ?? []) g.admins.add(k)
+    if (listed.has(g.id)) g.adminList = listed.get(g.id)
   }
-  for (const [k, on] of byRole) if (on) map.get(k.slice(0, -64))?.admins.add(k.slice(-64))
+  for (const [k, on] of byRole) if (on) { const g = map.get(k.slice(0, -64)); g?.admins.add(k.slice(-64)); g?.roleAdmins.add(k.slice(-64)) }
   for (const [k, e] of applied) {
     const g = map.get(k.slice(0, -64))
     if (!g || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue
@@ -516,6 +523,9 @@ export const INBOX_D = 'belfry:inbox'
 export const inboxD = (groupId: string) => `${INBOX_D}:${groupId}`
 export const INBOX_NS = 'belfry/inbox'
 
+/** Is the inbox setting decided here: the channel's 39001 (who its admins are) arrived. */
+export const inboxKnown = (g: Group | undefined) => !!g?.adminList
+
 export function isInbox(g: Group | undefined): boolean {
   if (!g) return false
   // A 30078 is replaced by the author's newer one with the same d: the store keeps every event it
@@ -523,12 +533,15 @@ export function isInbox(g: Group | undefined): boolean {
   // belfry:inbox for this channel, cached before a newer one for another channel replaced it on
   // the relay, still counted (OSV's #hello showed on, 2026-11-22). Then: the new d counts; the old
   // d only when one of its h tags is this channel; admins only; the latest wins.
-  // admins = the server's set (mail.group_admins): the channel's latest 39001 and admins by role.
-  // The groups key is in every 39001: its per-channel copies (the lead's migration, OSV and
-  // belfry.sh 2026-11-22) count like any admin's.
+  // admins = the server's set (mail.group_admins): the channel's latest 39001 and admins by role,
+  // not the 9007 creator. The groups key is in every 39001: its per-channel copies (the lead's
+  // migration, OSV and belfry.sh 2026-11-22) count like any admin's. No 39001 yet: not known
+  // (inboxKnown), read as off.
+  if (!g.adminList) return false
+  const admins = new Set([...g.adminList, ...g.roleAdmins])
   const latest = new Map<string, Ev>()
   for (const e of all(me())) {
-    if (e.kind !== 30078 || !g.admins.has(e.pubkey)) continue
+    if (e.kind !== 30078 || !admins.has(e.pubkey)) continue
     const d = tag(e, 'd')
     if (d !== inboxD(g.id) && d !== INBOX_D) continue
     const k = e.pubkey + ' ' + d
@@ -592,12 +605,20 @@ function madeByAdmin(g: Group): boolean {
   return make.pubkey === relayKey || belfryAdminKeys().includes(make.pubkey) || (make.pubkey === me() && isAdminNow())
 }
 
+/** The groups key (belfry.json groups_key); before belfry.json answered (or in the demo), the
+ *  key that signed the channel's 39000, which is the groups key. */
+function groupsKeyOf(groupId: string, evs: Ev[]): string | undefined {
+  return belfryGroupsKey() || evs.find((e) => e.kind === 39000 && tag(e, 'd') === groupId)?.pubkey
+}
+
 export function webPage(g: Group | undefined): WebPage | undefined {
   if (!g) return undefined
   const evs = all(me())
-  // the relay's own key (it signs the 39000) set up the default channels (#proposals, #events)
-  const relayKey = evs.find((e) => e.kind === 39000 && tag(e, 'd') === g.id)?.pubkey
-  const own = evs.filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && (g.admins.has(e.pubkey) || e.pubkey === relayKey)).sort(byTime)
+  // who counts, as Belfry's webthreads.py: the channel's latest 39001, the belfry's admins
+  // (belfry.json admins) and the groups key (it set up the default channels: #proposals, #events)
+  const gk = groupsKeyOf(g.id, evs)
+  const ok = (pk: string) => !!g.adminList?.includes(pk) || belfryAdminKeys().includes(pk) || pk === gk
+  const own = evs.filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && ok(e.pubkey)).sort(byTime)
   try {
     const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
     return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...((POST_TYPES as readonly string[]).includes(c.posts) ? { posts: c.posts as PostType } : {}), ...(Array.isArray(c.periods) ? { periods: cleanPeriods(c.periods) } : {}) } : undefined

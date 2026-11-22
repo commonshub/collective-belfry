@@ -9,7 +9,7 @@ import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
 import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
-import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage, nameOf } from '../core/model'
+import { inboxKnown, isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage, nameOf } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, assignTask, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, allGroups, archivable, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
@@ -179,6 +179,9 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
   // touched: Save sends it even when it matches the reading (a stale reading must be correctable, #hello 2026-11-22)
   const [mailTouched, setMailTouched] = useState(false)
+  // not decided until the channel's 39001 (its admins) arrived: loading, then its reading
+  const mailKnown = inboxKnown(g)
+  useEffect(() => { if (mailKnown && !mailTouched && g) setOpenMail(isInbox(g)) }, [mailKnown]) // eslint-disable-line react-hooks/exhaustive-deps
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.rawName ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   // who can read it, one choice of three (Xavier, 2026-11-18, canvas "Settings-A/B"): members only,
@@ -234,7 +237,7 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
               if (taken) { setWebError(`${BELFRY.domain}/${slug} is the page of #${taken.name}: pick another address.`); return }
               web.slug = slug
             }
-            if (mailTouched || openMail !== isInbox(g)) await setInbox(id, openMail)
+            if (mailTouched || (inboxKnown(g) && openMail !== isInbox(g))) await setInbox(id, openMail)
             const was = webPage(group(id))
             if (was) { web.visibility = was.visibility; web.periods = was.periods; if (was.visibility === 'public') web.on = web.on || was.on }
             if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public') || (web.posts ?? '') !== (was?.posts ?? '')) await setWebPage(id, web)
@@ -263,8 +266,8 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
               ))}
             </div>}
             <label className="switch-row">
-              <span><b>E-mails from anyone</b><small>Mail to {mailLocal(g)}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
-              <input type="checkbox" role="switch" checked={openMail} onChange={(e) => { setOpenMail(e.target.checked); setMailTouched(true) }} />
+              <span><b>E-mails from anyone</b>{!mailKnown && <small className="mail-loading">Loading…</small>}<small>Mail to {mailLocal(g)}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
+              <input type="checkbox" role="switch" checked={openMail} disabled={!mailKnown} aria-busy={!mailKnown} onChange={(e) => { setOpenMail(e.target.checked); setMailTouched(true) }} />
             </label>
             <MailForwardRow id={g.id} />
             <label className="switch-row">

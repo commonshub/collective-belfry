@@ -854,7 +854,9 @@ function synthesizeRelayEvents(ev: NostrEvent) {
   if (ev.kind === 9002 || meta.length)
     addEvents([{ ...base, id: 'meta-' + ev.id, kind: 39000, tags: [['d', h], ...meta] }])
   if (ev.kind === 9007)
-    addEvents([{ ...base, id: 'members-' + ev.id, kind: 39002, tags: [['d', h], ['p', ev.pubkey]] }])
+    addEvents([{ ...base, id: 'members-' + ev.id, kind: 39002, tags: [['d', h], ['p', ev.pubkey]] },
+      // the relay lists its creator as its admin (Belfry's relay patch)
+      { ...base, id: 'admins-' + ev.id, kind: 39001, tags: [['d', h], ['p', ev.pubkey, 'admin']] }])
 }
 
 export const isLocalOnly = () => localOnly
