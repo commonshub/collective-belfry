@@ -235,6 +235,23 @@ def set_settings(svc: Services, partner: int, change: Any) -> dict[str, Any]:
 
     if not isinstance(change, dict):
         raise ApiError(400, "invalid", 'Send {"set": {…}}.')
+    with _settings_lock(partner):
+        return _set_settings(svc, partner, change)
+
+
+_SETTINGS_LOCKS: dict[int, threading.Lock] = {}
+_SETTINGS_GUARD = threading.Lock()
+
+
+def _settings_lock(partner: int) -> threading.Lock:
+    """One writer per person: a change for one channel never drops another's made at once."""
+    with _SETTINGS_GUARD:
+        return _SETTINGS_LOCKS.setdefault(partner, threading.Lock())
+
+
+def _set_settings(svc: Services, partner: int, change: dict[str, Any]) -> dict[str, Any]:
+    from .holder_invites import ApiError
+
     out = get_settings(svc, partner)
     for k, v in change.items():
         if k in SWITCHES:

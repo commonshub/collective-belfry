@@ -581,3 +581,31 @@ def test_an_old_one_row_per_token_table_is_rebuilt(tmp_path):
     reg.push_add(dev, 1)
     assert sorted(d["pubkey"] for d in reg.push_devices()) == ["aa", "bb"]
     assert reg.push_remove("tok") == 2  # a dead token goes for every identity
+
+
+def test_settings_for_two_channels_changed_at_once_both_stay(scene):
+    """Two devices change two channels at the same moment: neither change is lost."""
+    import threading as _t
+
+    rsvc, keys, devkeys, relay, gw, w = scene
+    bob = rsvc.odoo.push_devices([pk(keys["Bob"])])[0]["partner_id"]
+    real_get = push.get_settings
+
+    def slow_get(svc, partner):
+        got = real_get(svc, partner)
+        time.sleep(0.05)  # both read before either writes, without the lock
+        return got
+
+    push.get_settings = slow_get
+    try:
+        threads = [
+            _t.Thread(target=push.set_settings, args=(rsvc, bob, {"channels": {c: "all"}}))
+            for c in ("garden", "kitchen", "bikes")
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        push.get_settings = real_get
+    assert push.get_settings(rsvc, bob)["channels"] == {"garden": "all", "kitchen": "all", "bikes": "all"}
