@@ -244,6 +244,22 @@ An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}
    the person taps "It was me" or Remove, or the device leaves the head. Remove = 5.6
    (revoke the session first, then the roster without it and a new letterbox). The device
    that did the adding shows it as well. One notice per added device.
+2b. Answered once. "It was me" on one device clears the notice on all of them (Xavier,
+   2026-11-22: "make sure we only need to do that once, in case I have more than 2 devices").
+   The device that was tapped sends a sealed rumor (§4 form, to my own head letterbox, seal
+   signed by this device), not through the outbox's e-mail path and never shown as a message:
+   ```
+   kind 8563, pubkey = the confirming device, tags [["p", <account>], ["device", <added device>], ["e", <id of the roster that added it>]], content ""
+   ```
+   A device clears its notice for <added device> when it accepts an 8563 whose seal signer
+   (a) is in my valid chain in the roster BEFORE the one named by `e` (so the added device
+   can never confirm itself, nor can two devices added together confirm each other), (b) is
+   in the head now, and (c) names the roster that really added that device. Anything else is
+   ignored without a word. A device that is added later reads the 8563s from its letterbox
+   like any sealed rumor and never shows a notice already answered. An 8563 is never part of
+   shared history (8564). Remove needs nothing new: the roster without the device clears the
+   notice everywhere. A device that does not know kind 8563 keeps its own notice until
+   tapped (the behaviour before this rule).
    What this gives up, said plainly (§1): whoever can open a chat session on my account (the
    belfry's server, so its admins; or someone with my mailbox) gets my sealed messages the
    next time one of my devices is online, and I learn it from the notice, not before.
