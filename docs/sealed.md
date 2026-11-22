@@ -228,6 +228,9 @@ An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}
    - the request's `created_at` is not before that session's `created_at` minus 120 s, and
      not more than 30 days old;
    - this device is in the head it holds (pinned), on the anchored end, and trusted (§3.4);
+   - the chain never had the asking device before (no roster of it, at any point, listed it):
+     a device that was removed and whose session outlived the removal asks, it is never put
+     back by itself (found by Android's tests, 2026-11-22);
    - fewer than 3 devices were added to my head without a prompt in the last 24 hours
      (counted from the rosters' own times, whoever added them). A fourth asks.
    A valid `link` (a code this device showed in the last 15 minutes) allows at once too and
