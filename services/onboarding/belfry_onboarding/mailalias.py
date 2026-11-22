@@ -176,7 +176,13 @@ def api(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
         raise ApiError(422, "invalid", 'Send {"channel"}.')
     if not mail.channel_exists(svc, channel):
         raise ApiError(404, "unknown_channel", "No such channel.")
-    if not mailforward.may_edit(svc, caller, channel):
+    # Reading the address is for every member (their app writes to it and answers from it;
+    # the lead's change, 2026-11-22). A check tells which names are taken: the channel's admins.
+    from . import whois
+
+    if whois.kinds(svc).get(caller) not in ("member", "agent"):
+        raise ApiError(403, "not_allowed", "Only members see a channel's address.")
+    if ("check" in data or "alias" in data) and not mailforward.may_edit(svc, caller, channel):
         raise ApiError(403, "not_allowed", "Only the channel's admins see this.")
     if "alias" in data:
         if caller not in checkin._belfry_admins(svc):

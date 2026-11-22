@@ -88,7 +88,13 @@ def test_a_channel_gets_the_address_an_admin_chose(al):
 
 
 def test_who_may_read_and_who_may_set(al):
-    assert code_of(lambda: mailalias.api(al, BEA, {"channel": CONTACT})) == (403, "not_allowed")
+    # any member reads the address (their app writes to it); checking names is for its admins
+    got = mailalias.api(al, BEA, {"channel": CONTACT})
+    assert got["alias"] == "contact" and got["may_set"] is False
+    assert code_of(lambda: mailalias.api(al, BEA, {"channel": CONTACT, "check": "hello"})) == (
+        403,
+        "not_allowed",
+    )
     assert code_of(lambda: mailalias.api(al, "d" * 64, {"channel": CONTACT}))[1] == "not_allowed"
     # the channel's own admin reads and checks, but only a belfry admin sets or clears
     assert mailalias.api(al, ADA, {"channel": CONTACT, "check": "hello"})["state"] == "available"
