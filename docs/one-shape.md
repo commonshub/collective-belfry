@@ -118,6 +118,10 @@ or `POST /group-roles` role `member` for an admin by role). `POST /group-meta` t
 accepted (by its stewards / when members vouch) are in the group's Settings, shown for Closed
 only; a new Closed group starts with no question and "by its stewards".
 
+A group's Settings keep two separate things: who can join (the three choices) and who can read
+its page (Members only / Public, as before); a Private group has no Public choice. A Private
+group is not shown to anyone who is not in it, the belfry's stewards included.
+
 After the form, the creator picks people from a grid of the belfry's members (the directory;
 not guests) and adds them: one `9000` per person, `["p", <pubkey>, "member"]`.
 
@@ -141,7 +145,9 @@ On the wire, in the channel's `belfry:web:<channel>` setting next to the old `po
 `"accepts": ["message", "thread", "event", "proposal"]` (any non-empty subset; absent = all).
 A client that writes `accepts` also writes `posts` for older apps: `"anything"` when all four are
 on or when the set is none of the single cases; `"thread"`, `"event"` or `"proposal"` when that
-one alone is on. A client that reads prefers `accepts`; without it, `posts: anything` = all four
+one alone is on. An old `posts` value that is none of these four (`"request"`: the requests
+page) is kept as it is while all four kinds are on, so that page keeps working; it follows the
+rule above as soon as one kind is off. A client that reads prefers `accepts`; without it, `posts: anything` = all four
 and a single value = that kind alone. With `message` off the composer's plain send is replaced
 by the kinds that are on.
 
@@ -158,8 +164,9 @@ line instead, not a disabled control: "Townsquare is always first in everyone's 
 Every row is a face, a name in bold, then one line (the subject for an e-mail thread, else the
 last message), never an envelope icon. For an outside e-mail correspondent the face is their
 picture from `https://belfry.<domain>/api/v1/avatar/<sha256 of the trimmed, lowercased address>`
-when that answers 200, else a disc with their initials (from the name, else the address) in a
-colour picked from the hash. Apps cache by hash for 30 days (a 404 for 7) and never contact
+when that answers 200, else a disc with their initials in a colour picked from the hash.
+Initials: the first letters of the first and the last word of the name ("Ana Maria Silva" →
+"AS", "Lina" → "L"); with no name, the first letter of the address. Apps cache by hash for 30 days (a 404 for 7) and never contact
 Gravatar themselves. A small envelope may mark the row's corner so e-mail stays recognisable.
 
 ## Faces for e-mail correspondents
