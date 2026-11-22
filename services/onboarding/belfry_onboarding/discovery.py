@@ -28,7 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import device, pages
+from . import device, pages, stewards
 from .core import Services, m2o_id
 from .holder_invites import ApiError, authenticate
 from .nostr import hex_to_npub
@@ -117,7 +117,15 @@ def document(settings: Any) -> dict[str, Any]:
         if settings.mint_url
         else None,
         "sign_in": {
-            "login": _url(settings.authentik_public_url),
+            # where a person signs in with a browser: Authentik's page, or on a belfry without
+            # Authentik (its own signer) the pass page's e-mail and code. The field stays (the
+            # phone apps decode this document; whether strictly was not checked) and always
+            # names a page that exists.
+            "login": (
+                (_url(settings.public_url) + "/me/login" if settings.public_url else "")
+                if stewards.own_mode(settings)
+                else _url(settings.authentik_public_url)
+            ),
             "keycast": _url(settings.apps_public_url),
             # Sign in with <domain> for web apps: OAuth code + PKCE, approved apps only (connect.py)
             "connect": {
@@ -199,7 +207,7 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
     ]
     active = next((r for r in rows if r["state"] == "active"), None)
     partner_id = m2o_id((active or (rows[0] if rows else {})).get("partner_id"))
-    partner_fields = ["email", "belfry_member_number", "belfry_authentik_user_id"]
+    partner_fields = ["id", "email", "belfry_member_number", "belfry_authentik_user_id"]
     partner: dict[str, Any] = {}
     if partner_id:
         partner = svc.odoo.read_one("res.partner", partner_id, partner_fields) or {}
@@ -211,9 +219,7 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
         partner = found_partners[0] if found_partners else {}
     number = partner.get("belfry_member_number") or ""
     user_pk = partner.get("belfry_authentik_user_id")
-    steward = bool(active and user_pk) and int(user_pk) in svc.authentik.group_member_pks(
-        svc.settings.steward_group
-    )
+    steward = bool(active) and stewards.is_steward(svc, partner.get("id") or partner_id, user_pk)
     return {
         "pubkey": pubkey,
         "npub": hex_to_npub(pubkey),
@@ -341,8 +347,11 @@ def chat_session(svc: Any, r: dict[str, Any], names: set[str] | None = None) -> 
     name, _ = device.split(r.get("application_name"))
     if name not in (apps.chat_names(svc) if names is None else names):
         return False
+    # "" for a session made without an origin (the guests' and the buyers' chat sessions, and
+    # every session of a signer that keeps none); else the chat's own address, or the phone
+    # apps' (apps.origin_of)
     origin = str(r.get("redirect_origin") or "").rstrip("/")
-    return origin in ("", app_url(svc.settings, "chat").rstrip("/"))
+    return origin in ("", app_url(svc.settings, "chat").rstrip("/"), *apps.NATIVE_APPS)
 
 
 def _session_rows(svc: Any, rows: list[dict[str, Any]], keep: tuple[str, ...]) -> list[dict]:
@@ -471,8 +480,12 @@ def register(app: FastAPI) -> None:
     async def api_sessions(request: Request) -> JSONResponse:
         """The signed-in member's sessions (NIP-46 connections in the signer), NIP-98."""
         services: Services = request.app.state.services
-        _, token = await session_owner(request, "GET", SESSIONS, b"")
+        partner, token = await session_owner(request, "GET", SESSIONS, b"")
         rows = await run_in_threadpool(services.keycast.list_sessions, token)
+        from . import appsignin
+
+        # the sign-ins of apps that sign over HTTP only (no connection in the signer)
+        rows = await run_in_threadpool(appsignin.with_grants, services, partner, rows)
         keep = (
             "application_name",
             "redirect_origin",
@@ -492,13 +505,21 @@ def register(app: FastAPI) -> None:
     async def api_sessions_revoke(request: Request) -> JSONResponse:
         services: Services = request.app.state.services
         body = await request.body()
-        _, token = await session_owner(request, "POST", SESSIONS + "/revoke", body)
+        partner, token = await session_owner(request, "POST", SESSIONS + "/revoke", body)
         try:
             bunker = str(json.loads(body or b"{}").get("bunker_pubkey", ""))
         except ValueError:
             bunker = ""
         if not re.fullmatch(r"[0-9a-f]{64}", bunker):
             raise ApiError(422, "invalid", "bunker_pubkey: 64 hex characters")
+        from . import appsignin
+
+        # the app's sign-in first: it ends even when the signer does not answer; and its
+        # store failing never stops the sign-out itself
+        try:
+            await run_in_threadpool(appsignin.session_revoked, services, partner, bunker)
+        except Exception as exc:  # noqa: BLE001 — the signer's revoke below is what counts
+            log.warning("sessions: the apps' sign-ins of a signed-out session not ended: %s", exc)
         await run_in_threadpool(services.keycast.revoke_session, token, bunker)
         return JSONResponse({"state": "revoked"})
 

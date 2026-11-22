@@ -1383,6 +1383,9 @@ def not_me(svc: Services, oid: str, partner_id: int) -> None:
     from . import community
 
     try:
+        from . import appsignin
+
+        appsignin.session_revoked(svc, partner_id)
         found = community.member_token(svc, partner_id)
         if found:
             for sess in svc.keycast.list_sessions(found[1]):

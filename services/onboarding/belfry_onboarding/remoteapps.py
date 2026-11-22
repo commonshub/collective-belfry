@@ -314,7 +314,14 @@ def _forbidden(event: dict[str, Any], perms: list[str] | None, own: Own) -> bool
         return False
     if kind == 22242:  # NIP-42: never for the belfry's own relays (members only)
         hosts = [_host(r) for r in _tag(event, "relay")]
-        return not hosts or any(not h or h in own.relays for h in hosts)
+        # nor for any host under the belfry's domain, as for NIP-98: git.<domain> (a private
+        # GRASP relay that admits members by AUTH) is in no list of relays
+        return not hosts or any(
+            not h
+            or h in own.relays
+            or (own.domain and (h == own.domain or h.endswith("." + own.domain)))
+            for h in hosts
+        )
     if kind == KIND:
         return True
     if isinstance(kind, int) and (9000 <= kind <= 9009 or kind in (9021, 9022)):
@@ -324,7 +331,25 @@ def _forbidden(event: dict[str, Any], perms: list[str] | None, own: Own) -> bool
         return not servers or any(not s or s in own.blossom for s in servers)
     if kind in (0, 3):  # the profile and the contact list: only when the app said so
         return perms is None or f"sign_event:{kind}" not in perms
+    if kind == 30078:
+        # app data under the belfry's own names is the belfry's protocol: the sealed
+        # conversations' anchor (belfry:sealed), the read state, the channel order, a channel's
+        # inbox and web settings… An outside app keeps its own data under its own names.
+        return any(d.strip().lower().startswith("belfry:") for d in _tag(event, "d"))
+    if kind == 1985:
+        # labels in the belfry's namespaces are decisions here: a pin, a proposal's status, a
+        # ticket checked in, a vouch, a button pressed (belfry/…)
+        return any(_belfry_label(n) for n in _tag(event, "L")) or any(
+            isinstance(t, list) and len(t) > 2 and t[0] == "l" and _belfry_label(t[2])
+            for t in event.get("tags") or []
+        )
+    # kind 5 (a deletion) stays allowed: relays apply it to the author's own events only
     return False
+
+
+def _belfry_label(namespace: Any) -> bool:
+    n = str(namespace or "").strip().lower()
+    return n == "belfry" or n.startswith("belfry/")
 
 
 def allowed(

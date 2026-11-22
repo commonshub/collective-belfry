@@ -270,3 +270,19 @@ def test_guests_have_no_welcome_step(town):
         assert r.status_code == 403 and r.json()["error"] == "not_member"
         r = call(c, PrivateKey(), "/welcome", {"name": "Gus", "username": "gus"})
         assert r.status_code == 403 and r.json()["error"] == "not_member"
+
+
+def test_an_accounts_own_starting_name_may_be_sent_back(services, monkeypatch):
+    """A member still called by their starting name ("osv-0007") who sends it back unchanged
+    (a profile saved as it is) is not refused as if choosing a reserved name; anyone else is."""
+    from belfry_onboarding import usernames as u
+    from belfry_onboarding.holder_invites import ApiError
+
+    mine, other = "aa" * 32, "bb" * 32
+    monkeypatch.setattr(u, "holder", lambda svc, name: mine if name == "osv-0007" else "")
+    assert u.require(services, "osv-0007", mine=mine) == "osv-0007"
+    assert u.check(services, mine, {"username": "osv-0007"})["state"] == "available"
+    with pytest.raises(ApiError) as exc:
+        u.require(services, "osv-0007", mine=other)
+    assert exc.value.status == 422
+    assert u.check(services, other, {"username": "osv-0007"})["state"] == "invalid"

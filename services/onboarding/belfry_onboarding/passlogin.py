@@ -35,7 +35,7 @@ E = html.escape
 COOKIE = "belfry_login"
 NEXT = "belfry_pass_next"
 SECONDS = 1800
-TARGETS = ("/me/console?", "/drop/")
+TARGETS = ("/me/console?", "/drop/", "/steward/login")
 
 _lock = threading.Lock()
 FLOWS: dict[str, dict[str, Any]] = {}

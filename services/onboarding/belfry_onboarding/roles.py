@@ -363,7 +363,7 @@ def make_member(
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
-        ["tier", "partner_id", "guest_agent"],
+        core.pass_fields(svc, "tier", "partner_id", "guest_agent"),
     )
     rows = [r for r in rows if r.get("tier") == "guest"]
     if not rows:

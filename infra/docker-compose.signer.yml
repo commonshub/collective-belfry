@@ -1,0 +1,152 @@
+# A belfry on Belfry's own signer (services/signer): no Keycast, no Authentik, no Redis.
+# The belfry command adds this file when SIGNER=belfry in .env (docs/own-signer.md); by hand:
+#
+#   docker compose -f infra/docker-compose.yml [-f infra/docker-compose.prod.yml] \
+#     [-f infra/docker-compose.noodoo.yml] -f infra/docker-compose.signer.yml \
+#     [-f infra/docker-compose.signer-prod.yml] --profile app up -d
+#
+# (after docker-compose.noodoo.yml when both are used: this file takes Keycast and Authentik out
+# of the lists that one writes; docker-compose.signer-prod.yml does the same for the proxy of
+# docker-compose.prod.yml and tells it SIGNER=belfry.)
+#
+# What changes:
+#   - `signer` holds the members' keys and answers NIP-46 on the bunker relay, which keeps its
+#     service name (keycast-relay) and its public address (wss://bunker.<domain>): the phone apps
+#     and every stored bunker URL name it.
+#   - keycast, keycast-migrate, authentik-server, authentik-worker and redis are not started
+#     (profile "keycast": only `--profile keycast` brings them back, e.g. to read their data).
+#     Postgres stays: the groups relay's database is there (and Odoo's, with Odoo). On a new
+#     volume it still makes the empty roles and databases `authentik` and `keycast`; nothing
+#     opens them.
+#   - the onboarding service runs with SIGNER=belfry: admins live in its register, people sign in
+#     on its own pages, and it answers apps.<domain>/api/oauth/* and <domain>/.well-known/
+#     nostr.json (the proxy sends them there with SIGNER=belfry).
+#
+# DO NOT add this file to a belfry that has members on Keycast before their accounts and
+# sessions were migrated (docs/own-signer.md §6): the signer would start empty, everyone would
+# be signed out, usernames lost, and keys made before the custody seed gone from use.
+#
+# Secrets (gen-secrets.sh writes both): infra/secrets/signer_token (the API token) and
+# infra/secrets/signer_master_key (seals the stored keys; taken over from
+# infra/keycast/master.key where that exists, so keys imported from Keycast open).
+services:
+  # The signer's data belongs to the user the signer runs as (the owner of the custody seed and
+  # of the master key, like Keycast).
+  signer-init:
+    image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    entrypoint: ["sh", "-c", "chown ${HOST_UID:-1000}:${HOST_GID:-1000} /w/signer"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    network_mode: none
+    volumes:
+      - {type: volume, source: signer-data, target: /w/signer, volume: {nocopy: true}}
+    restart: "no"
+
+  # The members' keys, derived from the custody seed and sealed at rest with the master key;
+  # signs for the onboarding service (internal API) and for apps over NIP-46 on the bunker
+  # relay. No internet, no published port, and two networks of its own, one per neighbour:
+  #   - `signer-api`, with the onboarding service: the API's one caller;
+  #   - `signer`, with the bunker relay, which the signer dials.
+  # Containers that share a network reach every port the other listens on there, so two
+  # networks alone would not keep the relay off the API. The API therefore listens on one
+  # interface only: SIGNER_LISTEN names the signer's alias on `signer-api` (`signer-api:8200`),
+  # which Docker's resolver answers with the signer's address on that network; the signer
+  # looks it up once at start and binds there. On the relay's network nothing listens on 8200
+  # (tried with stand-in containers: the relay's connection is refused, the alias does not
+  # resolve for it). The bearer token (signer_token), which only the onboarding service is
+  # given, stays the second lock. No fixed subnets: they clash on hosts we do not control.
+  signer:
+    image: belfry-signer:local
+    build:
+      context: ../services/signer
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    cap_drop: [ALL]
+    mem_limit: 256m
+    secrets: [signer_token, signer_master_key]
+    networks:
+      signer: {}
+      signer-api:
+        aliases: [signer-api]
+    depends_on:
+      signer-init:
+        condition: service_completed_successfully
+      keycast-relay:
+        condition: service_started
+    environment:
+      # the signer's own name on the network it shares with the onboarding service: the API
+      # listens on that address only (a name that does not resolve stops the start)
+      SIGNER_LISTEN: signer-api:8200
+      SIGNER_DB: /data/signer.sqlite3
+      CUSTODY_SEED_FILE: /run/belfry/custody-seed
+      BUNKER_RELAYS: ws://keycast-relay:8080
+      # the same relay as clients reach it, written into bunker:// URLs
+      BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+      # what a connection of an outside app is never given a signature for (limits.rs): the
+      # belfry's own hosts and relays, by its domain, plus the relays' internal names
+      SIGNER_OWN_DOMAIN: ${NIP05_DOMAIN:-${BELFRY_DOMAIN:-}}
+      SIGNER_OWN_RELAY_HOSTS: relay keycast-relay groups-relay ${BUNKER_PUBLIC_RELAYS:-}
+      RUST_LOG: ${SIGNER_LOG:-info}
+    volumes:
+      # nocopy: Docker would otherwise copy the image's /data (owned by 10001, the image's
+      # default user for a signer run on its own) onto the empty volume at its first mount,
+      # undoing signer-init's chown; the signer runs as HOST_UID here, and could then not open
+      # its database (a new --own-signer install and the migration's import signer alike)
+      - {type: volume, source: signer-data, target: /data, volume: {nocopy: true}}
+      # the custody seed, as Keycast gets it: missing (locked) means new accounts wait (503)
+      - ${CUSTODY_SEED_DIR:-./secrets/custody}:/run/belfry:ro
+    restart: unless-stopped
+
+  # the bunker relay is where the signer listens for NIP-46 requests
+  keycast-relay:
+    networks: [default, signer]
+
+  # not part of this belfry: only `--profile keycast` starts them
+  keycast:
+    profiles: ["keycast"]
+  keycast-migrate:
+    profiles: ["keycast"]
+  authentik-server:
+    profiles: ["keycast"]
+  authentik-worker:
+    profiles: ["keycast"]
+  redis:
+    profiles: ["keycast"]
+
+  onboarding:
+    secrets: [signer_token]
+    networks: [default, signer-api]
+    depends_on:
+      authentik-server: !reset null
+      keycast: !reset null
+      signer:
+        condition: service_healthy
+    environment:
+      SIGNER: belfry
+      SIGNER_URL: http://signer-api:8200
+      # 1 only while the signer's volume is being rebuilt from the custody seed (docs/own-signer.md
+      # §6, "Recovering a lost signer volume"): the start check lets a signer holding none of the
+      # members through; every account is still made only with the register's key
+      SIGNER_RECOVERING: ${SIGNER_RECOVERING:-0}
+      # no Authentik: the belfry's own e-mail and code sign-in (the service refuses to start
+      # with anything else next to SIGNER=belfry)
+      PASS_SIGNIN: belfry
+
+# Both internal (no internet). signer: the signer and the bunker relay it listens on.
+# signer-api: the signer and the onboarding service; the signer's API listens here only.
+networks:
+  signer:
+    internal: true
+  signer-api:
+    internal: true
+
+secrets:
+  signer_token: {file: ./secrets/signer_token}
+  signer_master_key: {file: ./secrets/signer_master_key}
+
+volumes:
+  # accounts, usernames and connections (SQLite): the backups carry it (scripts/backup.sh)
+  signer-data:

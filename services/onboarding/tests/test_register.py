@@ -13,6 +13,12 @@ from belfry_onboarding.app import create_app
 from belfry_onboarding.clients.odoo import OdooError
 from belfry_onboarding.register import Register
 
+from .conftest import TEST_SIGNER
+
+# the sign-in mail with its one-time link belongs to Authentik's sign-in; a belfry without
+# Authentik (BELFRY_TEST_SIGNER=belfry) sends the welcome mail that points at the chat
+AK = TEST_SIGNER == "keycast"
+
 ANA_KEY = "a" * 64
 
 
@@ -78,7 +84,8 @@ def test_an_admin_gets_a_free_membership_and_a_sign_in_mail(rsvc, reg, authentik
     )
     assert row["keycast_pubkey"] and row["date_end"] == "2099-12-31" and not row["invoice_id"]
     msg, text = last_mail()
-    assert msg["To"] == "admin@belfry.test" and row["login_setup_url"] in text
+    assert msg["To"] == "admin@belfry.test"
+    assert (row["login_setup_url"] in text) if AK else ("https://chat." in text)
     # again: nothing new
     assert steward.steward_pass(rsvc, "admin@belfry.test")["result"] == "already_active"
 
@@ -135,7 +142,8 @@ def test_joining_with_an_invite_end_to_end(rsvc, reg):
         row = reg.read_one("belfry.pass", inv["pass_id"], ["state", "login_setup_url"])
         assert row["state"] == "active"
         msg, text = last_mail()
-        assert "Welcome to" in msg["Subject"] and row["login_setup_url"] in text
+        assert "Welcome to" in msg["Subject"]
+        assert (row["login_setup_url"] in text) if AK else ("https://chat." in text)
         assert c.get(f"/invite/{made['token']}").status_code == 410
         assert c.get("/" + path).status_code == 200  # confirming again changes nothing
 
@@ -332,6 +340,8 @@ def test_old_sign_in_links_land_on_the_chat(rsvc, reg, authentik, keycast):
         ):
             assert r.status_code == 303 and r.headers["location"] == "https://chat.belfry.test/"
         assert authentik.recovery_links == [], "no authentik link is ever minted"
+        if not AK:
+            return
         # unchanged with authentik's sign-in: the page, then the one-time link
         rsvc.settings.pass_signin = "authentik"
         assert f'action="{path}"' in c.get(path).text

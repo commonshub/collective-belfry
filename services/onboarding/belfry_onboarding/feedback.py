@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import mypass
+from . import stewards as admins_home
 from .claim import page
 from .core import Services
 
@@ -93,7 +94,7 @@ def submit(svc: Services, vals: dict[str, Any], shot: bytes | None, shot_type: s
     if shot is not None and (shot_type not in SCREENSHOT_TYPES or len(shot) > SCREENSHOT_MAX_BYTES):
         raise FeedbackError("The screenshot must be a PNG, JPEG or WebP image of at most 5 MB.")
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        stewards = admins_home.emails(svc)
     except Exception:  # noqa: BLE001 - feedback counts even when the mail cannot be addressed
         log.exception("feedback: could not list the stewards' e-mail addresses")
         stewards = []

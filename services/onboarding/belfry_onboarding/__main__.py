@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("name", nargs="?", default="")
     sub.add_parser("steward-passes", help="give every member of the stewards group their free pass")
     sub.add_parser(
+        "import-stewards",
+        help="copy Authentik's stewards group into the register (for a belfry leaving Authentik; "
+        "needs AUTHENTIK_URL and AUTHENTIK_TOKEN; safe to run again)",
+    )
+    sub.add_parser(
         "usernames", help="members whose username is still a number get their name as a slug"
     )
     sub.add_parser(
@@ -80,6 +85,81 @@ def main(argv: list[str] | None = None) -> int:
     rst.add_argument("--all-admins", action="store_true", help="remove every admin")
     rst.add_argument("--dry-run", action="store_true", help="only say what would be done")
     sub.add_parser("sales-status", help="whether this belfry can sell passes (no values)")
+    mig = sub.add_parser(
+        "signer-migrate",
+        help="move from Keycast to Belfry's own signer: plan (read-only), import, verify; the "
+        "rows of Keycast's database as JSON on stdin (infra/scripts/migrate-to-own-signer.sh)",
+    )
+    mig.add_argument(
+        "phase",
+        choices=["plan", "import", "verify", "close-window", "open", "carry-back", "drop-archive"],
+    )
+    mig.add_argument(
+        "--exclude",
+        action="append",
+        metavar="PUBKEY",
+        help="leave this Keycast account out on purpose (hex; may be repeated)",
+    )
+    mig.add_argument(
+        "--keycast-admin",
+        default="",
+        metavar="PUBKEY",
+        help="Keycast's own admin account (KEYCAST_ADMIN_PUBKEY): left out by itself when it "
+        "has no vine id",
+    )
+    mig.add_argument(
+        "--accept-lost-sessions",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N live sessions are signed out because another account keeps their "
+        "client key: seen and accepted",
+    )
+    mig.add_argument(
+        "--accept-unverified",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N connected sessions that Keycast does not verify are left out: seen "
+        "and accepted (read Keycast's validate_client first)",
+    )
+    mig.add_argument(
+        "--accept-skipped-rows",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N sessions whose bunker key does not derive are left out: seen and "
+        "accepted (their devices sign in again)",
+    )
+    mig.add_argument(
+        "--accept-guessed",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N carried sessions have a scope guessed own (an origin that is neither "
+        "the belfry's nor an approved app's): seen and accepted",
+    )
+    mig.add_argument(
+        "--accept-missing-stewards",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N admins in Authentik have no person in the register: seen and accepted",
+    )
+    mig.add_argument(
+        "--no-stewards", action="store_true", help="Authentik is gone: leave the admins out"
+    )
+    mig.add_argument(
+        "--keys-only",
+        action="store_true",
+        help="verify after the switch: every key still equal; what moves on afterwards "
+        "(names, states, sessions, admins) is not compared",
+    )
+    sub.add_parser(
+        "has-people",
+        help="yes or no: the register has, or ever had, a member (belfry config asks before "
+        "it lets the signer be switched)",
+    )
     pl = sub.add_parser(
         "pay-link",
         help="a signed belfry.<domain>/pay link (its description shows; belfry pay-link)",
@@ -153,10 +233,29 @@ def main(argv: list[str] | None = None) -> int:
 
         print(json.dumps(setup.reset(services, args.all_admins, args.dry_run)))
         return 0
+    elif args.command == "signer-migrate":
+        from . import migration
+
+        return migration.cli(args, services, settings, sys.stdin, sys.stdout, sys.stderr)
+    elif args.command == "has-people":
+        from . import signerguard
+
+        print("yes" if signerguard.has_people(services) else "no")
+        return 0
     elif args.command == "usernames":
         from . import usernames
 
         result = usernames.backfill(services)
+    elif args.command == "import-stewards":
+        from . import stewards
+        from .clients.authentik import AuthentikClient
+
+        if not settings.authentik_token:
+            print("AUTHENTIK_TOKEN is not set: nothing to read the stewards from", file=sys.stderr)
+            return 2
+        result = stewards.import_from_authentik(
+            services, AuthentikClient(settings.authentik_url, settings.authentik_token)
+        )
     elif args.command == "steward-passes":
         result = steward.steward_passes(services, steward.activation_via_hook(services))
     elif args.command == "sync-programme":

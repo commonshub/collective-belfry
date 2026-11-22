@@ -389,7 +389,10 @@ def ev(kind, *tags):
         (None, True, "sign_event", ev(22242, ["relay", "WSS://Relay.Belfry.Test:443/x"]), False),
         (None, True, "sign_event", ev(22242), False),
         (None, True, "sign_event", ev(22242, ["relay", "wss://relay.example.org"]), True),
-        (None, True, "sign_event", ev(22242, ["relay", "wss://git.belfry.test"]), True),
+        # any host under the belfry's domain, as for NIP-98: git.<domain> admits members by AUTH
+        (None, True, "sign_event", ev(22242, ["relay", "wss://git.belfry.test"]), False),
+        (None, True, "sign_event", ev(22242, ["relay", "wss://belfry.test"]), False),
+        (None, True, "sign_event", ev(22242, ["relay", "wss://notbelfry.test"]), True),
         (
             None,
             True,

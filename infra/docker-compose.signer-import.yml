@@ -1,0 +1,49 @@
+# The signer next to a belfry that still runs on Keycast, for the migration only
+# (infra/scripts/migrate-to-own-signer.sh, docs/own-signer.md "Moving a belfry"). The belfry
+# command adds this file when BELFRY_SIGNER_IMPORT=1 is in its environment and SIGNER is not
+# belfry yet; nothing else does.
+#
+#   - `signer` runs with its data volume and Keycast's master key, **without the bunker**
+#     (BUNKER_RELAYS empty): it takes the accounts and sessions in and answers its API, but no
+#     NIP-46 request. Keycast answers those until the switch; two signers answering one session
+#     would give every request two answers.
+#   - Keycast, Authentik, Redis and the running onboarding service are as they were: SIGNER is
+#     still keycast. Only a one-off container of the onboarding service (`compose run`), which
+#     this file gives the signer's API network and token, talks to the signer.
+#
+# After the switch (SIGNER=belfry) docker-compose.signer.yml takes over and `belfry apply`
+# recreates the signer with the bunker on.
+services:
+  signer-init:
+    extends:
+      file: docker-compose.signer.yml
+      service: signer-init
+
+  signer:
+    extends:
+      file: docker-compose.signer.yml
+      service: signer
+    depends_on:
+      signer-init:
+        condition: service_completed_successfully
+    environment:
+      BUNKER_RELAYS: ""
+
+  onboarding:
+    secrets: [signer_token]
+    networks: [default, signer-api]
+    environment:
+      SIGNER_URL: http://signer-api:8200
+
+networks:
+  signer:
+    internal: true
+  signer-api:
+    internal: true
+
+secrets:
+  signer_token: {file: ./secrets/signer_token}
+  signer_master_key: {file: ./secrets/signer_master_key}
+
+volumes:
+  signer-data:

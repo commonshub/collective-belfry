@@ -13,6 +13,10 @@ class ResPartner(models.Model):
              "Used as the subject of the pass bridge and the Authentik source link.",
     )
     belfry_authentik_user_id = fields.Integer(string="Authentik user id", copy=False, index=True)
+    # An admin of the belfry ("steward") on a belfry without Authentik (SIGNER=belfry, the
+    # onboarding service's stewards.py); with Authentik the stewards group decides and this
+    # stays empty.
+    belfry_steward = fields.Boolean(string="Belfry admin", copy=False, index=True)
     belfry_npub = fields.Char(string="Nostr npub", copy=False, index=True)
     # Keycast patch 0014: Belfry derives the partner's key from its custody seed with this
     # version (raise it to replace a leaked key); after a self-custody move the partner holds

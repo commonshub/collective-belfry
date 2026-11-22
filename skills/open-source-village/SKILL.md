@@ -571,9 +571,13 @@ while developing.
 
    The answer has `bunker_url` and `refresh_token`. Connect to the bunker with NIP-46 as in
    section 6 (one client key, kept and reused) and read `GET /api/me` to see the pass.
-3. Silent check on load (optional): the same request with `prompt=none` never shows a page; it
-   comes back with a code when the participant is signed in and has approved your app, else with
-   `error=login_required` or `error=consent_required`. Try it once per tab, not in a loop.
+3. Silent check on load (optional): the same request with `prompt=none` comes back with a code
+   when the participant is signed in and your app is approved, else with `error=login_required`
+   (a belfry with Keycast may also answer `error=consent_required`). That answer is only sent
+   to an app the belfry knows: on a belfry that runs its own signer, an app no admin approved
+   gets a page (403) and no redirect at all, so do the silent check in a hidden frame or a
+   request you can time out, never as the page's own navigation. Try it once per tab, not in a
+   loop.
 4. Signing out: `POST https://apps.<domain>/api/oauth/revoke` `{"token": "<refresh_token>",
    "client_id": "<your app>"}` ends your app's authorization; then send the browser to
    `https://apps.<domain>/api/auth/oidc/logout?return_to=<your page>`, which ends the sign-in

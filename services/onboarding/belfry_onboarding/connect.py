@@ -39,6 +39,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 
 from . import apps, claim, community, console, device, mypass, nostr, passkeys, setup, theme
+from .clients.keycast import ClientKeyTaken
 from .clients.odoo import OdooError
 from .core import Services
 
@@ -143,7 +144,7 @@ def outcome(svc: Services, f: dict[str, Any], member: dict[str, Any]) -> dict[st
 
 
 def send_code(svc: Services, f: dict[str, Any], email: str) -> dict[str, Any]:
-    member = apps.member_by_email(svc, email)
+    member = apps.signin_member(svc, email)
     if member is None:
         # a buyer whose address is not proven yet: this sign-in is its proof (sales.py)
         from . import sales
@@ -217,14 +218,37 @@ def _verify_unproven(
         raise ConnectError(410, "That code expired. Send a new one.")
     # the code went to this address: it proves this address, for this contact only
     sales.confirm(svc, member["partner"], member["email"])
-    found = apps.member_by_email(svc, member["email"])
+    found = apps.signin_member(svc, member["email"])
     if found is None:
         raise ConnectError(409, "This address does not belong to a member's account.")
     f["pending"] = found
     return found
 
 
-def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
+def scope_of(svc: Services, uri: str) -> str:
+    """What the signer may sign for the app at URI (clients/signer.py ``create_bunker``):
+    ``own`` for an app this belfry serves itself, ``outside`` for any other, approved or not.
+    An admin's approval lets an app sign people in; it does not make it one of ours."""
+    return "own" if apps.own_app(svc, uri) else "outside"
+
+
+def redeem(
+    svc: Services, body: dict[str, Any], ua: str = "", kind: str = "nip46"
+) -> dict[str, Any]:
+    """Spend an authorization code (once, within CODE_SECONDS, with its PKCE verifier, client
+    and return address) and open the signer session it stands for. Returns the code's record
+    with ``bunker`` (the signer's answer), ``token`` (the member's signer token) and ``scope``.
+
+    An app that sends ``client_pubkey`` (the hex key it will talk NIP-46 with) gets a session
+    bound to that key from the start. Without it the signer binds the session to the first key
+    that connects with the URL's secret and drops it when nobody did within ten minutes
+    (docs/own-signer.md §4): the app gets the URL in this very answer and connects at once;
+    one that keeps the URL for later signs in again, which makes a new one."""
+    # what the request itself gets wrong is said before the code is spent: an app that sent a
+    # malformed client key can ask again with the same code
+    client = str(body.get("client_pubkey") or "").strip().lower()
+    if client and not (len(client) == 64 and all(ch in "0123456789abcdef" for ch in client)):
+        raise ConnectError(400, "invalid_request")
     with _lock:
         _sweep()
         c = CODES.pop(str(body.get("code", "")), None)
@@ -244,12 +268,28 @@ def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
     found = community.member_token(svc, c["partner"])
     if found is None or found[0] != c["pubkey"]:
         raise ConnectError(409, "own_key")
-    bunker = svc.keycast.create_bunker(
-        found[1],
-        device.name(apps.session_label(svc, c["uri"], c["client_id"]), ua),
-    )
+    scope = scope_of(svc, c["uri"])
+    try:
+        bunker = svc.keycast.create_bunker(
+            found[1],
+            device.name(apps.session_label(svc, c["uri"], c["client_id"]), ua),
+            client or None,
+            scope=scope,
+            # the member's word that this app may decrypt: nothing asks for it yet (the
+            # sign-in page has no such question), so it is False for every app
+            decrypt=c.get("decrypt") is True,
+            origin=apps.origin_of(c["uri"]),
+            kind=kind,
+        )
+    except ClientKeyTaken as exc:
+        raise ConnectError(409, "key_taken") from exc
+    return {**c, "bunker": bunker, "token": found[1], "scope": scope}
+
+
+def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
+    c = redeem(svc, body, ua)
     return {
-        "bunker_url": bunker["bunker_url"],
+        "bunker_url": c["bunker"]["bunker_url"],
         "token_type": "bunker",
         "pubkey": c["pubkey"],
         "npub": nostr.hex_to_npub(c["pubkey"]),
@@ -509,11 +549,7 @@ def register(app: FastAPI) -> None:
             console.COOKIE,
             mypass._sign(
                 services,
-                {
-                    "kind": "console",
-                    "partner": member["partner"],
-                    "csrf": secrets.token_urlsafe(24),
-                },
+                console.session_claims(services, member["partner"]),
                 days * 86400,
             ),
             max_age=days * 86400,
@@ -537,8 +573,19 @@ def register(app: FastAPI) -> None:
         known = await run_in_threadpool(known_member, request)
         if q.get("prompt") == "none":
             # silent sign-in: only for a known browser and an approved app
-            if known and await run_in_threadpool(apps.is_approved, services, f["uri"]):
+            approved = await run_in_threadpool(apps.is_approved, services, f["uri"])
+            if known and approved:
                 return RedirectResponse(issue(f, known), status_code=302)
+            if not approved:
+                # an address nobody approved is never sent anything, not even an error: the
+                # sign-in link could be anyone's, and this would be an open redirect
+                with _lock:
+                    FLOWS.pop(f["id"], None)
+                return html_(
+                    request,
+                    error_page("This app is not approved here yet. Open it and sign in."),
+                    403,
+                )
             return RedirectResponse(
                 back_to(f["redirect"], error="login_required", state=f["state"]), status_code=302
             )
@@ -695,6 +742,14 @@ def register(app: FastAPI) -> None:
                 to = return_to
         except ValueError:
             pass
+        from . import appsignin
+
+        # the session ends on the server too (a belfry with its own signer), not only here
+        await run_in_threadpool(
+            appsignin.end_session,
+            services,
+            console.read_session(services, request.cookies.get(console.COOKIE)),
+        )
         response = RedirectResponse(to, status_code=303)
         response.delete_cookie(console.COOKIE, path="/")
         return response

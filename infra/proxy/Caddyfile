@@ -210,8 +210,12 @@ preview.{$BELFRY_DOMAIN} {
 }
 
 # Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
+# A belfry on its own signer (SIGNER=belfry) has no Authentik: people sign in on the chat with an
+# e-mail code, and whatever still points here (an old mail, a bookmark) lands there.
 login.{$BELFRY_DOMAIN} {
 	import security
+	@own_signin expression `'{$SIGNER:keycast}' == 'belfry'`
+	redir @own_signin https://chat.{$BELFRY_DOMAIN}/ 302
 	# Authentik's admin interface and akadmin's password login only over the admin network.
 	import admin_only /if/admin /if/admin/* /if/flow/default-authentication-flow /if/flow/default-authentication-flow/* /api/v3/flows/executor/default-authentication-flow /api/v3/flows/executor/default-authentication-flow/* /api/v3/admin/*
 	# Flow steps (e-mail entry, magic links, pass sign-in): bursts from the venue are fine.
@@ -257,6 +261,20 @@ apps.{$BELFRY_DOMAIN} {
 		rewrite / /apps-home
 		reverse_proxy onboarding:8100
 	}
+	# A belfry on its own signer (SIGNER=belfry): the apps' sign-in in Keycast's shape is answered
+	# by the onboarding service (appsignin.py); Keycast's own pages (dashboard, account) are gone
+	# and lead to the belfry's page.
+	@own_signer expression `'{$SIGNER:keycast}' == 'belfry'`
+	handle @own_signer {
+		@appsignin path /api/oauth/* /api/auth/oidc/logout /api/nostr
+		handle @appsignin {
+			import limit apps-signin 600 1m /api/oauth/* /api/auth/oidc/logout /api/nostr
+			reverse_proxy onboarding:8100
+		}
+		handle {
+			redir https://belfry.{$BELFRY_DOMAIN}/ 302
+		}
+	}
 	reverse_proxy keycast:3000
 }
 
@@ -270,6 +288,15 @@ apps.{$BELFRY_DOMAIN} {
 		query name=_smtp name=_groups
 	}
 	handle @smtpname {
+		reverse_proxy onboarding:8100
+	}
+	# A belfry on its own signer (SIGNER=belfry): every name is answered by the onboarding service
+	# (mail.py asks the signer for usernames), with Access-Control-Allow-Origin: *.
+	@nip05_own {
+		path /.well-known/nostr.json
+		expression `'{$SIGNER:keycast}' == 'belfry'`
+	}
+	handle @nip05_own {
 		reverse_proxy onboarding:8100
 	}
 	@nip05 path /.well-known/nostr.json
@@ -461,7 +488,8 @@ wallet.{$BELFRY_DOMAIN} {
 	reverse_proxy wallet:80
 }
 
-# Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
+# The NIP-46 relay for remote signing; wss://bunker.<domain>. Keycast's signer listens on it, or
+# Belfry's own (SIGNER=belfry): same relay, same address (stored bunker URLs name it).
 bunker.{$BELFRY_DOMAIN} {
 	import security
 	reverse_proxy keycast-relay:8080

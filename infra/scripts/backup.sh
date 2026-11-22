@@ -63,6 +63,11 @@ envval() { # value of a variable from the environment, else from infra/.env
 compose() {
   local files=(-f "$INFRA/docker-compose.yml")
   [[ -n "$(envval BELFRY_DOMAIN)" ]] && files+=(-f "$INFRA/docker-compose.prod.yml")
+  # a belfry on its own signer (SIGNER=belfry): the signer and its volume are in this file
+  if [[ "$(envval SIGNER)" == belfry ]]; then
+    files+=(-f "$INFRA/docker-compose.signer.yml")
+    [[ -n "$(envval BELFRY_DOMAIN)" ]] && files+=(-f "$INFRA/docker-compose.signer-prod.yml")
+  fi
   docker compose --project-directory "$INFRA" "${files[@]}" --profile app "$@"
 }
 project() { compose config --format json | jq -r .name; }
@@ -71,9 +76,13 @@ project() { compose config --format json | jq -r .name; }
 # the NIP-46 relay and Redis are). The SQLite and LMDB volumes are paused while they are copied.
 # register-data is the belfry's own register (REGISTER=belfry, one SQLite file: people, passes,
 # invites, followers); infra/data holds the theme, the installed apps, the setup page's state and
-# the changelog.
-VOLUMES=(odoo-data register-data mint-data vote-data blossom-data community-relay-data authentik-media git-data)
-PAUSE=(mint vote blossom relay git onboarding)
+# the changelog. signer-data is Belfry's own signer (SIGNER=belfry, one SQLite file): every
+# account, username and session, and the sealed keys that the custody seed cannot give back (keys
+# from before the seed, imported from Keycast). With it the backup needs infra/secrets/
+# signer_master_key (in FILES through infra/secrets): the sealed keys open with nothing else.
+# A volume that does not exist on this belfry is skipped.
+VOLUMES=(odoo-data register-data signer-data mint-data vote-data blossom-data community-relay-data authentik-media git-data)
+PAUSE=(mint vote blossom relay git onboarding signer)
 FILES=(infra/.env infra/data infra/keycast/master.key infra/issuer/keys infra/odoo/odoo.conf
   infra/issuer/config/issuer2-profiles.conf infra/issuer/config/issuer-service.conf
   infra/issuer/config/authentication-service.conf infra/verifier/config/verifier-service.conf
@@ -125,6 +134,7 @@ cmd_run() {
   need "$AGE"; need jq
   local recipients target keep local_keep stamp out name args=()
   paused=()  # global: the EXIT trap still sees them after this function returns
+  paused_ids=()  # containers paused by id: the migration's import signer (see below)
   recipients=$(envval BACKUP_RECIPIENTS); target=$(envval BACKUP_TARGET)
   keep=$(envval BACKUP_KEEP); keep=${keep:-30}
   local_keep=$(envval BACKUP_LOCAL_KEEP); local_keep=${local_keep:-2}
@@ -134,7 +144,7 @@ cmd_run() {
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   name="belfry-$(hostname -s)-$stamp.tar.age"
   work=$(mktemp -d "${TMPDIR:-/var/tmp}/belfry-backup.XXXXXX")
-  trap 'rm -rf "${work:-}"; [[ ${#paused[@]} -gt 0 ]] && compose unpause "${paused[@]}" >/dev/null 2>&1 || true' EXIT
+  trap 'rm -rf "${work:-}"; [[ ${#paused[@]} -gt 0 ]] && compose unpause "${paused[@]}" >/dev/null 2>&1; [[ ${#paused_ids[@]} -gt 0 ]] && docker unpause "${paused_ids[@]}" >/dev/null 2>&1 || true' EXIT
   local proj; proj=$(project)
   mkdir -p "$work/b/volumes"
 
@@ -148,6 +158,17 @@ cmd_run() {
   local running; running=$(compose ps --services --status running)
   for s in "${PAUSE[@]}"; do grep -qx "$s" <<<"$running" && paused+=("$s"); done
   [[ ${#paused[@]} -gt 0 ]] && compose pause "${paused[@]}" >/dev/null 2>&1
+  # A service running outside this compose project's files: the signer that the migration
+  # starts next to Keycast (docker-compose.signer-import.yml, SIGNER still keycast) writes to
+  # signer-data during a rehearsal; paused by its container, so its SQLite copy is consistent.
+  local s id
+  for s in "${PAUSE[@]}"; do
+    grep -qx "$s" <<<"$running" && continue
+    while read -r id; do
+      [[ -n "$id" ]] || continue
+      docker pause "$id" >/dev/null 2>&1 && paused_ids+=("$id")
+    done < <(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter "label=com.docker.compose.service=$s" --filter status=running)
+  done
   local vols='{}'
   for v in "${VOLUMES[@]}"; do
     docker volume inspect "${proj}_$v" >/dev/null 2>&1 || continue
@@ -155,7 +176,8 @@ cmd_run() {
     vols=$(jq --arg v "$v" --argjson n "$(gzip -dc "$work/b/volumes/$v.tar.gz" | tar -t | grep -vc '/$')" '.[$v] = $n' <<<"$vols")
   done
   [[ ${#paused[@]} -gt 0 ]] && compose unpause "${paused[@]}" >/dev/null 2>&1
-  paused=()
+  [[ ${#paused_ids[@]} -gt 0 ]] && docker unpause "${paused_ids[@]}" >/dev/null 2>&1
+  paused=() paused_ids=()
 
   # Secret files (never the plain custody seed) and the code as it runs here.
   local present=()
@@ -179,8 +201,14 @@ cmd_run() {
   prune "$target" "$keep"
 
   mkdir -p "$HOME/belfry-backups"
-  mv "$work/$name" "$HOME/belfry-backups/"
-  ls -1t "$HOME/belfry-backups"/belfry-*.tar.age | tail -n +"$((local_keep + 1))" | xargs -r rm -f
+  # next to it, in the clear: what it holds (volume names and file counts, no content) and its
+  # checksum, so a check (migrate-to-own-signer.sh) can tell what a backup carries without
+  # the stewards' key
+  jq -n --arg at "$stamp" --arg sha "$(sha256sum "$work/$name" | cut -d' ' -f1)" \
+    --argjson volumes "$vols" '{created:$at, sha256:$sha, volumes:$volumes}' > "$work/$name.json"
+  mv "$work/$name" "$work/$name.json" "$HOME/belfry-backups/"
+  ls -1t "$HOME/belfry-backups"/belfry-*.tar.age | tail -n +"$((local_keep + 1))" \
+    | while read -r old; do rm -f "$old" "$old.json"; done
   date -u +%s > "$HOME/belfry-backups/last-success"
   say "$name ($out) sent to $target"
 }
@@ -351,6 +379,12 @@ cmd_drill() {
   if [[ "$(jq length <<<"$diff")" != 0 ]]; then
     jq -r '.[]' <<<"$diff" | sed 's/^/  differs: /'
     jq -r '.[]' <<<"$diff" | grep -Eq "$key_tables" && fail=1
+  fi
+  # Belfry's own signer: its database came back (the volume's file count is checked above) and
+  # the key that opens it is among the restored files.
+  if jq -e '.volumes["signer-data"]' "$dir/manifest.json" >/dev/null; then
+    if [[ -s "$tmp/infra/secrets/signer_master_key" ]]; then say "signer: database and master key restored"
+    else echo "signer-data is in the backup but infra/secrets/signer_master_key is not: the sealed keys cannot be opened" >&2; fail=1; fi
   fi
   [[ $fail == 0 ]] && say "drill passed: $(jq -r '.host + " " + .created' "$dir/manifest.json") restores" || die "drill failed"
 }

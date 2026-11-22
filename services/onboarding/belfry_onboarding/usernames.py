@@ -68,9 +68,12 @@ RESERVED = {
     "_groups",
     "_",
 }
-# what an account is called before it has a name of its own: a member number ("0007",
-# "osv-0007"), "member-<id>", "guest-<id>"
-DEFAULT = re.compile(r"^(?:\d+|[a-z]{2,6}-\d{2,}|member-\d+|guest-\d+)$")
+# what an account is called before it has a name of its own, exactly as accounts are made: a
+# member number (digits, zero-padded to four: register._m_belfry_ensure_member_number, Odoo's
+# sequence with padding 4; belfry.sh's older numbers carry a prefix, "OSV-0001", lowercased),
+# "member-<id>" (community.member_token without a number), "guest-<id>". Nothing wider: "lina-10"
+# and "max-42" are names people choose.
+DEFAULT = re.compile(r"^(?:\d+|[a-z]{2,6}-\d{4}|member-\d+|guest-\d+)$")
 
 
 def slug(name: str) -> str:
@@ -85,15 +88,19 @@ def clean(wanted: Any) -> str:
 
 
 def problem(name: str) -> str | None:
-    """Why NAME can't be a username (VALID, MAX, RESERVED): ``short`` (nothing), ``long``,
-    ``chars``, ``reserved``; None: it can."""
+    """Why NAME can't be a username somebody chooses (VALID, MAX, RESERVED, DEFAULT):
+    ``short`` (nothing), ``long``, ``chars``, ``reserved``; None: it can.
+
+    The names accounts start with are reserved too (DEFAULT: "50", "0007", "osv-0007",
+    "member-12", "guest-12"): an account is made under its member number, so a member who
+    took "50" would stand in the way of member 50's account."""
     if not name:
         return "short"
     if len(name) > MAX:
         return "long"
     if not VALID.fullmatch(name):
         return "chars"
-    if name in RESERVED:
+    if name in RESERVED or DEFAULT.fullmatch(name):
         return "reserved"
     return None
 
@@ -160,6 +167,10 @@ def require(svc: Services, raw: Any, name: str = "", mine: str = "") -> str:
 
     wanted = clean(raw)
     reason = problem(wanted)
+    if reason == "reserved" and mine and DEFAULT.fullmatch(wanted) and holder(svc, wanted) == mine:
+        # the account's own name still is the one it started with ("osv-0007"): sending it back
+        # unchanged is no choice of a reserved name
+        return wanted
     if reason:
         exc = ApiError(422, "username_invalid", INVALID)
         exc.extra["reason"] = reason
@@ -184,6 +195,8 @@ def check(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
         return {"suggested": found[0] if found else "", "suggestions": found}
     wanted = clean(raw)[:64]
     reason = problem(wanted)
+    if reason == "reserved" and DEFAULT.fullmatch(wanted) and holder(svc, wanted) == key:
+        reason = None  # the asking account's own starting name (see ``require``)
     if reason:
         return {
             "username": wanted,
@@ -317,7 +330,7 @@ def backfill(svc: Services) -> dict[str, str]:
     done: dict[str, str] = {}
     seen: set[int] = set()
     for row in svc.odoo.search_read(
-        "belfry.pass", [["state", "=", "active"]], ["partner_id", "tier", "guest_agent"]
+        "belfry.pass", [["state", "=", "active"]], core.pass_fields(svc, "partner_id", "tier")
     ):
         partner = core.m2o_id(row.get("partner_id"))
         if row.get("tier") in ("guest", "agent") or not partner or partner in seen:

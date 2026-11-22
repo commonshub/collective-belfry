@@ -20,13 +20,14 @@ from typing import Any
 
 import httpx
 
-from . import accounting, avatar
+from . import accounting, avatar, stewards
 from .accounting import Accounting
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
+from .clients.signer import KeyNotHeld, SignerClient
 from .clients.verifier import VerifierClient
 from .eudi import RegistryCerts
 from .git_members import GitMembers
@@ -61,6 +62,8 @@ PASS_FIELDS = [
     # joining with a key of one's own (invite page, belfry_pass models/nostr_proof.py)
     "own_pubkey",
     "own_pubkey_proof",
+    # an admin's free pass (belfry_steward.py): it ends with the role, not with the event
+    "steward_pass",
 ]
 
 # The proof of an own key: a NIP-98 event for the invite page, signed with that key.
@@ -71,7 +74,8 @@ OWN_KEY_PROOF_KIND = 27235
 class Services:
     odoo: OdooApi
     authentik: AuthentikClient
-    keycast: KeycastClient
+    # the signer: Keycast, or Belfry's own with the same interface (SIGNER, app.build_signer)
+    keycast: KeycastClient | SignerClient
     settings: Settings
     relay: RelayPublisher | None = None
     whitelist: RelayWhitelist | None = None
@@ -315,7 +319,13 @@ def issue_missing_tokens(svc: Services) -> dict[int, int]:
     return issued
 
 
-def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number: str) -> int:
+def _ensure_authentik_user(
+    svc: Services, partner: dict[str, Any], member_number: str
+) -> int | bool:
+    """The member's Authentik user (found or made). A belfry without Authentik (SIGNER=belfry,
+    stewards.own) makes none: False, which is what the register and the pass then keep."""
+    if stewards.own(svc):
+        return False
     ak = svc.authentik
     email = partner.get("email") or None
     users = ak.find_users_by_attribute("belfry_member_number", member_number)
@@ -353,7 +363,10 @@ def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number
 def _set_participant(svc: Services, user_pk: int, member: bool) -> None:
     """Add the Authentik user to (or remove it from) the participants group, which gates the
     Keycast login (blueprint belfry-keycast-provider). Idempotent; raises if the group is
-    missing, so a retry (webhook replay, reconcile) completes the job once the blueprint ran."""
+    missing, so a retry (webhook replay, reconcile) completes the job once the blueprint ran.
+    Nothing to do on a belfry without Authentik."""
+    if stewards.own(svc) or not user_pk:
+        return
     name = svc.settings.authentik_participants_group
     group = svc.authentik.find_group(name)
     if group is None:
@@ -368,7 +381,10 @@ def sync_participants(svc: Services, strict: bool = False) -> dict[str, Any] | N
     """Make the participants group equal to the Authentik users of all active passes.
 
     Run at startup and by reconcile, so passes activated before the group existed (or a missed
-    group call) converge. Best effort unless ``strict``."""
+    group call) converge. Best effort unless ``strict``. A belfry without Authentik has no
+    such group: None."""
+    if stewards.own(svc):
+        return None
     name = svc.settings.authentik_participants_group
     try:
         group = svc.authentik.find_group(name)
@@ -443,12 +459,67 @@ def send_login_link(svc: Services, pass_id: int) -> str:
         log.info("send_login_link: pass %s is %s, no link", pass_id, pass_row.get("state"))
         return "not_active"
     user_pk = _authentik_user_for(svc, pass_row)
-    if user_pk is None:
+    if user_pk is None and not stewards.own(svc):
         log.warning("send_login_link: pass %s has no Authentik user", pass_id)
         return "no_user"
     svc.odoo.write("belfry.pass", [pass_id], _login_link(svc))
     log.info("send_login_link: new link for pass %s (Authentik user %s)", pass_id, user_pk)
     return "sent"
+
+
+def _name_taken(exc: httpx.HTTPStatusError) -> bool:
+    """Whether a signer's 409 says "that username is somebody else's" (the own signer:
+    ``username_taken``; Keycast: "User with username … already exists")."""
+    if exc.response.status_code != 409:
+        return False
+    try:
+        data = exc.response.json()
+    except ValueError:
+        return False
+    return isinstance(data, dict) and "username" in str(data.get("error") or "").lower()
+
+
+def preload_account(
+    svc: Services,
+    partner_id: int,
+    username: str,
+    display_name: str,
+    key_version: int = 0,
+    pubkey: str | None = None,
+) -> dict[str, Any]:
+    """The signer's account of a person (``preload_user``: made when missing, never changed),
+    whatever became of the name asked for.
+
+    An account starts with the person's member number as its username, and a username is
+    unique. Somebody who chose "50" as theirs before member 50 joined must not stop member 50
+    from ever getting an account (usernames.problem refuses such names today; older ones
+    exist). So when the name is taken the account is made as ``member-<id>``, then as
+    ``member-<id>0<four digits>``: names nobody can choose (usernames.DEFAULT), which
+    ``usernames.give_default`` replaces with the person's own name right after."""
+    names = [
+        username,
+        f"member-{partner_id}",
+        f"member-{partner_id}0{secrets.randbelow(10**4):04d}",
+    ]
+    for i, name in enumerate(dict.fromkeys(names)):
+        try:
+            return svc.keycast.preload_user(
+                vine_id=f"odoo-partner-{partner_id}",
+                username=name,
+                display_name=display_name,
+                key_version=key_version,
+                pubkey=pubkey,
+            )
+        except httpx.HTTPStatusError as exc:
+            if not _name_taken(exc) or i == len(names) - 1:
+                raise
+            log.warning(
+                "signer: the username %s is taken; the account of partner %s is made under "
+                "another",
+                name,
+                partner_id,
+            )
+    raise RuntimeError("unreachable")
 
 
 def _ensure_keycast_user(
@@ -457,12 +528,13 @@ def _ensure_keycast_user(
     """Returns (pubkey hex, npub, user UCAN). The UCAN is used once for the profile, not stored.
     ``own_pubkey``: the participant joins with their own key, so the account gets no key of
     Belfry's (a keyless account, as for a self-custody participant)."""
-    result = svc.keycast.preload_user(
-        vine_id=f"odoo-partner-{partner['id']}",
-        username=member_number.lower(),
-        display_name=partner.get("name") or member_number,
-        key_version=int(partner.get("belfry_key_version") or 0),
-        pubkey=own_pubkey,
+    result = preload_account(
+        svc,
+        int(partner["id"]),
+        member_number.lower(),
+        partner.get("name") or member_number,
+        int(partner.get("belfry_key_version") or 0),
+        own_pubkey,
     )
     pubkey = result["pubkey"]
     svc.keycast.set_user_status(pubkey, "active")
@@ -591,13 +663,21 @@ def restore_keys(svc: Services) -> dict[str, Any]:
             continue
         expected = passes[0]["keycast_pubkey"]
         own = partner.get("belfry_key_custody") == "self"
-        result = svc.keycast.preload_user(
-            vine_id=f"odoo-partner-{partner['id']}",
-            username=number.lower(),
-            display_name=partner.get("name") or number,
-            key_version=int(partner.get("belfry_key_version") or 0),
-            pubkey=expected if own else None,
-        )
+        try:
+            result = preload_account(
+                svc,
+                int(partner["id"]),
+                number.lower(),
+                partner.get("name") or number,
+                int(partner.get("belfry_key_version") or 0),
+                expected if own else None,
+            )
+        except KeyNotHeld:
+            # the own signer made nothing: the key it would derive is not the register's
+            report[number] = "mismatch"
+            log.error("restore-keys: %s cannot be derived again (the register has %s…)",
+                      number, str(expected)[:8])
+            continue
         got = result["pubkey"]
         if got != expected:
             report[number] = "mismatch"
@@ -920,6 +1000,11 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
         or today()
     )
     date_start, date_end = _pass_dates(svc.settings, tier, duration_days, payment_date)
+    if pass_row.get("steward_pass"):
+        # an admin's free pass (add-steward, belfry_steward.py) lasts as long as the role, like
+        # a membership of the own register (activate_free_pass): never the event's dates, which
+        # after the event made a pass that had ended the day it was opened
+        date_start, date_end = max(payment_date, today()), MEMBERSHIP_END
     extra: dict[str, Any] = {}
     if tx:
         extra["transaction_id"] = tx["id"]
@@ -1056,6 +1141,32 @@ def _own_register(svc: Services) -> bool:
     return isinstance(svc.odoo, Register)
 
 
+# Fields of a pass that only Belfry's own register has (register.py: guests, agents, the
+# guests' grace). Odoo's belfry.pass has none of them and answers ``Invalid field`` to a read
+# that names one; it has no guest or agent passes either, so leaving them out changes no answer.
+REGISTER_ONLY_PASS_FIELDS = frozenset(
+    {
+        "guest_agent",
+        "guest_channel",
+        "guest_inviter",
+        "guest_unnamed",
+        "guest_grace_until",
+        "guest_client",
+        "guest_days",
+        "guest_event",
+        "guest_role",
+        "agent_owner",
+    }
+)
+
+
+def pass_fields(svc: Services, *fields: str) -> list[str]:
+    """FIELDS of ``belfry.pass`` as this register knows them (see REGISTER_ONLY_PASS_FIELDS)."""
+    if _own_register(svc):
+        return list(fields)
+    return [f for f in fields if f not in REGISTER_ONLY_PASS_FIELDS]
+
+
 MEMBERSHIP_END = dt.date(2099, 12, 31)  # a free membership has no end; revoking ends it
 
 
@@ -1157,6 +1268,8 @@ def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
 
 
 def _authentik_user_for(svc: Services, pass_row: dict[str, Any]) -> int | None:
+    if stewards.own(svc):
+        return None  # ids kept from before a migration mean nothing here
     user_id = pass_row.get("authentik_user_id")
     if user_id:
         return int(user_id)
@@ -1193,7 +1306,8 @@ def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason
     suspended = False
     partner_id = m2o_id(pass_row.get("partner_id"))
     if pass_row.get("tier") == "guest":
-        row = svc.odoo.read_one("belfry.pass", pass_row["id"], ["guest_agent"]) or {}
+        fields = pass_fields(svc, "guest_agent")
+        row = (svc.odoo.read_one("belfry.pass", pass_row["id"], fields) or {}) if fields else {}
         if row.get("guest_agent"):  # an agent's own key: no signer account to suspend
             return False
     if pass_row.get("tier") == "agent":  # a member's agent (agents.py): its own key too

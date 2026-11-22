@@ -77,6 +77,9 @@ Usage: install.sh [options]          (as root; curl … | sudo bash -s -- [optio
   --force                  continue despite failed checks (small server, DNS not ready)
   --odoo                   keep who is who in Odoo (the add-on: billing, volunteer shifts, CRM);
                            without it the belfry keeps its own register and runs no Odoo
+  --own-signer             Belfry's own signer holds the members' keys: no Keycast, no Authentik,
+                           no Redis (docs/own-signer.md). New belfries only; the default is
+                           still Keycast until the migration of existing belfries is done
   --nginx                  put nginx on 80/443 in front of Belfry's proxy, for a server that
                            also hosts other sites (default: Belfry's proxy, Caddy, on 80/443)
   --host-only              prepare the server (packages, ufw, nginx, user, code) without the stack
@@ -128,6 +131,7 @@ EOF
       --smoke) RUN_SMOKE=1 ;;
       --nginx) NGINX=1 ;;
       --odoo) export BELFRY_REGISTER=odoo ;;
+      --own-signer) export BELFRY_SIGNER=belfry ;;
       -h|--help) usage; exit 0 ;;
       --*-key|--*-password|--*secret*) die "$a: secrets never go on the command line; use --config FILE or the BELFRY_* variable" ;;
       *) usage >&2; die "unknown option $a" ;;

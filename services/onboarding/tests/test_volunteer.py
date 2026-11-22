@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 
 from belfry_onboarding import core
+from belfry_onboarding import stewards as admins_home
 
 from .fakes import flash_of
 from .test_steward import login as steward_login
@@ -73,7 +74,7 @@ def test_full_shift_is_refused_on_the_page(web, odoo):  # noqa: F811
 def test_shifts_api_roles(web, odoo, services, monkeypatch):  # noqa: F811
     services.settings.pass_info_token = "info-token"
     stewards: list[str] = []
-    monkeypatch.setattr(services.authentik, "group_member_emails", lambda name: stewards)
+    monkeypatch.setattr(admins_home, "emails", lambda svc: stewards)
     _shifts(odoo, 2)
     partner, pass_id = _volunteer(odoo)
     visitor = odoo.add("res.partner", name="Val Visitor", email="val@example.org")

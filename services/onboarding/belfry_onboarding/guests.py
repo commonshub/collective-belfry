@@ -62,7 +62,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import roles
 from .clients.odoo import OdooError
-from .core import Services, m2o_id
+from .core import Services, m2o_id, pass_fields
 
 log = logging.getLogger(__name__)
 
@@ -857,7 +857,7 @@ def _is_agent(svc: Services, pubkey: str) -> bool:
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
-        ["tier", "guest_agent"],
+        pass_fields(svc, "tier", "guest_agent"),
     )
     return any(r.get("tier") == "agent" or r.get("guest_agent") for r in rows)
 

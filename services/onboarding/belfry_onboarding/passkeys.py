@@ -318,7 +318,7 @@ def member_of_partner(svc: Services, partner: int) -> dict[str, Any] | None:
     from . import apps
 
     p = svc.odoo.read_one("res.partner", partner, ["email"]) or {}
-    return apps.member_by_email(svc, p.get("email") or "")
+    return apps.signin_member(svc, p.get("email") or "")
 
 
 def new_flow_key() -> str:

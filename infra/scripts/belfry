@@ -37,6 +37,13 @@
 #   BELFRY_EXTRA_APPS                apps added on apps.<domain>: calendar vote wallet groups village
 #   BELFRY_REGISTER                  belfry | odoo: who is who lives in the belfry's own register
 #                                    (no Odoo) or in Odoo (the add-on: billing, shifts, CRM)
+#   BELFRY_SIGNER                    keycast | belfry: who holds the members' keys. belfry =
+#                                    Belfry's own signer, and with it no Keycast, no Authentik and
+#                                    no Redis (docs/own-signer.md). Only for a belfry without
+#                                    members yet, or after its migration (BELFRY_SIGNER_MIGRATED=1)
+#   BELFRY_SIGNER_RECOVERING         1 while a lost signer volume is rebuilt from the custody seed
+#                                    (docs/own-signer.md §6, "Recovering a lost signer volume");
+#                                    0 again once the service started and the keys were checked
 #   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
 #   BELFRY_MAIL_FROM                 sender address; its domain must allow the mail provider
 #   BELFRY_RESEND_API_KEY            secret: mail through Resend (SMTP smtp.resend.com:587)
@@ -87,10 +94,11 @@ COMPOSE_FILES=(-f infra/docker-compose.yml -f infra/docker-compose.prod.yml)
 # so the image is the one GitHub built from exactly this code. infra/.images marks that the last
 # `belfry apply` found them; without it everything is built here, as before.
 PREBUILT_SERVICES=(keycast keycast-migrate proxy groups-relay onboarding git)
-export BELFRY_KEYCAST_TAG BELFRY_PROXY_TAG BELFRY_GROUPS_RELAY_TAG BELFRY_ONBOARDING_TAG BELFRY_GIT_TAG
+export BELFRY_KEYCAST_TAG BELFRY_SIGNER_TAG BELFRY_PROXY_TAG BELFRY_GROUPS_RELAY_TAG BELFRY_ONBOARDING_TAG BELFRY_GIT_TAG
 image_tags() {
   t() { printf 'tree-%s' "$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --short=12 "HEAD:$1")"; }
   BELFRY_KEYCAST_TAG=$(t infra/keycast/build)
+  BELFRY_SIGNER_TAG=$(t services/signer)
   BELFRY_PROXY_TAG=$(t infra/proxy)
   BELFRY_GROUPS_RELAY_TAG=$(t infra/groups-relay)
   BELFRY_ONBOARDING_TAG=$(t services/onboarding)
@@ -98,8 +106,32 @@ image_tags() {
 }
 image_tags
 # a build context with local changes has no prebuilt image
-local_changes() { [[ -n "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain -- infra/keycast/build infra/proxy infra/groups-relay services/onboarding infra/git)" ]]; }
+local_changes() { [[ -n "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain -- infra/keycast/build services/signer infra/proxy infra/groups-relay services/onboarding infra/git)" ]]; }
 use_images() { [[ -f infra/.images ]] && ! local_changes; }
+# SIGNER=belfry: Belfry's own signer, and no Keycast, Authentik or Redis (docker-compose.signer.yml
+# and, for the proxy, docker-compose.signer-prod.yml; docs/own-signer.md)
+own_signer() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get SIGNER)" == belfry ]]; }
+# the compose files of the signer in use, after the others; with "images" the prebuilt ones too
+signer_files() {
+  if own_signer; then
+    printf '%s\n' -f infra/docker-compose.signer.yml -f infra/docker-compose.signer-prod.yml
+    if [[ "${1:-}" == images ]]; then printf '%s\n' -f infra/docker-compose.images-signer.yml; fi
+  elif [[ "${BELFRY_SIGNER_IMPORT:-}" == 1 ]]; then
+    # the migration only (infra/scripts/migrate-to-own-signer.sh): the signer next to Keycast,
+    # without its bunker, to take the accounts in. Never set by apply or config.
+    printf '%s\n' -f infra/docker-compose.signer-import.yml
+    if [[ "${1:-}" == images ]]; then printf '%s\n' -f infra/docker-compose.images-signer.yml; fi
+  fi
+}
+# the services whose images GitHub builds: Keycast's two, or the signer in their place
+prebuilt_services() {
+  local s
+  for s in "${PREBUILT_SERVICES[@]}"; do
+    if own_signer && [[ "$s" == keycast || "$s" == keycast-migrate ]]; then continue; fi
+    echo "$s"
+  done
+  if own_signer; then echo signer; fi
+}
 # REGISTER=belfry: no Odoo (the belfry's own register; docker-compose.noodoo.yml)
 no_odoo() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get REGISTER)" == belfry ]]; }
 
@@ -113,14 +145,37 @@ extra_apps() { local a; for a in $(env_get EXTRA_APPS); do [[ " ${EXTRA_KEYS[*]}
 # the push gateway (services/push-gateway): compose profile push-gateway, only with PUSH_GATEWAY=1
 push_gateway() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get PUSH_GATEWAY)" == 1 ]]; }
 
+# Whether this belfry has, or ever had, people: what decides if its signer may be switched
+# without a migration (cmd_config). The running service answers from the register (a pass that
+# is active or was ever given a key); the setup folder's files answer too (a first admin, also
+# one a reset archived). Not knowing counts as yes: a stack that is down but has data volumes
+# is not a new belfry.
+ever_had_people() {
+  compgen -G "$SETUP_DIR/first-admin*.json" >/dev/null && return 0
+  [[ -s "$SETUP_DIR/reset.json" ]] && return 0
+  local out
+  if out=$(compose --profile app exec -T onboarding python -m belfry_onboarding has-people 2>/dev/null | tail -n1); then
+    [[ "$out" == no ]] && return 1
+    return 0
+  fi
+  local project=${COMPOSE_PROJECT_NAME:-belfry}
+  if docker volume ls -q 2>/dev/null | grep -Eq "^${project}_(register-data|postgres|odoo-data|signer-data)$"; then
+    return 0
+  fi
+  return 1
+}
+
 compose() {
   local files=("${COMPOSE_FILES[@]}")
   if no_odoo; then files+=(-f infra/docker-compose.noodoo.yml); fi
   if osv_apps; then files+=(--profile osv-apps)
   else local a; for a in $(extra_apps); do files+=(--profile "app-$a"); done; fi
   if push_gateway; then files+=(--profile push-gateway); fi
-  if use_images; then docker compose "${files[@]}" -f infra/docker-compose.images.yml "$@"
-  else docker compose "${files[@]}" "$@"; fi
+  local -a sig=() sig_images=()
+  mapfile -t sig < <(signer_files)
+  mapfile -t sig_images < <(signer_files images)
+  if use_images; then docker compose "${files[@]}" -f infra/docker-compose.images.yml "${sig_images[@]}" "$@"
+  else docker compose "${files[@]}" "${sig[@]}" "$@"; fi
 }
 
 env_get() { sed -nE "s/^$1=\"?([^\"#]*)\"?.*/\1/p" "$ENV_FILE" | tail -n1 | sed 's/[[:space:]]*$//'; }
@@ -203,6 +258,30 @@ cmd_config() {
   if [[ -n "${BELFRY_REGISTER:-}" ]]; then
     [[ "$BELFRY_REGISTER" =~ ^(belfry|odoo)$ ]] || die "BELFRY_REGISTER is belfry or odoo"
     pairs+=(REGISTER "$BELFRY_REGISTER")
+  fi
+  if [[ -n "${BELFRY_SIGNER:-}" ]]; then
+    [[ "$BELFRY_SIGNER" =~ ^(belfry|keycast)$ ]] || die "BELFRY_SIGNER is belfry or keycast"
+    local now_signer; now_signer=$(env_get SIGNER); now_signer=${now_signer:-keycast}
+    if [[ "$BELFRY_SIGNER" != "$now_signer" ]]; then
+      # the two signers do not share accounts or sessions: switching a belfry that has people
+      # signs everyone out and loses usernames unless its migration ran (docs/own-signer.md §6)
+      # Asked of the data, not of one file: first-admin.json is gone after a setup-reset or a
+      # restore, and the people are still there.
+      if [[ "${BELFRY_SIGNER_MIGRATED:-}" != 1 ]] && ever_had_people; then
+        die "this belfry has, or had, people on $now_signer (or its stack is down and that cannot be checked): switching the signer needs its migration first (infra/scripts/migrate-to-own-signer.sh; docs/own-signer.md, Moving a belfry). The migration's switch sets BELFRY_SIGNER_MIGRATED=1 itself."
+      fi
+      pairs+=(SIGNER "$BELFRY_SIGNER")
+      # no Authentik with Belfry's own signer: its own e-mail and code sign-in
+      if [[ "$BELFRY_SIGNER" == belfry ]]; then
+        pairs+=(PASS_SIGNIN belfry)
+        # its token and master key (a copy of Keycast's), made only once the signer is wanted
+        [[ -s infra/secrets/signer_master_key ]] || BELFRY_SIGNER_SECRETS=1 infra/scripts/gen-secrets.sh >/dev/null
+      fi
+    fi
+  fi
+  if [[ -n "${BELFRY_SIGNER_RECOVERING:-}" ]]; then
+    [[ "$BELFRY_SIGNER_RECOVERING" =~ ^[01]$ ]] || die "BELFRY_SIGNER_RECOVERING is 0 or 1"
+    pairs+=(SIGNER_RECOVERING "$BELFRY_SIGNER_RECOVERING")
   fi
   if [[ -n "${BELFRY_EXTRA_APPS+set}" ]]; then  # may be empty: none added
     local a
@@ -367,6 +446,23 @@ legacy_settings() {
   local belfry=0; [[ "$(env_get THEME)" == belfry ]] && belfry=1
   if [[ -z "$(env_get OSV_APPS)" ]]; then env_set OSV_APPS "$([[ $belfry == 1 ]] && echo 0 || echo 1)"; fi
   if [[ -z "$(env_get PASS_SIGNIN)" ]]; then env_set PASS_SIGNIN "$([[ $belfry == 1 ]] && echo belfry || echo authentik)"; fi
+  # Belfry's own signer runs without Authentik: the onboarding service refuses to start otherwise
+  if own_signer && [[ "$(env_get PASS_SIGNIN)" != belfry ]]; then
+    say "SIGNER=belfry: PASS_SIGNIN set to belfry (there is no Authentik to sign in with)"
+    env_set PASS_SIGNIN belfry
+  fi
+  # the apps' sign-in (appsignin.py: apps.<domain>/api/oauth/authorize) sends people on to the
+  # console's /connect/authorize: without CONSOLE_URL it answers 404 and nobody new signs in to
+  # the chat. Boxes set up before prod-env.sh wrote it have it empty.
+  if own_signer && [[ -z "$(env_get CONSOLE_URL)" && -n "$(env_get BELFRY_DOMAIN)" ]]; then
+    say "CONSOLE_URL was empty: set to https://belfry.$(env_get BELFRY_DOMAIN) (the apps' sign-in goes there)"
+    env_set CONSOLE_URL "https://belfry.$(env_get BELFRY_DOMAIN)"
+  fi
+  if own_signer; then
+    # what the signer replaced: stopped and removed, their data (the postgres databases keycast
+    # and authentik, the volumes) left where it is
+    compose --profile keycast rm -sf keycast keycast-migrate authentik-server authentik-worker redis >/dev/null 2>&1 || true
+  fi
   if ! osv_apps; then
     local svc off=()
     for svc in "${OSV_SERVICES[@]}"; do
@@ -435,34 +531,60 @@ cmd_apply() {
   fi
   bootstrap_env
   legacy_settings
+  local -a sig_images=() prebuilt=()
   mkdir -p infra/data/changelog infra/data/theme "$SETUP_DIR"
   if [[ "${BELFRY_BUILD_LOCAL:-}" == 1 ]] || local_changes; then
     rm -f infra/.images
     say "Building every image here (BELFRY_BUILD_LOCAL=1 or local changes)"
-  elif docker compose "${COMPOSE_FILES[@]}" -f infra/docker-compose.images.yml --profile app pull -q "${PREBUILT_SERVICES[@]}"; then
+  elif mapfile -t sig_images < <(signer_files images) && mapfile -t prebuilt < <(prebuilt_services) \
+    && docker compose "${COMPOSE_FILES[@]}" -f infra/docker-compose.images.yml "${sig_images[@]}" --profile app pull -q "${prebuilt[@]}"; then
     : > infra/.images
-    say "Prebuilt images for the signer, proxy, groups relay, git server and onboarding service ($BELFRY_KEYCAST_TAG …)"
+    say "Prebuilt images for the signer, proxy, groups relay, git server and onboarding service ($(own_signer && echo "$BELFRY_SIGNER_TAG" || echo "$BELFRY_KEYCAST_TAG") …)"
   else
     rm -f infra/.images
     say "No prebuilt images for this version of the code: building them here (the signer takes 15 to 30 minutes)"
   fi
   shipped_apps
+  # the signer's token and master key, on a belfry installed before they existed
+  if own_signer && [[ ! -s "$SECRETS/signer_token" || ! -s "$SECRETS/signer_master_key" ]]; then
+    infra/scripts/gen-secrets.sh >/dev/null
+  fi
+  # a secret Compose mounts that this belfry does not have yet (added by a later version, e.g.
+  # belfry_nsec on an older install): gen-secrets.sh makes what is missing and keeps the rest
+  local missing
+  missing=$(compose --profile app config --format json 2>/dev/null | python3 -c '
+import json, os, sys
+c = json.load(sys.stdin)
+skip = {"apns_key", "fcm_service_account"}  # optional: an empty file below
+print(" ".join(sorted(k for k, v in (c.get("secrets") or {}).items()
+                      if k not in skip and (v or {}).get("file") and not os.path.exists(v["file"]))))' || true)
+  if [[ -n "$missing" ]]; then
+    say "Secrets missing for this version ($missing): making them (gen-secrets.sh keeps the others)"
+    infra/scripts/gen-secrets.sh >/dev/null
+  fi
   # secrets added after this belfry was installed: an empty file, so Compose can mount it
   local sec
   for sec in apns_key fcm_service_account; do
     [[ -e "$SECRETS/$sec" ]] || (umask 027; : > "$SECRETS/$sec")
   done
   say "Starting the stack"
-  if [[ "$(free_gb)" -lt 25 ]]; then
+  # decided once per apply: lean_build empties the build cache after each image, which frees
+  # enough disk that a second look would see "plenty" and rebuild everything again, in parallel
+  # (an 8 GB box froze on two Rust builds at once)
+  local lean=0
+  [[ "$(free_gb)" -lt 25 ]] && lean=1
+  if [[ $lean -eq 1 ]]; then
     lean_build
     compose up -d
   else
     compose up -d --build
   fi
-  say "Bootstrap (Odoo, Authentik, the signer, Stripe and Mollie when their keys are set)"
+  if own_signer; then say "Bootstrap (Odoo, Stripe and Mollie when their keys are set)"
+  else say "Bootstrap (Odoo, Authentik, the signer, Stripe and Mollie when their keys are set)"; fi
   infra/scripts/bootstrap.sh
   say "The onboarding service and the apps"
-  if [[ "$(free_gb)" -lt 25 ]]; then compose --profile app up -d; else compose --profile app up -d --build; fi
+  # lean: every image was built (or found) by lean_build above; never --build again
+  if [[ $lean -eq 1 ]]; then compose --profile app up -d; else compose --profile app up -d --build; fi
   compose --profile app restart onboarding
   restart_changed_mounts || true
   reload_proxy  # a running proxy keeps its old Caddyfile until told
@@ -479,10 +601,38 @@ cmd_status() {
   say ""
   say "Public checks"
   local u code
-  for u in "https://$d/" "https://pass.$d/status/1" "https://login.$d/application/o/keycast/.well-known/openid-configuration" "https://$d/.well-known/belfry.json"; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$u" || true)
+  local login="https://login.$d/application/o/keycast/.well-known/openid-configuration"
+  # Belfry's own signer: no Authentik to ask; a member's username that resolves shows the
+  # signer answers (the name "_" is answered without asking it). The name: the first active
+  # account with one, read from the signer through the service.
+  if own_signer; then
+    local name
+    name=$(compose --profile app exec -T onboarding python -c '
+import httpx
+from belfry_onboarding.settings import Settings
+s = Settings()
+r = httpx.get(s.signer_url.rstrip("/") + "/accounts?status=active&limit=100",
+              headers={"Authorization": "Bearer " + s.signer_token}, timeout=10)
+r.raise_for_status()
+print(next((a["username"] for a in r.json().get("accounts", []) if a.get("username")), ""))' 2>/dev/null | tail -n1 || true)
+    if [[ "$name" =~ ^[a-z0-9][a-z0-9._-]{0,29}$ ]]; then
+      login="https://$d/.well-known/nostr.json?name=$name"
+    else
+      login="https://$d/.well-known/nostr.json?name=_ (no username read from the signer: is it up?)"
+    fi
+  fi
+  for u in "https://$d/" "https://pass.$d/status/1" "$login" "https://$d/.well-known/belfry.json"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${u%% *}" || true)
     printf '  %s  %s\n' "${code:-000}" "$u"
   done
+  if own_signer && [[ "$login" == *"name=$name" && -n "$name" ]]; then
+    # 200 alone is no answer: the name must come back with a key
+    if curl -s --max-time 10 "$login" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("names", {}).get(sys.argv[1]) else 1)' "$name" 2>/dev/null; then
+      say "  the signer answers: $name@$d has a key"
+    else
+      say "  the signer does NOT answer for $name@$d (belfry logs signer)"
+    fi
+  fi
   say ""
   say "Configured"
   local smtp; smtp=$(env_get SMTP_HOST)
@@ -745,19 +895,29 @@ if d["remaining_admins"]:
 if d["revert"]:
     print("Settings the setup page changed during the claim: " + ", ".join(sorted(d["revert"])))
 ' "$out"
-  if [[ "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["removed"]))' "$out")" == 0 ]]; then
+  local stuck
+  stuck=$(python3 -c 'import json,sys; print(1 if json.loads(sys.argv[1]).get("closed_without_admin") else 0)' "$out")
+  if [[ "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["removed"]))' "$out")" == 0 && "$stuck" != 1 ]]; then
     say "Nothing to reset. /setup is open while there is no admin: $link"
     return 0
+  fi
+  if [[ "$stuck" == 1 ]]; then
+    say "This belfry has members and no admin on record, so /setup is closed (a belfry with people is not handed to whoever comes first)."
+    say "Opening it lets the next visitor of $link become its admin."
   fi
   if [[ $yes -ne 1 ]]; then
     [[ -t 0 ]] || die "add --yes to reset without a terminal"
     local answer
-    read -r -p "Remove them and open the setup again? Type yes: " answer
+    if [[ "$stuck" == 1 ]]; then
+      read -r -p "Open the setup again? Type yes: " answer
+    else
+      read -r -p "Remove them and open the setup again? Type yes: " answer
+    fi
     [[ "$answer" == yes ]] || die "nothing changed"
   fi
   out=$(compose --profile app exec -T onboarding python -m belfry_onboarding setup-reset $all | tail -n1) \
     || die "the reset failed: see belfry logs onboarding"
-  say "Removed: $(python3 -c 'import json,sys; print(", ".join(json.loads(sys.argv[1])["removed"]))' "$out")"
+  say "Removed: $(python3 -c 'import json,sys; print(", ".join(json.loads(sys.argv[1])["removed"]) or "nobody")' "$out")"
   rm -f "$SETUP_DIR/pending.env"
   local changed=0
   if [[ $keep -ne 1 ]]; then
