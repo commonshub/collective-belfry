@@ -120,3 +120,44 @@ only; a new Closed group starts with no question and "by its stewards".
 
 After the form, the creator picks people from a grid of the belfry's members (the directory;
 not guests) and adds them: one `9000` per person, `["p", <pubkey>, "member"]`.
+
+## A channel's Settings (2026-11-22, Xavier's order)
+
+Top to bottom: Name and Description; Who can read it; Posts; E-mail; Pin. Nothing about
+notifications (they have their own row in the pull-down). The pull-down shows no e-mail address
+line: the address lives in Settings → E-mail only.
+
+**Posts: which kinds this channel takes.** One row per kind, each with a switch and one line of
+explanation, all on by default; at least one stays on:
+
+| Row | Line | id |
+|---|---|---|
+| Messages | "Plain messages, pictures and files" | `message` |
+| Threads | "Each post starts its own thread" | `thread` |
+| Events | "Dates people can answer" | `event` |
+| Proposals | "Texts to discuss and decide" | `proposal` |
+
+On the wire, in the channel's `belfry:web:<channel>` setting next to the old `posts`:
+`"accepts": ["message", "thread", "event", "proposal"]` (any non-empty subset; absent = all).
+A client that writes `accepts` also writes `posts` for older apps: `"anything"` when all four are
+on or when the set is none of the single cases; `"thread"`, `"event"` or `"proposal"` when that
+one alone is on. A client that reads prefers `accepts`; without it, `posts: anything` = all four
+and a single value = that kind alone. With `message` off the composer's plain send is replaced
+by the kinds that are on.
+
+**E-mail.** The channel's address (`POST /api/v1/mail-alias`, docs/mail.md "A channel's
+address"): shown to everyone who may edit the channel, editable by the belfry's admins only,
+with a live check (available / taken / reserved / invalid) before Save; automatic when nobody set
+one. Under it "E-mails from anyone" and "Forward e-mails", as before.
+
+**Pin.** "Pin for me", and for the belfry's admins "Pin for everyone". The main channel shows one
+line instead, not a disabled control: "Townsquare is always first in everyone's menu."
+
+## The Messages list: faces, not envelopes (2026-11-22)
+
+Every row is a face, a name in bold, then one line (the subject for an e-mail thread, else the
+last message), never an envelope icon. For an outside e-mail correspondent the face is their
+picture from `https://belfry.<domain>/api/v1/avatar/<sha256 of the trimmed, lowercased address>`
+when that answers 200, else a disc with their initials (from the name, else the address) in a
+colour picked from the hash. Apps cache by hash for 30 days (a 404 for 7) and never contact
+Gravatar themselves. A small envelope may mark the row's corner so e-mail stays recognisable.
