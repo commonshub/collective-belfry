@@ -7,7 +7,8 @@ their free pass, ``... steward-passes`` for the passes of all stewards;
 ``... accounting-check`` for the ticket seller's Odoo and its ids, ``... accounting-book [pass id]``
 to book paid tickets there (accounting.py); ``... setup-reset [--all-admins] [--dry-run]`` to
 open /setup again after a stranger claimed a new belfry (setup.reset; prints JSON, run by
-``belfry setup-reset``)."""
+``belfry setup-reset``); ``... mailcheck`` for port 25 of the MX over IPv4 and IPv6 (mailcheck.py,
+run at the end of ``belfry apply``)."""
 
 from __future__ import annotations
 
@@ -167,6 +168,11 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--amount", default="", help="in euros, e.g. 12.50")
     pl.add_argument("--communication", default="")
     pl.add_argument("--description", default="")
+    sub.add_parser(
+        "mailcheck",
+        help="connect to port 25 of the belfry's MX over IPv4 and IPv6 (EHLO, MAIL, RCPT, no "
+        "DATA): one line per family, exit 1 on any failure (belfry apply runs it)",
+    )
     imp = sub.add_parser(
         "register-import",
         help="copy people, passes and invites from Odoo into the belfry's own register",
@@ -189,6 +195,10 @@ def main(argv: list[str] | None = None) -> int:
         print(register_import(odoo, Register(settings.register_path, settings), args.force))
         return 0
     services = build_services(settings)
+    if args.command == "mailcheck":
+        from . import mailcheck
+
+        return mailcheck.cli(services)
     if args.command == "sales-status":
         from . import sales
 

@@ -720,6 +720,9 @@ services:
       # e-mail as messages (mail.py): name@ and channel@<domain> receive mail (the mail-in
       # service), members answer through the same SMTP server as Odoo (secret smtp_password)
       MAIL_IN: ${MAIL_IN:-1}
+      # the 5-minute check of port 25 from outside (mailcheck.py): empty = when the MX points
+      # here, 1 = always, 0 = never
+      MAILCHECK: ${MAILCHECK:-}
       SMTP_HOST: ${SMTP_HOST:-mailpit}
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USER: ${SMTP_USER:-}

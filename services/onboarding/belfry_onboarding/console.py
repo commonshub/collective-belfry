@@ -212,13 +212,17 @@ async def status_data(svc: Services) -> dict[str, Any]:
     if _status["data"] is not None and now - _status["at"] < STATUS_SECONDS:
         return _status["data"]
     services = await check_all(svc.settings)
+    from . import mailcheck
+
+    # "Mail in (IPv4 / IPv6)": the last 5-minute check of port 25 from outside (mailcheck.py)
+    services += await run_in_threadpool(mailcheck.status_rows, svc)
     log_data = await run_in_threadpool(community.read_changelog, svc.settings.changelog_path) or {}
     entries = log_data.get("entries") or []
     code = next((e for e in entries if e.get("type") == "code"), None)
     data = {
         "services": services,
-        "up": sum(1 for s in services if s["up"]),
-        "total": len(services),
+        "up": sum(1 for s in services if s["up"] is True),
+        "total": sum(1 for s in services if s["up"] is not None),
         "version": (code or {}).get("ref", "")[:12],
         "version_summary": (code or {}).get("summary", ""),
         "last_change": entries[0] if entries else None,
@@ -1111,9 +1115,12 @@ let it in: give it <a href="/agents.md">{E(console_url(s))}/agents.md</a>.</p></
 
 
 def status_html(status: dict[str, Any], who: dict[str, Any] | None, code: str = "") -> str:
+    def state(up: Any) -> tuple[str, str]:
+        return ("meta", "not checked") if up is None else (("up", "up") if up else ("down", "down"))
+
     rows = "".join(
-        f'<tr><td>{E(x["name"])}</td><td class="{"up" if x["up"] else "down"}">{"up" if x["up"] else "down"}</td>'
-        f'<td class="meta">{x["ms"]} ms · {E(x["detail"])}</td></tr>'
+        f'<tr><td>{E(x["name"])}</td><td class="{state(x["up"])[0]}">{state(x["up"])[1]}</td>'
+        f'<td class="meta">{str(x["ms"]) + " ms · " if x["ms"] else ""}{E(x["detail"])}</td></tr>'
         for x in status["services"]
     )
     last = status.get("last_change") or {}

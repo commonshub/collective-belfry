@@ -591,7 +591,33 @@ print(" ".join(sorted(k for k, v in (c.get("secrets") or {}).items()
   [[ -x infra/scripts/changelog.sh ]] && { infra/scripts/changelog.sh build || true; }
   write_version fetch || true
   prune_images || true
+  mail_check || true
   say "Done. belfry status shows the state."
+}
+
+# Port 25 of the MX over IPv4 and IPv6, from the onboarding container (mailcheck.py: EHLO, MAIL,
+# RCPT postmaster@, no DATA). Incoming mail broke twice without anyone noticing; an apply that
+# breaks it says so loudly here, but never fails because of it.
+mail_check() {
+  [[ "$(env_get MAIL_IN)" == 0 ]] && return 0
+  local out rc i
+  for i in 1 2 3; do  # mail-in and onboarding were just (re)started (a failing try: up to a minute)
+    rc=0; out=$(compose --profile app exec -T onboarding python -m belfry_onboarding mailcheck 2>&1) || rc=$?
+    [[ $rc -eq 0 ]] && break
+    sleep 5
+  done
+  say "Mail check (port 25 from outside):"
+  # its own lines (v4 …, v6 …, mail: …); anything else (a crash): the last lines as they came
+  { printf '%s\n' "$out" | grep -E '^(v4|v6|mail:) ' || printf '%s\n' "$out" | tail -n 4; } | sed 's/^/  /'
+  if [[ $rc -ne 0 ]]; then
+    say ""
+    say "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    say "  !! INCOMING MAIL IS BROKEN after this apply: senders over the family marked FAIL are"
+    say "  !! refused. Look at: docker logs belfry-mail-in-1, belfry status. The apply went on."
+    say "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    say ""
+  fi
+  return 0
 }
 
 cmd_status() {

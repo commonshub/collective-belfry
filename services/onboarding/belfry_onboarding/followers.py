@@ -525,6 +525,7 @@ def membership_round(svc: Services) -> None:
 def tick(svc: Services) -> None:
     from .drops import ensure_profile
     from .events import watch as events_watch
+    from .mailcheck import tick as mailcheck
     from .sales import tick as sales_tick
     from .welcome import tick as welcome_mails
 
@@ -538,6 +539,7 @@ def tick(svc: Services) -> None:
         membership_round,
         sales_tick,
         welcome_mails,
+        mailcheck,  # port 25 from outside, aside in its own thread (mailcheck.py)
     ):
         try:
             job(svc)

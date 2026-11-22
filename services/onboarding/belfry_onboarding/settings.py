@@ -147,6 +147,9 @@ class Settings(BaseSettings):
     # through the same SMTP server Odoo uses. MAIL_IN=0 turns both off.
     mail_in: bool = Field(default=True, alias="MAIL_IN")
     mail_max_bytes: int = Field(default=15_000_000, alias="MAIL_MAX_BYTES")
+    # The 5-minute check of port 25 from outside (mailcheck.py): "" = when the MX points here
+    # (or a check ever passed), "1" = always (the domain itself without an MX), "0" = never.
+    mailcheck: str = Field(default="", alias="MAILCHECK")
     smtp_host: str = Field(default="", alias="SMTP_HOST")
     smtp_port: int = Field(default=587, alias="SMTP_PORT")
     smtp_user: str = Field(default="", alias="SMTP_USER")
