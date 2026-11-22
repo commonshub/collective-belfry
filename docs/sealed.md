@@ -260,6 +260,13 @@ An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}
    shared history (8564). Remove needs nothing new: the roster without the device clears the
    notice everywhere. A device that does not know kind 8563 keeps its own notice until
    tapped (the behaviour before this rule).
+   Readings fixed with the first build (Android, vectors `confirm` in belfry-android
+   vectors/sealed.json): the rumor's `pubkey` is the seal's signer (never the account);
+   content empty; `p`, `device` and `e` exactly once; `e` is never the root; the notice is
+   per (device, the roster that LAST added it): a device removed and added again gets a new
+   notice; an 8563 whose roster this device does not have yet is kept and judged again when
+   the chain moves, up to 30 days, clearing nothing meanwhile; a device whose word would not
+   count clears its own notice and sends nothing.
    What this gives up, said plainly (§1): whoever can open a chat session on my account (the
    belfry's server, so its admins; or someone with my mailbox) gets my sealed messages the
    next time one of my devices is online, and I learn it from the notice, not before.
