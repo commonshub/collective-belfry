@@ -108,6 +108,23 @@ class Handler:
             return "451 4.3.0 Try again later"
 
 
+def smtp(handler: Handler, ctx: ssl.SSLContext | None = None) -> SMTP:
+    """One SMTP session as mail-in serves it (the end-to-end test uses the same)."""
+    return SMTP(
+        handler,
+        hostname=DOMAIN,
+        ident="Belfry",
+        data_size_limit=MAX_BYTES,
+        enable_SMTPUTF8=True,
+        decode_data=False,
+        tls_context=ctx,
+        require_starttls=False,
+        # inbound only: nobody logs in here, so AUTH is not offered at all (scanners tried AUTH
+        # LOGIN every few seconds on OSV; it always failed, without an authenticator)
+        auth_exclude_mechanism=["LOGIN", "PLAIN"],
+    )
+
+
 async def listen(loop: asyncio.AbstractEventLoop, factory, port: int = PORT) -> asyncio.Server:
     """Both families: mail-in sits on the IPv6 edge network, where Docker hands IPv6 senders
     straight to the container's IPv6 address (an IPv4-only listener refused every IPv6 sender,
@@ -128,20 +145,7 @@ async def main() -> None:
         handler = Handler(http)
 
         def factory() -> SMTP:
-            return SMTP(
-                handler,
-                hostname=DOMAIN,
-                ident="Belfry",
-                data_size_limit=MAX_BYTES,
-                enable_SMTPUTF8=True,
-                decode_data=False,
-                tls_context=ctx,
-                require_starttls=False,
-                # inbound only: nobody logs in here, so AUTH is not offered at all (scanners
-                # tried AUTH LOGIN every few seconds on OSV; it always failed, without an
-                # authenticator)
-                auth_exclude_mechanism=["LOGIN", "PLAIN"],
-            )
+            return smtp(handler, ctx)
 
         loop = asyncio.get_running_loop()
         server = await listen(loop, factory)
