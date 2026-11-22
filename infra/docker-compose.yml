@@ -723,6 +723,7 @@ services:
       # the 5-minute check of port 25 from outside (mailcheck.py): empty = when the MX points
       # here, 1 = always, 0 = never
       MAILCHECK: ${MAILCHECK:-}
+      AVATARS: ${AVATARS:-1}
       SMTP_HOST: ${SMTP_HOST:-mailpit}
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USER: ${SMTP_USER:-}

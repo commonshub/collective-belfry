@@ -145,10 +145,14 @@ def channel_name(svc: Services, channel: str) -> str:
 
 
 def alias(svc: Services, channel: str) -> str:
-    """The left part of the channel's address: its plain slug when that reaches it, else its id
-    (the chat's model.mailLocal)."""
-    from . import mail
+    """The left part of the channel's address: the alias a belfry admin chose for it
+    (mailalias.py), else its plain slug when that reaches it, else its id (the chat's
+    model.mailLocal)."""
+    from . import mail, mailalias
 
+    chosen = mailalias.custom(svc, channel)
+    if chosen:
+        return chosen
     want = mail._slug(channel_name(svc, channel)) or mail._SUFFIX.sub("", channel)
     if not want or want == channel:
         return channel

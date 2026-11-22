@@ -36,6 +36,25 @@ For a transition (an old mailbox moves into a channel but must keep getting ever
 - **Not forwarded**: mail refused at SMTP time (not posted), mail while the forward is `pending`, mail to members' own addresses, postmaster@ / abuse@, and what the channel sends out.
 - The native apps (iOS, Android) don't have this setting yet; the web chat does.
 
+## A channel's address
+
+A channel's address is derived: the plain slug of its name when that reaches it (`bugs@`), else its id (`bugs-c3e5@`). A belfry admin can give a channel another address (`hello@` for #contact). The setting is the belfry's own (register params `belfry.mail_alias.<channel>` and `belfry.mail_alias_of.<alias>`), not a Nostr event; own register only (`409 unsupported` with Odoo).
+
+`POST /api/v1/mail-alias` on `belfry.<domain>`, NIP-98, by whoever may edit the channel (the rule of `/mail-forward`: its admins, admins by role, the belfry's admins; members only):
+
+- `{"channel"}` → `{"channel", "alias", "address": "<alias>@<domain>", "custom": true|false, "may_set": true|false}`. `may_set`: the caller is a belfry admin. Apps show `address` wherever they show the channel's address, and send a shared inbox's replies from it.
+- `{"channel", "check": "<wanted>"}` → `{"state": "available" | "taken" | "invalid" | "reserved", "alias": "<normalised>"}`; nothing is written.
+- `{"channel", "alias": "<wanted>"}` sets it, `{"channel", "alias": null}` goes back to the derived address. Belfry admins only (`403 not_allowed`). Answers like the first form. Errors: `422 invalid`, `409 taken`, `409 reserved`, `409 archived`, `404 unknown_channel`, `503 signer` (usernames could not be checked).
+
+The rules:
+
+- Normalised = trimmed, lowercased, a trailing `@<domain>` dropped. Valid = `^[a-z0-9][a-z0-9._-]{0,29}$`.
+- Taken = a member's username or a guest's page name, another channel's chosen address, or anything that reaches another channel today (its id, its plain slug).
+- Reserved = the names nobody gets as a username (`usernames.RESERVED`, and the names accounts start with: `0007`, `guest-12`…) plus `postmaster`, `abuse`, `bounces`, `_smtp`, `_groups`; except `hello`, `info`, `support`, `help`, which people can't take and a channel may be given (`mailalias.FOR_CHANNELS`).
+- Whatever reaches the channel already (its current address, its plain slug, its id) is always `available` to it.
+- A chosen address wins over a name another channel merely derives. The channel's id and its plain slug keep working for incoming mail, so nothing bounces after a change; an address an admin replaced or took away stops working and is free again.
+- Forwarded copies leave from the chosen address, a shared inbox may answer as it, and nobody can take it as a username.
+
 ## Protocol
 
 There is no numbered NIP for e-mail. Belfry follows **Nostr Mail** ([nogringo/nostr-mail](https://github.com/nogringo/nostr-mail)), the convention Nostr mail clients use:

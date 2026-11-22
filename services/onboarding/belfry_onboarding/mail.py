@@ -220,7 +220,13 @@ def _makers(svc: Services) -> dict[str, str]:
 
 
 def channel_id(svc: Services, local: str) -> str | None:
-    """The channel LOCAL@ reaches: its id itself, or its plain slug."""
+    """The channel LOCAL@ reaches: the one a belfry admin gave that address (mailalias.py; it
+    wins over a name another channel merely derives), its id itself, or its plain slug."""
+    from . import mailalias
+
+    chosen = mailalias.channel_of(svc, local)
+    if chosen and channel_exists(svc, chosen):
+        return chosen
     if channel_exists(svc, local):
         return local
     try:

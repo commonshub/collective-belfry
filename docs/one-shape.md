@@ -161,3 +161,15 @@ picture from `https://belfry.<domain>/api/v1/avatar/<sha256 of the trimmed, lowe
 when that answers 200, else a disc with their initials (from the name, else the address) in a
 colour picked from the hash. Apps cache by hash for 30 days (a 404 for 7) and never contact
 Gravatar themselves. A small envelope may mark the row's corner so e-mail stays recognisable.
+
+## Faces for e-mail correspondents
+
+Someone who writes by e-mail has no profile. Apps show their Gravatar picture when there is one, else initials, and never ask Gravatar themselves (that would tell Gravatar who reads whose mail, and from where): the belfry asks, by hash, and keeps the answer.
+
+- Hash = SHA-256, 64 lowercase hex, of the address trimmed and lowercased (`" Marie@Example.org "` → the hash of `marie@example.org`).
+- `GET https://belfry.<domain>/api/v1/avatar/<hash>`: no sign-in (it is loaded as a picture); CORS like the rest of the API.
+- `200` = the picture (JPEG, PNG, WebP or GIF, 160 px, at most 200 kB), `Cache-Control: public, max-age=2592000, immutable`.
+- `404` = draw initials. `max-age=604800` when Gravatar has no picture; `max-age=600` when Gravatar did not answer or the belfry has faces turned off. `429` when one address of the network asks more than 600 times a minute.
+- Apps cache by hash (the HTTP cache does it; honour the `max-age` of a 404 too) and never call Gravatar or any other service with the address or its hash.
+
+On the server (mailfaces.py): pictures are kept 30 days and "no picture" 7 days in the folder `faces/` next to the register, at most 5000 entries; a failure is remembered 10 minutes; one request to Gravatar per hash at a time. `AVATARS=0` in `infra/.env` turns it off: always `404`, nothing is asked.
