@@ -135,6 +135,14 @@ Plaintext (JSON, at most 2 KB before encryption; `body` cut to 180 characters):
   `https://chat.<domain>/#/events/<link>`, no `event` / `from`; `collapse` = the group id,
   `urgent` true. Skipped when the person set that group to `off`. Other server-sent types:
   `agent_request` (docs/agents.md), `membership_request` (docs/membership.md).
+- *(built 2026-11-22)* event_invite: sent by the events watcher (not the push watcher) once to
+  each person a host invites to an event or a meeting (docs/checkin.md "Inviting people to an
+  event"). `title` = "<Host> invited you", `body` = "<the event's title> · <when>", `channel` =
+  `ev-<d>`, `url` = `https://chat.<domain>/#/events/<link>`, no `event` / `from`; `collapse` =
+  the group id, `urgent` true. No switch of its own: it is sent when a mention in `ev-<d>` would
+  be (the Mentions switch on, or the event at `all`; never at `off`). The gateway never sees the
+  type; an app that does not know it still shows the title and body (iOS files it under "All
+  messages"), and a tap opens the event where the app reads `#/events/<link>`, else its home.
 
 ## 5. What triggers a notification (the belfry's watcher)
 

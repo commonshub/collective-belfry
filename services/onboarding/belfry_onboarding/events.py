@@ -136,6 +136,12 @@ class Store:
             )
         return cur.rowcount == 1
 
+    def was(self, key: str) -> bool:
+        """Whether KEY was asked of ``once`` before (nothing is written)."""
+        with self._lock:
+            row = self._db.execute("SELECT 1 FROM sent WHERE key = ?", (key,)).fetchone()
+        return row is not None
+
     def param(self, key: str, default: str = "") -> str:
         with self._lock:
             row = self._db.execute("SELECT value FROM params WHERE key = ?", (key,)).fetchone()
@@ -1470,7 +1476,7 @@ def watch(svc: Services) -> dict[str, int]:
     since = int(st.param("watch.since", str(now - 3600)))
     found = groups(svc, [{"kinds": [9000, 9001, 1985], "since": max(0, since - 120)}])
     mailer = Mailer(svc.settings)
-    done = {"going": 0, "declined": 0, "cancelled": 0, "reminded": 0}
+    done = {"going": 0, "declined": 0, "cancelled": 0, "reminded": 0, "invited": 0}
     cache: dict[str, Event | None] = {}
 
     def event(d: str) -> Event | None:
@@ -1502,7 +1508,12 @@ def watch(svc: Services) -> dict[str, int]:
             if any(t[:2] == ["l", "cancelled"] for t in e.get("tags", [])):
                 done["cancelled"] += _cancelled(svc, ev, mailer, st)
     st.set_param("watch.since", str(now))
-    done["reminded"] = remind(svc, mailer, st)
+    recent = _recent(svc)
+    done["reminded"] = remind(svc, mailer, st, recent)
+    try:
+        done["invited"] = invite(svc, mailer, st, recent)
+    except Exception as exc:  # noqa: BLE001 — the next round tries again; the rest is done
+        log.warning("events: invitations not told: %s", exc)
     return done
 
 
@@ -1572,15 +1583,19 @@ def _cancelled(svc: Services, ev: Event, mailer: Any, st: Store) -> int:
     return n
 
 
-def remind(svc: Services, mailer: Any, st: Store) -> int:
-    """The day before: ticket holders with an address get the when and where."""
+def _recent(svc: Services) -> list[Event]:
+    """The events with a version of the last 120 days, as they stand now."""
     found = community(svc, [{"kinds": list(KINDS), "since": int(time.time()) - 120 * 86400}])
     ds = sorted({tag(e, "d") or "" for e in found if D_RE.match(tag(e, "d") or "")})
+    return [ev for ev in (load(svc, d) for d in ds) if ev is not None]
+
+
+def remind(svc: Services, mailer: Any, st: Store, recent: list[Event] | None = None) -> int:
+    """The day before: ticket holders with an address get the when and where."""
     now = dt.datetime.now(dt.UTC)
     n = 0
-    for d in ds:
-        ev = load(svc, d)
-        if ev is None or ev.status == "cancelled" or ev.start is None:
+    for ev in _recent(svc) if recent is None else recent:
+        if ev.status == "cancelled" or ev.start is None:
             continue
         start = (
             ev.start
@@ -1600,6 +1615,129 @@ def remind(svc: Services, mailer: Any, st: Store) -> int:
                 )
                 n += 1
     return n
+
+
+# ── invited people: told once, by push and by e-mail (docs/checkin.md) ──────────────────────
+INVITE_QUIET = 3600  # a version older than this when first seen: its people count as told
+
+
+def invited_of(ev: Event) -> list[str]:
+    """Who the event's current version invites: its ``["p", <key>, "", "invited"]`` tags. The
+    version is already the newest one by someone who may edit the event (``load``)."""
+    out: list[str] = []
+    for t in ev.version.get("tags", []):
+        if t[:1] == ["p"] and len(t) > 3 and t[3] == "invited":
+            key = str(t[1]).lower()
+            if re.fullmatch(r"[0-9a-f]{64}", key) and key not in out:
+                out.append(key)
+    return out
+
+
+def invite(svc: Services, mailer: Any, st: Store, recent: list[Event] | None = None) -> int:
+    """Each person an upcoming event invites is told once per (event, person): one push (type
+    ``event_invite``) and one e-mail. Never the event's author, never someone who answered
+    already, never twice (a person taken off and put back is not told again)."""
+    from .community import UNKNOWN
+
+    now = int(time.time())
+    told = 0
+    for ev in _recent(svc) if recent is None else recent:
+        if ev.status == "cancelled" or ev.ended():
+            continue
+        keys = invited_of(ev)
+        # the first time the watcher meets this event: a version that has been there for a
+        # while is history (meetings carried these tags before the belfry told anyone, and a
+        # restart after a long stop must not flood): its people count as told
+        first = st.once(f"invite-seen:{ev.d}")
+        if first and int(ev.version.get("created_at", 0)) < now - INVITE_QUIET:
+            for key in keys:
+                st.once(f"invite:{ev.d}:{key}")
+            continue
+        fresh = [k for k in keys if k not in (ev.creator, ev.version.get("pubkey"))]
+        if not fresh:
+            continue
+        ppl: People | None = None
+        host = ""
+        for key in fresh:
+            if st.was(f"invite:{ev.d}:{key}"):
+                continue
+            rows = [p for p in passes_of(svc, key) if p.get("state") == "active"]
+            if not rows:
+                continue  # no pass (yet): nothing kept, they are told once they have one
+            if ppl is None:
+                ppl = people(svc, ev)
+            if not st.once(f"invite:{ev.d}:{key}"):
+                continue
+            if key in ppl.rsvps or key in ppl.holders:
+                continue  # answered already: nothing to tell, now or later
+            if not host:
+                by = str(ev.version.get("pubkey") or ev.creator)
+                host = names(svc, [by]).get(by) or UNKNOWN
+            _push_invite(svc, ev, key, host)
+            agent = all(p.get("tier") == "agent" for p in rows)
+            email = "" if agent else _proven_email(svc, rows)
+            if email:
+                when = when_text(ev)
+                lines = [f"{host} invited you to {ev.title}" + (f", {when}." if when else ".")]
+                if _where_text(ev):
+                    lines.append(_where_text(ev))
+                mailer.send(
+                    email,
+                    f"{host} invited you to {ev.title}",
+                    lines,
+                    button=(chat_url(svc, ev), "Open the event"),
+                )
+            told += 1
+    return told
+
+
+def _proven_email(svc: Services, rows: list[dict[str, Any]]) -> str:
+    """The contact's own address behind these active passes: the one they proved. Never an
+    event pass's ``event_email`` (typed on a form, unproven), never a pending address."""
+    for p in rows:
+        pid = m2o_id(p.get("partner_id"))
+        if pid:
+            partner = svc.odoo.read_one("res.partner", pid, ["email"]) or {}
+            if partner.get("email"):
+                return str(partner["email"])
+    return ""
+
+
+def _push_invite(svc: Services, ev: Event, pubkey: str, host: str) -> int:
+    """Push type ``event_invite`` to the person's phones, when push is on. It follows their
+    Mentions switch and the event's own level (off = nothing), as a mention there would."""
+    from . import push as push_mod
+
+    try:
+        if not push_mod.enabled(svc):
+            return 0
+        devices = svc.odoo.push_devices([pubkey])
+        if not devices:
+            return 0
+        partner = next((m2o_id(d.get("partner_id")) for d in devices if d.get("partner_id")), None)
+        if partner:
+            prefs = push_mod.get_settings(svc, int(partner))
+            if push_mod.allowed(prefs, ev.group, "mention") is None:
+                return 0
+        gateway = push_mod.Gateway(svc)
+        plain = {
+            "v": 1,
+            "domain": svc.settings.nip05_domain,
+            "type": "event_invite",
+            "title": f"{host} invited you",
+            "body": " · ".join(x for x in (ev.title or "An event", when_text(ev)) if x),
+            "channel": ev.group,
+            "url": chat_url(svc, ev),
+        }
+        sent = 0
+        for d in devices:
+            payload = push_mod.encrypt(d["key"], push_mod.fit(plain))
+            if gateway.send(d, payload, ev.group, True) == "ok":
+                sent += 1
+        return sent
+    except Exception:  # noqa: BLE001 — the e-mail and the app's Invited list still tell them
+        log.exception("events %s: no push for an invitation", ev.d)
+        return 0
 
 
 def when_text(ev: Event) -> str:

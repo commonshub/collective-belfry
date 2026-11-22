@@ -53,6 +53,12 @@ default while it needs me) and full.
 - **Activity lines**: an action about an item (to-do made or done, RSVP, meeting, vote) shows as
   one line with a hook to open a small preview of the item with its quick action. Open or
   closed is remembered per item on the device only. A preview that needs me starts open.
+- **Hosts and invitations** (2026-11-22): Host, for display, is the event's or meeting's maker
+  only; co-hosts by role read "Co-host"; belfry admins who are in the chat's 39001 only because
+  they are belfry admins are not shown as hosts. Any event with a `["p", <me>, "", "invited"]`
+  tag for me shows under Calendar · Invited until I answer, not only meetings (the wire, the
+  chat line `["invited", "event"]` and what the belfry sends: docs/checkin.md "Inviting people
+  to an event").
 - **To-do description**: `["description", "<Markdown, at most 2000 characters>"]` on the kind
   2100, optional; the title stays where it is today. Changed by the author's kind 1010 edit,
   like the due date. A to-do without one shows the text of the message it was made from (its

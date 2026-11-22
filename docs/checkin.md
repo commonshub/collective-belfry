@@ -131,6 +131,51 @@ Storage: register table `cohost_invites`, one row per (event `d`, key). A pendin
 lapses when the event is over or 30 days after it was sent: it reads as gone (not listed, not
 answerable) and may be sent again.
 
+### Inviting people to an event (2026-11-22)
+
+A host invites people to an event, or to a meeting (a meeting is an event), on the event itself.
+Nothing is asked of the belfry: the host's app publishes two things.
+
+- **The invitation**: a new version of the NIP-52 event (kind 31922 / 31923, same `d`) with one
+  tag per invited person, `["p", "<pubkey hex>", "", "invited"]`, next to all its other tags. A
+  later version without the tag takes the person off the list. It counts only on the version
+  the belfry reads as the event (`events.load`): the newest one signed by the event's maker, an
+  admin of `ev-<d>` (relay list or by role) or a belfry admin.
+- **The line in the event's chat**: a kind 9 in `ev-<d>` with `["h", "ev-<d>"]`, one
+  `["p", "<pubkey hex>"]` per person invited with it, and `["invited", "event"]`. Apps that know
+  the tag draw a system line "<host> invited <names>"; only a line by the maker, a co-host by
+  role or a belfry admin counts (any other is shown as an ordinary message, or not at all). The
+  belfry does not read this line: it is for the apps.
+
+The belfry's events watcher (`events.invite`, every round of the followers tick) tells each
+invited person **once per (event, person)**:
+
+- push type `event_invite` (docs/push.md §4): title "<Host> invited you", body = the event's
+  title and when, `channel` = `ev-<d>`, `url` = the event in the chat;
+- one e-mail "<Host> invited you to <title>": when (in the event's time zone), where if it has
+  a place, a button to the event in the chat. Only to the contact's proven address (never an
+  event form's unproven `event_email`, never a pending address). An agent gets the push only.
+
+"<Host>" is the name of whoever signed that version (a person without a name reads
+"Somebody"; never a key).
+
+Who is told: someone with an active pass (member, guest, agent) who is not the event's maker
+nor the signer of that version, holds no ticket of the event and has not answered it (no
+kind 31925 RSVP of theirs for it). Not for a cancelled event, nor one that is over. Someone
+without a pass is told once they have one, if they are still invited then.
+
+Never twice: (`d`, key) is kept in `events.sqlite` (table `sent`, key `invite:<d>:<key>`), so a
+later version, a restart, or being taken off and put back sends nothing more. Someone who had
+answered already when the belfry looked is kept as told too.
+
+No flood: the first time the watcher meets an event (key `invite-seen:<d>`), if its current
+version is more than an hour old, the people it invites are kept as told without anything
+sent (meetings carried these tags before the belfry told anyone; the same after a long stop).
+
+Limits: the watcher looks at events with a version of the last 120 days, as the reminder does.
+There is no setting of its own: the push follows the person's Mentions switch and the event's
+level (`off` = none); the e-mail is always sent.
+
 ## 2. Tickets and their QR
 
 Who holds a ticket: a 9000 with a `ticket` tag (not taken back by a later 9001); on an event that
