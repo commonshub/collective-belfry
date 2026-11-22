@@ -2412,7 +2412,10 @@ mod tests {
             .iter()
             .filter(|c| c["app"] == "Wallet")
             .count();
-        assert_eq!(wallets, 2, "nothing pruned for a connection not handed out: {list}");
+        assert_eq!(
+            wallets, 2,
+            "nothing pruned for a connection not handed out: {list}"
+        );
         // the bunker subscribes while the caller waits: handed out
         let waiter = {
             let (app, client) = (app.clone(), client.clone());
