@@ -94,7 +94,10 @@ def real_domain(name: str) -> bool:
         return False
     except ValueError:
         pass
-    return name.rsplit(".", 1)[1] not in NOT_REAL
+    reserved = ("example.com", "example.net", "example.org")  # RFC 2606
+    return name.rsplit(".", 1)[1] not in NOT_REAL and not any(
+        name == r or name.endswith("." + r) for r in reserved
+    )
 
 
 def target(svc: Services) -> dict[str, Any]:

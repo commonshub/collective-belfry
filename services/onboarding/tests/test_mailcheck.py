@@ -356,6 +356,7 @@ def test_no_mx_is_checked_only_with_mailcheck_1_or_after_a_pass(mc, monkeypatch)
         ({"mailcheck": "0"}, "MAILCHECK=0"),
         ({"nip05_domain": "belfry.test"}, "no public domain"),
         ({"nip05_domain": "localhost"}, "no public domain"),
+        ({"nip05_domain": "belfry.example.org"}, "no public domain"),
     ],
 )
 def test_off_switches(mc, monkeypatch, change, why):
