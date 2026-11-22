@@ -8,6 +8,12 @@ RCPT TO:<postmaster@domain>, then RSET and QUIT: never DATA, nothing is delivere
 through mail-in to the onboarding service (/internal/mail/rcpt), so a backend that does not
 answer fails the check too (451).
 
+The probe itself runs on the host (smtpprobe.py, belfry-mailcheck.timer): a container on the edge
+bridge cannot reach the box's own IPv6 on port 25. Each round writes what the host should probe
+(``mailcheck-target.json`` in the setup folder) and takes each family from the host's result
+(``mailcheck.json``) when it is at most 15 minutes old; otherwise it probes from here, where a
+family without a route is "not checked".
+
 When it runs (``wanted``): MAIL_IN is on, MAILCHECK is not 0, the domain is a real one, and
 either the domain's MX points at this belfry (the MX host is the domain itself, or shares an
 address with it: the apex points at the box), or MAILCHECK=1, or a check here ever passed. An MX
@@ -24,18 +30,17 @@ reach at all (no IPv6 route here) is "not checked", never a failure.
 
 from __future__ import annotations
 
-import errno
 import ipaddress
 import json
 import logging
-import re
-import smtplib
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
+from . import smtpprobe
 from .core import Services
 
 log = logging.getLogger(__name__)
@@ -46,12 +51,9 @@ START_DELAY = 60  # not in the first minute after a start (short-lived test apps
 TIMEOUT = 20.0  # seconds, per connection and per command
 FAILS_TO_TELL = 2  # failed rounds in a row before the admins hear (no flapping on one blip)
 PORT = 25
+HOST_FRESH = 900  # the host's last round counts for 15 minutes; older, onboarding probes itself
 FAMILIES = {"v4": ("A", "IPv4"), "v6": ("AAAA", "IPv6")}
 NOT_REAL = {"test", "localhost", "local", "example", "invalid", "internal", "lan", "home"}
-# a connect that fails here, at once, because this container has no route for the family: not a
-# failure of the mail server
-LOCAL_ERRNOS = {errno.ENETUNREACH, errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT, errno.EHOSTUNREACH}
-ADDRESS = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+")
 
 _lock = threading.Lock()
 _running = threading.Lock()
@@ -126,11 +128,7 @@ def target(svc: Services) -> dict[str, Any]:
 
 
 # ── one SMTP conversation ───────────────────────────────────────────────────────────────────
-def _clean(text: Any) -> str:
-    """An SMTP answer for the logs and the status page: one line, no addresses."""
-    if isinstance(text, bytes):
-        text = text.decode("utf-8", "replace")
-    return ADDRESS.sub("…", " ".join(str(text).split()))[:160]
+_clean = smtpprobe.clean
 
 
 def _no_admin(svc: Services | None) -> bool:
@@ -145,69 +143,73 @@ def _no_admin(svc: Services | None) -> bool:
 
 
 def probe(ip: str, dom: str, svc: Services | None = None, port: int | None = None) -> dict:
-    """EHLO, MAIL FROM, RCPT TO postmaster@, RSET, QUIT at IP. {"ok": True|False|None, "detail"}
-    (None: this container cannot reach that family at all)."""
-    start = time.monotonic()
+    """EHLO, MAIL FROM, RCPT TO postmaster@, RSET, QUIT at IP from this container
+    (smtpprobe.probe). {"ok": True|False|None, "detail"} (None: no route from here)."""
+    return smtpprobe.probe(ip, dom, lambda: _no_admin(svc), port=port or PORT, timeout=TIMEOUT)
+
+
+# ── the host's results and what it should probe (the setup folder) ──────────────────────────
+def _setup(svc: Services) -> Path | None:
+    from .setup import setup_dir
+
+    return setup_dir(svc.settings)
+
+
+def write_target(svc: Services, active: bool, reason: str = "", where: dict | None = None) -> None:
+    """What the host's probe (belfry-mailcheck.timer) connects to: ``mailcheck-target.json``."""
+    folder = _setup(svc)
+    if folder is None:
+        return
+    data: dict[str, Any] = {"at": int(time.time()), "domain": domain(svc), "active": active}
+    if reason:
+        data["reason"] = reason
+    if where:
+        data.update(host=where["host"], addresses=where["addresses"], no_admin=_no_admin(svc))
     try:
-        conn = smtplib.SMTP(timeout=TIMEOUT, local_hostname=f"mailcheck.{dom}")
-        try:
-            code, banner = conn.connect(ip, port or PORT)
-        except OSError as exc:
-            if getattr(exc, "errno", None) in LOCAL_ERRNOS and time.monotonic() - start < 2:
-                return {"ok": None, "detail": "no route from inside the belfry"}
-            raise
-        if code != 220:
-            return {"ok": False, "detail": f"greeting {code} {_clean(banner)}"}
-        code, text = conn.ehlo()
-        if code != 250:
-            return {"ok": False, "detail": f"EHLO {code} {_clean(text)}"}
-        code, text = conn.mail(f"mailcheck@{dom}")
-        if code != 250:
-            return {"ok": False, "detail": f"MAIL FROM {code} {_clean(text)}"}
-        code, text = conn.rcpt(f"postmaster@{dom}")
-        detail = ""
-        if code != 250:
-            # 550 "no one is called postmaster": mail-in and the belfry answer, there is just no
-            # admin yet (postmaster@ goes to the admins)
-            if 500 <= code < 600 and _no_admin(svc):
-                detail = f"answers (postmaster@ refused, {code}: no admin yet)"
-            else:
-                return {"ok": False, "detail": f"RCPT {code} {_clean(text)}"}
-        try:
-            conn.rset()
-            conn.quit()
-        except (smtplib.SMTPException, OSError):
-            conn.close()
-        ms = int((time.monotonic() - start) * 1000)
-        return {"ok": True, "detail": detail or f"answers ({ms} ms)", "ms": ms}
-    except smtplib.SMTPServerDisconnected as exc:
-        return {"ok": False, "detail": f"disconnected: {_clean(exc) or 'no answer'}"}
-    except TimeoutError:
-        return {"ok": False, "detail": f"no answer within {int(TIMEOUT)} s"}
-    except ConnectionRefusedError:
-        return {"ok": False, "detail": "connection refused"}
-    except (smtplib.SMTPException, OSError) as exc:
-        return {"ok": False, "detail": f"{type(exc).__name__}: {_clean(exc)}"}
+        smtpprobe.write_json(folder / smtpprobe.TARGET, data)
+    except OSError as exc:
+        log.info("mailcheck: target not written: %s", type(exc).__name__)
 
 
-def check(svc: Services, anyway: bool = False) -> dict[str, Any]:
-    """One round, nothing stored: {"host", "mx", "ours", "families": {v4: {...}, v6: {...}}}
-    (a family without an address: {"ok": None, "detail": "no A record"}). A target that is not
-    this belfry's is not connected to (no "families") unless ANYWAY. Raises OSError when DNS
-    does not answer."""
+def host_results(svc: Services, now: float | None = None) -> dict[str, Any]:
+    """The host's last round (``mailcheck.json``) when it is at most HOST_FRESH old, else {}:
+    {v4: {...}, v6: {...}} as probe() answers. The host reaches the box's public addresses on
+    every family; a container on the edge bridge cannot reach its own IPv6 on port 25."""
+    folder = _setup(svc)
+    if folder is None:
+        return {}
+    got = smtpprobe.read_json(folder / smtpprobe.RESULT)
+    now = time.time() if now is None else now
+    if not got.get("active") or now - float(got.get("at") or 0) > HOST_FRESH:
+        return {}
+    return {f: got[f] for f in FAMILIES if isinstance(got.get(f), dict) and "ok" in got[f]}
+
+
+def check(svc: Services, anyway: bool = False, use_host: bool = True) -> dict[str, Any]:
+    """One round: {"host", "mx", "ours", "families": {v4: {...}, v6: {...}}} (a family without
+    an address: {"ok": None, "detail": "no A record"}). A target that is not this belfry's is
+    not connected to (no "families") unless ANYWAY. Writes the host's target. Each family comes
+    from the host's last round when it is fresh (USE_HOST), else from a probe from here. Raises
+    OSError when DNS does not answer."""
     dom = domain(svc)
     where = target(svc)
     out: dict[str, Any] = {k: where[k] for k in ("host", "mx", "ours")}
     if not where["ours"] and (where["mx"] or not anyway):
+        write_target(svc, False, "the MX points to another mail server" if where["mx"] else "no MX")
         return out  # an MX elsewhere is never probed, not even with MAILCHECK=1
+    write_target(svc, True, where=where)
     fams: dict[str, Any] = {}
+    hosted = host_results(svc) if use_host else {}
 
     def one(fam: str) -> tuple[str, dict]:
         ips = where["addresses"].get(fam) or []
         if not ips:
             return fam, {"ok": None, "detail": f"no {FAMILIES[fam][0]} record", "none": True}
+        if fam in hosted:
+            got = {k: hosted[fam][k] for k in ("ok", "detail", "ms") if k in hosted[fam]}
+            return fam, {**got, "ip": hosted[fam].get("ip") or ips[0], "by": "host"}
         got = probe(ips[0], dom, svc)
-        return fam, {**got, "ip": ips[0]}
+        return fam, {**got, "ip": ips[0], "by": "onboarding"}
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         for fam, got in pool.map(one, FAMILIES):
@@ -266,6 +268,7 @@ def run_round(svc: Services, now: float | None = None) -> dict[str, Any]:
     state = load(svc)
     go, why = wanted(svc, state)
     if not go:
+        write_target(svc, False, why)
         state.update(active=False, reason=why, checked=int(now))
         save(svc, state)
         return state
@@ -304,6 +307,8 @@ def run_round(svc: Services, now: float | None = None) -> dict[str, Any]:
         rec["detail"] = got["detail"]
         if got.get("ip"):
             rec["ip"] = got["ip"]
+        rec["by"] = got.get("by") or ""
+        rec["ms"] = int(got.get("ms") or 0)
         if got["ok"] is True:
             if prev.get("ok") is not True:
                 rec["since"] = int(now)
@@ -478,25 +483,42 @@ def status_rows(svc: Services) -> list[dict[str, Any]]:
                 "name": f"Mail in ({label})",
                 "up": rec.get("ok"),
                 "ms": int(rec.get("ms") or 0),
-                "detail": (rec.get("detail") or "") + when,
+                "detail": (rec.get("detail") or "")
+                + (" (from the host)" if rec.get("by") == "host" else "")
+                + when,
             }
         )
     return rows
 
 
 # ── the command (belfry apply) ──────────────────────────────────────────────────────────────
-def cli(svc: Services, out: Any = None) -> int:
-    """``python -m belfry_onboarding mailcheck``: one line per family, exit 1 on any failure.
-    Checks now, whatever the stored state; stores nothing and tells nobody."""
+def cli(svc: Services, out: Any = None, target_only: bool = False) -> int:
+    """``python -m belfry_onboarding mailcheck``: probes from this container now, one line per
+    family, exit 1 on any failure; stores nothing and tells nobody. TARGET_ONLY (``--target``):
+    only write what the host's probe connects to (``belfry mailcheck`` and ``belfry apply`` run
+    it first, then smtpprobe.py on the host)."""
     import sys
 
     out = out or sys.stdout
     go, why = wanted(svc)
     if not go:
+        write_target(svc, False, why)
         print(f"mail: not checked: {why}", file=out)
         return 0
+    if target_only:
+        try:
+            where = target(svc)
+        except OSError as exc:
+            print(f"mail: no target: {_clean(exc)}", file=out)
+            return 1
+        if not where["ours"] and where["mx"]:
+            write_target(svc, False, "the MX points to another mail server")
+        else:
+            write_target(svc, True, where=where)
+        print(f"mail: target {where['host']}", file=out)
+        return 0
     try:
-        result = check(svc, anyway=True)
+        result = check(svc, anyway=True, use_host=False)
     except OSError as exc:
         print(f"mail: FAIL: {_clean(exc)}", file=out)
         return 1

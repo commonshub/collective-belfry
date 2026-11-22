@@ -169,6 +169,7 @@ def test_a_server_on_ipv4_only_fails_the_ipv6_check(mc, monkeypatch):
         "ok": False,
         "detail": "connection refused",
         "ip": "::1",
+        "by": "onboarding",
     }
     lines = out.getvalue().splitlines()
     assert code == 1
@@ -391,3 +392,164 @@ def test_the_status_page_shows_the_rows(mc, monkeypatch):
         {"services": rows, "up": 1, "total": 2, "checked": 1000, "last_change": None}, None
     )
     assert "Mail in (IPv4)" in html and "Mail in (IPv6)" in html and "connection refused" in html
+
+
+# ── the host's probe (smtpprobe.py, belfry-mailcheck.timer) and its file ───────────────────
+from belfry_onboarding import smtpprobe  # noqa: E402
+
+
+@pytest.fixture
+def setup_dir(mc, tmp_path):
+    folder = tmp_path / "setup"
+    folder.mkdir()
+    mc.settings.setup_dir = str(folder)
+    return folder
+
+
+def host_file(folder, v4, v6, at):
+    data = {"active": True, "at": at, "host": DOMAIN}
+    for fam, ok in (("v4", v4), ("v6", v6)):
+        data[fam] = {
+            "ok": ok,
+            "detail": "answers (5 ms)" if ok else "no answer within 20 s",
+            "at": at,
+            "ip": BOX4 if fam == "v4" else BOX6,
+        }
+    smtpprobe.write_json(folder / smtpprobe.RESULT, data)
+
+
+def test_a_round_writes_the_hosts_target(mc, setup_dir, monkeypatch):
+    answers(mc, monkeypatch, True, True)
+    mailcheck.run_round(mc, now=1000)
+    target = json.loads((setup_dir / smtpprobe.TARGET).read_text())
+    assert target["active"] is True and target["domain"] == DOMAIN and target["host"] == DOMAIN
+    assert target["addresses"] == {"v4": [BOX4], "v6": [BOX6]} and target["no_admin"] is False
+    mc.settings.mailcheck = "0"
+    mailcheck.run_round(mc, now=1300)
+    target = json.loads((setup_dir / smtpprobe.TARGET).read_text())
+    assert target["active"] is False and "MAILCHECK=0" in target["reason"]
+
+
+def test_a_fresh_host_result_is_used_instead_of_probing_from_here(mc, setup_dir, monkeypatch):
+    """belfry.sh: from the edge bridge the box's own IPv6:25 times out; from the host it answers."""
+    import time as _time
+
+    called = []
+    monkeypatch.setattr(
+        mailcheck, "probe", lambda ip, dom, svc=None, port=None: called.append(ip) or {}
+    )
+    host_file(setup_dir, True, True, _time.time() - 60)
+    state = mailcheck.run_round(mc)
+    assert not called
+    assert {f: (r["ok"], r["by"]) for f, r in state["families"].items()} == {
+        "v4": (True, "host"),
+        "v6": (True, "host"),
+    }
+    assert "(from the host)" in mailcheck.status_rows(mc)[1]["detail"]
+
+
+def test_the_host_seeing_ipv6_down_twice_tells_the_admins(mc, setup_dir, monkeypatch):
+    import time as _time
+
+    monkeypatch.setattr(mailcheck, "probe", lambda *a, **k: pytest.fail("no probe from here"))
+    now = _time.time()
+    host_file(setup_dir, True, True, now - 30)
+    mailcheck.run_round(mc, now=now)
+    host_file(setup_dir, True, False, now - 30)
+    mailcheck.run_round(mc, now=now + 1)
+    assert not mailer.SENT
+    mailcheck.run_round(mc, now=now + 2)
+    [down] = mailer.SENT
+    assert down["Subject"] == f"Mail to {DOMAIN} is not arriving over IPv6"
+    host_file(setup_dir, True, True, now - 30)
+    mailcheck.run_round(mc, now=now + 3)
+    assert mailer.SENT[-1]["Subject"] == f"Mail to {DOMAIN} arrives again over IPv6"
+
+
+def test_a_stale_host_result_means_probing_from_here(mc, setup_dir, monkeypatch):
+    import time as _time
+
+    host_file(setup_dir, False, False, _time.time() - mailcheck.HOST_FRESH - 60)
+    answers(mc, monkeypatch, True, None)  # from here: IPv4 answers, IPv6 has no route
+    state = mailcheck.run_round(mc)
+    assert state["families"]["v4"]["ok"] is True and state["families"]["v4"]["by"] == "onboarding"
+    assert state["families"]["v6"]["ok"] is None  # not checked, never a failure
+    assert not mailer.SENT
+    assert mailcheck.host_results(mc) == {}
+
+
+def test_a_host_file_marked_inactive_or_broken_is_ignored(mc, setup_dir):
+    (setup_dir / smtpprobe.RESULT).write_text("{not json")
+    assert mailcheck.host_results(mc) == {}
+    smtpprobe.write_json(setup_dir / smtpprobe.RESULT, {"active": False, "at": 10**10})
+    assert mailcheck.host_results(mc) == {}
+
+
+def test_the_target_command(mc, setup_dir):
+    out = io.StringIO()
+    assert mailcheck.cli(mc, out, target_only=True) == 0
+    assert out.getvalue() == f"mail: target {DOMAIN}\n"
+    assert json.loads((setup_dir / smtpprobe.TARGET).read_text())["addresses"]["v4"] == [BOX4]
+
+
+def test_the_host_probe_reads_the_target_and_writes_its_result(tmp_path, capsys):
+    import time as _time
+
+    srv = Server(Recorder(), families=("127.0.0.1",))
+    try:
+        smtpprobe.write_json(
+            tmp_path / smtpprobe.TARGET,
+            {
+                "at": _time.time(),
+                "active": True,
+                "domain": DOMAIN,
+                "host": DOMAIN,
+                "addresses": {"v4": ["127.0.0.1"], "v6": []},
+            },
+        )
+        got = smtpprobe.host_round(tmp_path, port=srv.port)
+    finally:
+        srv.stop()
+    assert got["v4"]["ok"] is True and got["v4"]["ip"] == "127.0.0.1"
+    assert got["v6"]["ok"] is None and got["v6"]["none"]
+
+
+@pytest.mark.skipif(not _has_ipv6(), reason="no IPv6 on this machine")
+def test_the_host_probe_without_a_target_uses_the_domains_own_addresses(tmp_path, monkeypatch):
+    srv = Server(Recorder(), families=("127.0.0.1",))  # IPv4 only: IPv6 must fail
+    monkeypatch.setattr(smtpprobe, "PORT", srv.port)
+    try:
+        assert smtpprobe.main(["--setup", str(tmp_path), "--domain", "localhost", "--write"]) == 1
+    finally:
+        srv.stop()
+    kept = json.loads((tmp_path / smtpprobe.RESULT).read_text())
+    assert kept["v4"]["ok"] is True and kept["v6"]["ok"] is False
+    assert oct((tmp_path / smtpprobe.RESULT).stat().st_mode & 0o777) == "0o664"
+
+
+def test_the_host_probe_does_nothing_when_the_belfry_says_so(tmp_path, capsys):
+    import time as _time
+
+    smtpprobe.write_json(
+        tmp_path / smtpprobe.TARGET,
+        {"at": _time.time(), "active": False, "reason": "the MX points to another mail server"},
+    )
+    assert smtpprobe.main(["--setup", str(tmp_path), "--write"]) == 0
+    assert "not checked: the MX points" in capsys.readouterr().out
+    assert not (tmp_path / smtpprobe.RESULT).exists()
+
+
+def test_the_host_probe_runs_as_a_plain_script(tmp_path):
+    """The host has python3 and nothing else of the belfry's: no package import."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(smtpprobe.__file__)
+    r = subprocess.run(
+        [sys.executable, "-I", str(script), "--setup", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert r.returncode == 0 and "not checked" in r.stdout

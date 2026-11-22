@@ -126,13 +126,6 @@ services:
   onboarding:
     ports: !reset []
     restart: unless-stopped
-    networks:
-      # edge (IPv6) too, for the mail check (mailcheck.py): it connects to port 25 of the box's
-      # public IPv6 address, which needs an IPv6 route; default stays the IPv4 gateway
-      # (gw_priority), the IPv6 one can only be edge. Without it IPv6 shows "not checked".
-      default:
-        gw_priority: 1
-      edge:
   push-gateway:
     restart: unless-stopped
   mail-in:

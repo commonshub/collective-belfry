@@ -169,10 +169,15 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--amount", default="", help="in euros, e.g. 12.50")
     pl.add_argument("--communication", default="")
     pl.add_argument("--description", default="")
-    sub.add_parser(
+    mc = sub.add_parser(
         "mailcheck",
-        help="connect to port 25 of the belfry's MX over IPv4 and IPv6 (EHLO, MAIL, RCPT, no "
-        "DATA): one line per family, exit 1 on any failure (belfry apply runs it)",
+        help="connect to port 25 of the belfry's MX over IPv4 and IPv6 from this container "
+        "(EHLO, MAIL, RCPT, no DATA): one line per family, exit 1 on any failure",
+    )
+    mc.add_argument(
+        "--target",
+        action="store_true",
+        help="only write mailcheck-target.json for the host's probe (belfry mailcheck)",
     )
     ib = sub.add_parser(
         "inbox",
@@ -231,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "mailcheck":
         from . import mailcheck
 
-        return mailcheck.cli(services)
+        return mailcheck.cli(services, target_only=args.target)
     if args.command == "sales-status":
         from . import sales
 

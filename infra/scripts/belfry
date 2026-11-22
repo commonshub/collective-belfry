@@ -10,7 +10,8 @@
 #   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
 #   belfry inbox CHANNEL [on|off]    a channel's shared inbox ("E-mails from anyone"): its state,
 #                                    or turn it on/off (signed by the groups key, no client needed)
-#   belfry mailcheck                 port 25 of the MX over IPv4 and IPv6 (also at the end of apply)
+#   belfry mailcheck                 port 25 of the MX over IPv4 and IPv6, from this server (also at
+#                                    the end of apply; every 5 min: belfry-mailcheck.timer)
 #   belfry version                   the code this belfry runs, and whether a newer one is out
 #   belfry update-request            run an update asked for in the admin console (belfry-update.path)
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
@@ -598,19 +599,39 @@ print(" ".join(sorted(k for k, v in (c.get("secrets") or {}).items()
   say "Done. belfry status shows the state."
 }
 
-# Port 25 of the MX over IPv4 and IPv6, from the onboarding container (mailcheck.py: EHLO, MAIL,
-# RCPT postmaster@, no DATA). Incoming mail broke twice without anyone noticing; an apply that
-# breaks it says so loudly here, but never fails because of it.
+# Port 25 of the MX over IPv4 and IPv6 (docs/mail.md, "Health check"). The probe runs on the host
+# (services/onboarding/belfry_onboarding/smtpprobe.py, standard library only): a container on the
+# edge bridge cannot reach the box's own IPv6 on port 25 (Docker's DNAT skips traffic that starts
+# on that bridge). The onboarding service says what to probe (mailcheck-target.json, it has DNS)
+# and reads the result (mailcheck.json) for the status page and the alerts.
+mail_probe() {  # [--write]: one line per family; exit 1 when a family fails
+  python3 "$ROOT/services/onboarding/belfry_onboarding/smtpprobe.py" --setup "$SETUP_DIR" \
+    --domain "$(env_get BELFRY_DOMAIN)" "$@"
+}
+cmd_mailcheck() {
+  if [[ "$(env_get MAIL_IN)" == 0 ]]; then say "mail: not checked: this belfry takes no mail (MAIL_IN=0)"; return 0; fi
+  # a fresh target first (the MX and its addresses as the belfry's DNS gives them)
+  compose --profile app exec -T onboarding python -m belfry_onboarding mailcheck --target >/dev/null 2>&1 || true
+  mail_probe --write
+}
+# belfry-mailcheck.timer (belfry setup-units): every 5 minutes, quiet; the onboarding service
+# reads the result and tells the admins
+cmd_mailcheck_timer() {
+  [[ "$(env_get MAIL_IN)" == 0 ]] && return 0
+  mail_probe --write >/dev/null || true
+}
+
+# At the end of belfry apply: an apply that breaks incoming mail says so loudly, but never fails
+# because of it.
 mail_check() {
   [[ "$(env_get MAIL_IN)" == 0 ]] && return 0
   local out rc i
   for i in 1 2 3; do  # mail-in and onboarding were just (re)started (a failing try: up to a minute)
-    rc=0; out=$(compose --profile app exec -T onboarding python -m belfry_onboarding mailcheck 2>&1) || rc=$?
+    rc=0; out=$(cmd_mailcheck 2>&1) || rc=$?
     [[ $rc -eq 0 ]] && break
     sleep 5
   done
-  say "Mail check (port 25 from outside):"
-  # its own lines (v4 …, v6 …, mail: …); anything else (a crash): the last lines as they came
+  say "Mail check (port 25, from this server):"
   { printf '%s\n' "$out" | grep -E '^(v4|v6|mail:) ' || printf '%s\n' "$out" | tail -n 4; } | sed 's/^/  /'
   if [[ $rc -ne 0 ]]; then
     say ""
@@ -1029,9 +1050,31 @@ Type=oneshot
 TimeoutStartSec=3h
 ExecStart=/usr/local/bin/belfry update-request
 EOF
+  cat > /etc/systemd/system/belfry-mailcheck.timer <<EOF
+[Unit]
+Description=Belfry: check port 25 of the mail server over IPv4 and IPv6 every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Unit=belfry-mailcheck.service
+
+[Install]
+WantedBy=timers.target
+EOF
+  cat > /etc/systemd/system/belfry-mailcheck.service <<EOF
+[Unit]
+Description=Belfry: check port 25 of the mail server (writes $SETUP_DIR/mailcheck.json)
+
+[Service]
+Type=oneshot
+TimeoutStartSec=5min
+ExecStart=/usr/local/bin/belfry mailcheck-timer
+EOF
   systemctl daemon-reload
-  systemctl enable --now belfry-setup.path belfry-update.path >/dev/null
-  say "belfry-setup.path watches $SETUP_DIR/pending.env, belfry-update.path $SETUP_DIR/update.request"
+  systemctl enable --now belfry-setup.path belfry-update.path belfry-mailcheck.timer >/dev/null
+  say "belfry-setup.path watches $SETUP_DIR/pending.env, belfry-update.path $SETUP_DIR/update.request,"
+  say "belfry-mailcheck.timer checks port 25 every 5 minutes ($SETUP_DIR/mailcheck.json)"
 }
 
 # ── the community's own look (infra/data/theme, served at /theme/custom/; theme.py) ──
@@ -1229,7 +1272,8 @@ case "${1:-help}" in
   version) cmd_version ;;
   update-request) cmd_update_request ;;
   homepage) shift; cmd_homepage "$@" ;;
-  mailcheck) compose --profile app exec -T onboarding python -m belfry_onboarding mailcheck ;;
+  mailcheck) cmd_mailcheck ;;
+  mailcheck-timer) cmd_mailcheck_timer ;;
   inbox) shift; compose --profile app exec -T onboarding python -m belfry_onboarding inbox "$@" ;;
   pay-link) shift; compose --profile app exec -T onboarding python -m belfry_onboarding pay-link "$@" ;;
   setup-code) shift; cmd_setup_code "$@" ;;
