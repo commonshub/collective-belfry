@@ -207,6 +207,9 @@ everything is e2e encrypted to all your devices."
   conversations this does NOT wait for my chain to be `ready` (the only reader is me; a device
   of mine outside the head shows the usual waiting banner until it is added). A device makes
   my chain when I have none, exactly as it does for any first sealed conversation.
+  On an account that can seal, a note is never sent the old way because the chain is not
+  there yet: with a definite "no chain" answer the device makes it now (first-device path)
+  and holds the note, shown as sending, until the chain is anchored; then it is sealed.
 - **The lock.** When sealed, the header shows the lock and the screen starts with one fixed
   line: "Encrypted for your own devices. Nobody else can read your notes, not the belfry's
   admins either." Tapping the lock opens the Encryption screen, as in any sealed conversation.
