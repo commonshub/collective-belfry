@@ -38,7 +38,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
-from . import community, followers
+from . import community, followers, imagedim
 from .claim import page
 from .connect import ConnectError
 from .core import Services
@@ -142,6 +142,9 @@ def upload(svc: Services, files: list[tuple[str, str, bytes]]) -> list[list[str]
                 f"x {sha}",
                 f"size {len(body)}",
             ]
+            dim = imagedim.size(body) if ctype.startswith("image/") else None
+            if dim:
+                tag.append(f"dim {dim[0]}x{dim[1]}")
             if name:
                 tag.append(f"alt {name[:120]}")
             tags.append(tag)

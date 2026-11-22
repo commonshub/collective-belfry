@@ -61,7 +61,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, community, drops, followers, homepage, sealed, stewards
+from . import apps, community, drops, followers, homepage, imagedim, sealed, stewards
 from .blossom import event_id, verify_signature
 from .core import Services
 from .nip46check import conversation_key, nip44_decrypt, nip44_encrypt, sign_event
@@ -554,6 +554,8 @@ def attachments(msg: EmailMessage) -> list[tuple[str, str, bytes]]:
         ):
             continue  # another text alternative, not a file
         body = part.get_payload(decode=True) or b""
+        if body and ctype in ("application/octet-stream", "binary/octet-stream"):
+            ctype = imagedim.kind(body) or ctype  # some mail clients send pictures untyped
         if body:
             out.append((part.get_filename() or "", ctype, body))
     return out[:10]
