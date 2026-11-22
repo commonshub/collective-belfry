@@ -152,7 +152,7 @@ export const lockedMsg = (conv: Conv, at: number) => (real() ? false : state.loc
 export function asking() {
   if (!real()) return state.asking
   const a = R.pendingAsk()
-  return a && { id: a.id, name: a.name, kind: kindOf(a.name), at: a.at }
+  return a && { id: a.id, name: a.name, kind: kindOf(a.name), at: a.signedIn ?? a.at }
 }
 export const linkedByScan = () => (real() ? (R.linkedName() ? { name: R.linkedName()!, kind: kindOf(R.linkedName()!) } : undefined) : state.linked)
 /** Board messages/encryption-thread (v89): a message that came the old way in a sealed

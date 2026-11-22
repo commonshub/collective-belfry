@@ -233,7 +233,7 @@ export function AllowPrompt() {
   const a = asking()
   const ref = useRef<HTMLDialogElement>(null)
   const { busy, error, run } = usePair()
-  useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal() }, [a?.id])
+  useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal() }, [a?.id, error])
   if (!a) return null
   // canvas v90: a 21st device: said in the card, with Devices / OK; the new device stays locked
   if (error === FULL) return (

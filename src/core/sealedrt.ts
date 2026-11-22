@@ -759,10 +759,14 @@ async function ask(minGapMs = 24 * 3600e3) {
 }
 
 // requests on my other devices ------------------------------------------------------------
-export interface Asking { id: string; device: string; name: string; at: number }
+/** One per requesting DEVICE (enspiral 2026-11-22: a phone re-asks on every reconnect; one card per
+ *  request flipped between them, "16 min ago" / "40 min ago"): ID its newest request, AT that
+ *  request's time, SIGNED_IN its session's start from the sessions list. */
+export interface Asking { id: string; device: string; name: string; at: number; signedIn?: number }
 let asking: Asking | undefined
 const doneRequests = new Set<string>()
 const KV_ANSWERED = 'sealed:answered:', KV_HANDED = 'sealed:handed:'
+const handoverBusy = new Set<string>() // §5.5 hand-overs on their way (one per device)
 const handedAt = new Map<string, number>() // device → my last hand-over to it (s), across restarts
 /** requests that couldn't be decided now (session not listed or not live yet): asked again after a minute */
 const requestLater = new Map<string, number>()
@@ -780,7 +784,23 @@ const handoverTried = new Map<string, string>()
 let headsSeen = ''
 let noKeyNudge = 0
 
+/** One pass at a time: the store changes while a pass waits for the sessions list, and two passes
+ *  answered the same device twice. A change during a pass runs one more after it. */
+let storeBusy = false, storeAgain = false
 async function onStore() {
+  if (storeBusy) { storeAgain = true; return }
+  storeBusy = true
+  try { do { storeAgain = false; await onStorePass() } while (storeAgain) } finally { storeBusy = false }
+}
+/** Devices whose Allow / Not me is running: their requests wait until it is done. */
+const answering = new Set<string>()
+/** DEV's requests up to BEFORE (s), answered: an older one never brings the card back. One that
+ *  comes later (§5.5: it asks again for a key it missed) is still read. */
+function devDone(dev: string, before = nowS()) {
+  for (const e of all()) if (e.kind === C.REQUEST && e.pubkey === dev && e.created_at <= before && e.tags.some((t) => t[0] === 'p' && t[1] === me())) requestDone(e.id)
+}
+
+async function onStorePass() {
   if (!active()) return
   // a head changed (mine or someone's) with sealed wraps waiting: the flush re-seals them (§9)
   const recipients = queuedRecipients()
@@ -794,13 +814,23 @@ async function onStore() {
   const c = chainOf(me())
   if (!c || !deviceIn()) return
   const head = C.headOf(c)
-  for (const r of all().filter((e) => e.kind === C.REQUEST && e.tags.some((t) => t[0] === 'p' && t[1] === me())).sort((a, b) => b.created_at - a.created_at)) {
+  // only each device's newest request counts (newest created_at, then the lowest id); the older
+  // ones of that device are left as they are
+  const newest = new Map<string, NostrEvent>()
+  for (const e of all()) {
+    if (e.kind !== C.REQUEST || !e.tags.some((t) => t[0] === 'p' && t[1] === me())) continue
+    const b = newest.get(e.pubkey)
+    if (!b || e.created_at > b.created_at || (e.created_at === b.created_at && e.id < b.id)) newest.set(e.pubkey, e)
+  }
+  for (const r of [...newest.values()].sort((a, b) => b.created_at - a.created_at)) {
+    if (answering.has(r.pubkey)) continue // its Allow / Not me is running: never a second card or answer
     if (doneRequests.has(r.id) || asking?.id === r.id) continue
     if (Date.now() - (requestLater.get(r.id) ?? 0) < 60e3) continue
     const pin = st.pins[me()] ?? null
     const inBoth = anchoredEnd(c).devices.includes(r.pubkey) && C.headOf(c).devices.includes(r.pubkey)
     if (inBoth && (!pin?.trusted || pin.trusted.includes(r.pubkey))) {
       if (asking?.device === r.pubkey) { asking = undefined; touch() }
+      if (handoverBusy.has(r.pubkey)) continue
       // §5.5 (sealedcore.answerWithoutPrompt): a device of the head without the key asks again:
       // answered at once, no prompt, when live and its request is newer than the roster that added
       // it and than my last hand-over to it
@@ -819,8 +849,8 @@ async function onStore() {
         continue
       }
       if (!keyOf(head.lb)) { notNow(r.id); continue } // this device lacks the head key right now: never a partial hand-over
-      if (await handAllKeys(r.pubkey)) requestDone(r.id)
-      else notNow(r.id)
+      handoverBusy.add(r.pubkey)
+      try { if (await handAllKeys(r.pubkey)) requestDone(r.id); else notNow(r.id) } finally { handoverBusy.delete(r.pubkey) }
       continue
     }
     // in the head but not trusted after a switch: the person decides (the Allow card below)
@@ -835,7 +865,10 @@ async function onStore() {
       try { await allow(r.pubkey); requestDone(r.id); linked = row.device || row.application_name || 'Your new device' } catch { /* not done: next time */ }
       touch(); continue
     }
-    asking = { id: r.id, device: r.pubkey, name: row.device || row.application_name || 'A new device', at: r.created_at * 1000 }
+    // the card: one device at a time; the same device again only moves to its newer request
+    if (asking && asking.device !== r.pubkey) break
+    const signedIn = row.created_at ? Date.parse(row.created_at) : NaN
+    asking = { id: r.id, device: r.pubkey, name: row.device || row.application_name || 'A new device', at: r.created_at * 1000, signedIn: Number.isFinite(signedIn) ? signedIn : undefined }
     touch()
     break
   }
@@ -886,7 +919,18 @@ export const FULL = `You already have ${C.MAX_DEVICES} devices. Remove one in De
 /** Allow: hand the whole key chain to the new device (several 8561 if needed, each accepted by the
  *  relay), then roster n+1 with it and the anchor, done per §3.2. At 20 devices: refused, nothing
  *  sent. Throws (NotDone, or a reason) when it isn't done. */
-export async function allow(newDevice: string) {
+const allowing = new Map<string, Promise<void>>()
+export function allow(newDevice: string): Promise<void> {
+  // a second Allow for the same device (a double tap, the card and a link code) joins the first
+  const on = allowing.get(newDevice)
+  if (on) return on
+  answering.add(newDevice)
+  const p = allowOnce(newDevice).finally(() => { allowing.delete(newDevice); answering.delete(newDevice); touch() })
+  allowing.set(newDevice, p)
+  return p
+}
+async function allowOnce(newDevice: string) {
+  const started = nowS()
   let ev: NostrEvent | null = null
   try {
     ev = await withRosterLock(() => changeMyRoster((c, sessions) => {
@@ -904,8 +948,12 @@ export async function allow(newDevice: string) {
   // mine this change finished anchoring); lost on the way: it asks again and is answered at once (§5.5)
   void ev
   const c = chainOf(me())
-  if (c && anchoredEnd(c).devices.includes(newDevice)) { trustDevice(newDevice); await handAllKeys(newDevice) }
-  if (asking?.device === newDevice) { requestDone(asking.id); asking = undefined }
+  if (c && anchoredEnd(c).devices.includes(newDevice)) {
+    trustDevice(newDevice)
+    if (!handoverBusy.has(newDevice)) { handoverBusy.add(newDevice); try { await handAllKeys(newDevice) } finally { handoverBusy.delete(newDevice) } }
+  }
+  devDone(newDevice, started)
+  if (asking?.device === newDevice) asking = undefined
   touch()
 }
 
@@ -955,14 +1003,19 @@ export async function signOutOthers(): Promise<string[]> {
 
 /** Not me: end that device's session; no roster change. Says so when it can't. */
 export async function refuse(newDevice: string) {
+  if (answering.has(newDevice)) return
+  answering.add(newDevice)
+  try { await refuseOnce(newDevice) } finally { answering.delete(newDevice); touch() }
+}
+async function refuseOnce(newDevice: string) {
   const sessions = await mySessions(0)
   if (!sessions) throw new Error('The belfry didn’t answer: try again in a moment.')
   const row = sessions.find((s) => s.client_pubkey === newDevice)
-  if (!row?.bunker_pubkey) { if (asking?.device === newDevice) { requestDone(asking.id); asking = undefined; touch() }; throw new Error('That device isn’t signed in any more.') }
+  if (!row?.bunker_pubkey) { if (asking?.device === newDevice) { devDone(newDevice); asking = undefined; touch() }; throw new Error('That device isn’t signed in any more.') }
   const r = await signedFetch(`${BELFRY.api}/me/sessions/revoke`, 'POST', { bunker_pubkey: row.bunker_pubkey })
   if (!r.ok) throw new Error('The belfry did not end that session.')
   sessionsCache = null
-  if (asking?.device === newDevice) { requestDone(asking.id); asking = undefined }
+  if (asking?.device === newDevice) { devDone(newDevice); asking = undefined }
   touch()
 }
 /** The Allow card closes without an answer (it comes back next time the app opens). */

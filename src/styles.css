@@ -2065,6 +2065,8 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .seal-close { margin-top: 8px; font-size: 14px; }
 .seal-waiting, .seal-allow-waiting { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 .seal-allow-waiting { margin-top: 8px; font-size: 15px; min-height: 44px; }
+/* one small ring in the colour of its button's text (a 34 px page spinner looked doubled on a dark button) */
+.seal-alert .btn .spinner, .seal-alert .seal-allow-waiting .spinner { width: 16px; height: 16px; border-width: 2px; border-color: currentColor; border-top-color: transparent; display: inline-block; vertical-align: -3px; margin-right: 6px; }
 
 .dir-hit { font-weight: 650; color: var(--text); }
 
