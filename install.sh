@@ -77,9 +77,11 @@ Usage: install.sh [options]          (as root; curl … | sudo bash -s -- [optio
   --force                  continue despite failed checks (small server, DNS not ready)
   --odoo                   keep who is who in Odoo (the add-on: billing, volunteer shifts, CRM);
                            without it the belfry keeps its own register and runs no Odoo
-  --own-signer             Belfry's own signer holds the members' keys: no Keycast, no Authentik,
-                           no Redis (docs/own-signer.md). New belfries only; the default is
-                           still Keycast until the migration of existing belfries is done
+  --keycast                the old signer: Keycast holds the members' keys, with Authentik and
+                           Redis. Without it a new belfry runs Belfry's own signer and none
+                           of the three (docs/own-signer.md). An existing belfry keeps what
+                           it has: moving it is infra/scripts/migrate-to-own-signer.sh
+  --own-signer             (the default for a new belfry since 2026-11-23; kept for old commands)
   --nginx                  put nginx on 80/443 in front of Belfry's proxy, for a server that
                            also hosts other sites (default: Belfry's proxy, Caddy, on 80/443)
   --host-only              prepare the server (packages, ufw, nginx, user, code) without the stack
@@ -132,6 +134,7 @@ EOF
       --nginx) NGINX=1 ;;
       --odoo) export BELFRY_REGISTER=odoo ;;
       --own-signer) export BELFRY_SIGNER=belfry ;;
+      --keycast) export BELFRY_SIGNER=keycast ;;
       -h|--help) usage; exit 0 ;;
       --*-key|--*-password|--*secret*) die "$a: secrets never go on the command line; use --config FILE or the BELFRY_* variable" ;;
       *) usage >&2; die "unknown option $a" ;;
@@ -420,6 +423,9 @@ EOF
   # New belfries keep their own register (people, passes, invites) and run no Odoo; --odoo
   # keeps Odoo as the add-on (BELFRY_REGISTER=odoo).
   if [[ $fresh -eq 1 ]]; then export BELFRY_REGISTER=${BELFRY_REGISTER:-belfry}; fi
+  # New belfries run Belfry's own signer: no Keycast, no Authentik, no Redis (Xavier, 2026-11-23);
+  # --keycast keeps the old one. An existing belfry is never switched here (its migration does).
+  if [[ $fresh -eq 1 ]]; then export BELFRY_SIGNER=${BELFRY_SIGNER:-belfry}; fi
   # The admin pages answer this server's own addresses (bootstrap and smoke run here) and Docker's;
   # add the ZeroTier subnet later (DEPLOY.md, "Admin network").
   local admin_nets="127.0.0.1/8 172.16.0.0/12 $ip4/32${ip6:+ $ip6/128}"

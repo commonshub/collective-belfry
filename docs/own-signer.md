@@ -307,6 +307,16 @@ The ones that matter for the product:
 
 ## 5. Still to move
 
+**Decided 2026-11-23 (Xavier).** (1) A new belfry runs the own signer: `install.sh` sets
+`SIGNER=belfry` on a fresh install; `--keycast` keeps the old signer; an existing belfry is
+never switched by the installer. (2) Entries 2 and 5 below are closed as **not wanted**, not
+open: "A private key should never leave the box/machine it has been created in." No page or
+API to move to an own key, none to export a key. The signer's `POST /accounts/{id}/own-key`
+and `/export` are to be removed with the Keycast code (they are reachable only from the
+service's own network and nothing calls them). What does leave the box is the encrypted
+backup of the signer's volume, when backups go off the box: sealed to the backup key, and
+useless without `signer_master_key`.
+
 The 13 entries of phase 1's list, and where each stands. Everything "moved" is active only
 with `SIGNER=belfry`; with `SIGNER=keycast` nothing changed.
 
