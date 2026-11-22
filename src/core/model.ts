@@ -414,7 +414,7 @@ setWriteGuard((t) => {
 
 // ---- messages -----------------------------------------------------------------
 
-export interface Media { url: string; mime: string; name?: string; w?: number; h?: number }
+export interface Media { url: string; mime: string; name?: string; w?: number; h?: number; size?: number }
 export interface Message { ev: Ev; text: string; media: Media[]; topics: string[]; /** when its author last edited it (kind 1010) */ edited?: number }
 
 // ---- topics: hashtags (NIP-24 `t` tags, lowercase) and a channel's pinned ones -------------
@@ -442,7 +442,7 @@ export function parseMedia(e: Ev): Message {
     const f = Object.fromEntries(t.slice(1).map((p) => [p.slice(0, p.indexOf(' ')), p.slice(p.indexOf(' ') + 1)]))
     if (!f.url || !/^(https?:|idb:)/.test(f.url)) continue
     const [w, h] = (f.dim ?? '').split('x').map(Number)
-    media.push({ url: f.url, mime: f.m ?? '', name: f.alt, w: w || undefined, h: h || undefined })
+    media.push({ url: f.url, mime: f.m ?? '', name: f.alt, w: w || undefined, h: h || undefined, size: Number(f.size) || undefined })
   }
   let text = e.content
   for (const m of media) text = text.split(m.url).join('')

@@ -1,6 +1,7 @@
 // What the channel header knows (channelFacts), and the one line under it, which shows only when
 // something must catch the eye (SummaryLine). The pulled-down menu is in ChannelMenu.tsx.
 import { TodoField, todoOver } from './TodoField'
+import { isPictureMedia } from '../core/pictures'
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
@@ -40,7 +41,7 @@ export function channelFacts(id: string) {
   const tally = taskTally(allTasks)
   const members = g ? [...g.members] : []
   const media = [...new Map(messages(id).flatMap((m) => m.media).map((x) => [x.url, x])).values()].reverse()
-  const photos = media.filter((m) => m.mime.startsWith('image/'))
+  const photos = media.filter(isPictureMedia)
   const files = media.length - photos.length - media.filter((m) => m.mime.startsWith('video/')).length
   const own = g?.isProposal ? proposalFor(id) : undefined
   const needsVote = (p: Proposal) => p.status === 'voting' && !!p.poll && p.poll.version === p.version && !p.poll.votes.get(me())

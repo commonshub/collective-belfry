@@ -1,4 +1,5 @@
 import { TodoField, todoOver } from './TodoField'
+import { isPicture, isPictureMedia, isVisual } from '../core/pictures'
 import { roleBadge } from '../core/roles'
 import { roleWord } from '../core/checkin'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
@@ -590,7 +591,7 @@ function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem |
       if (t('proposal')) return { ev: e, icon: '📄', text: 'made a proposal', detail: short(e.content, 200), go: at('m/' + e.id) }
       const media = e.tags.filter((x) => x[0] === 'imeta').map((x) => x.find((v) => v.startsWith('m '))?.slice(2) ?? '')
       if (media.some((m) => m.startsWith('audio/'))) return { ev: e, icon: '🎙', text: 'posted a recording', detail: short(e.content, 200), go: at('m/' + e.id) }
-      if (media.some((m) => m.startsWith('image/'))) return { ev: e, icon: '🖼', text: media.length > 1 ? `posted ${media.length} photos` : 'posted a photo', detail: short(e.content, 200), go: at('m/' + e.id) }
+      if (media.some((m) => isPicture(m))) return { ev: e, icon: '🖼', text: media.length > 1 ? `posted ${media.length} photos` : 'posted a photo', detail: short(e.content, 200), go: at('m/' + e.id) }
       if (media.length) return { ev: e, icon: '📎', text: 'posted a file', detail: short(e.content, 200), go: at('m/' + e.id) }
       if (t('mail-from')) return { ev: e, icon: '✉️', text: 'an e-mail came in', detail: short(t('subject') || e.content, 200), go: at('m/' + e.id) }
       return { ev: e, icon: '💬', text: 'posted a message', detail: short(e.content, 200), go: at('m/' + e.id) }
@@ -685,11 +686,11 @@ export function Log({ groupId }: { groupId: string }) {
 
 export function Files({ groupId, only }: { groupId: string; /** the Files screen: photos have their own */ only?: 'files' }) {
   useVersion()
-  const media = messages(groupId).flatMap((m) => m.media).reverse().filter((m) => !only || !/^(image|video)\//.test(m.mime))
+  const media = messages(groupId).flatMap((m) => m.media).reverse().filter((m) => !only || !isVisual(m))
   return (
     <div className="pad">
       {!group(groupId)?.archived && <DropBox groupId={groupId} />}
-      {media.length ? <MediaGrid media={media} /> : <div className="empty">{only ? 'Files posted in this channel show up here.' : 'Photos and files posted in this channel show up here.'}</div>}
+      {media.length ? <MediaGrid media={media} gallery /> : <div className="empty">{only ? 'Files posted in this channel show up here.' : 'Photos and files posted in this channel show up here.'}</div>}
     </div>
   )
 }
@@ -724,7 +725,7 @@ function Summary({ id, tab, open }: { id: string; tab: Tab; open: (t: Tab) => vo
   const g = group(id)
   if (!g) return null
   const media = messages(id).flatMap((m) => m.media).reverse()
-  const photos = media.filter((m) => m.mime.startsWith('image/'))
+  const photos = media.filter(isPictureMedia)
   const files = media.length - photos.length
   const active = recentlyActive(id)
   const n = 14

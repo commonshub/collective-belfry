@@ -3,6 +3,7 @@ import { fileUrl, type Dm } from '../core/dm'
 import { UNREADABLE, fileLabel, sizeLabel } from '../core/dmfiles'
 import { canRecord, clock, discard, elapsed, filesOf, start, stop, subscribe, type RecMeta } from '../core/recorder'
 import { Btn, Sheet } from './common'
+import { isPicture } from '../core/pictures'
 
 // Pictures, files and audio recordings in direct messages (canvas v104, messages/attach-*): shown
 // from a decrypted blob: URL, never a link to what the storage holds (it is encrypted anyway).
@@ -71,7 +72,7 @@ function Recording({ d }: { d: Dm }) {
 
 /** The files of one bubble (pictures in a grid of up to four, "+N" on the last), then the others. */
 export function FilesBody({ files }: { files: Dm[] }) {
-  const pics = files.filter((d) => d.file?.mime.startsWith('image/'))
+  const pics = files.filter((d) => !!d.file && isPicture(d.file.mime, d.file.name))
   const rest = files.filter((d) => !pics.includes(d))
   return (
     <div className="dm-files-body">

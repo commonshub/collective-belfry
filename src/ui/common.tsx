@@ -1,4 +1,6 @@
 import { nameLoading } from '../core/names'
+import { isPicture, pictureBadge } from '../core/pictures'
+import { sizeLabel } from '../core/dmfiles'
 import { replaceHash } from '../core/nav'
 import { Drawer } from 'vaul'
 import { Component, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
@@ -129,7 +131,7 @@ export function useMediaUrl(url: string) {
 export function MediaItem({ m, onOpen }: { m: Media; /** images: open them in the lightbox instead of a new tab */ onOpen?: () => void }) {
   const src = useMediaUrl(m.url)
   if (!src) return <div className="file">…</div>
-  if (m.mime.startsWith('image/'))
+  if (isPicture(m.mime, m.name || m.url))
     return (
       <a href={src} target="_blank" rel="noreferrer" onClick={(e) => { if (!onOpen || e.metaKey || e.ctrlKey) return; e.preventDefault(); e.stopPropagation(); onOpen() }}>
         <img src={src} alt={m.name ?? ''} loading="lazy" style={m.w && m.h ? { aspectRatio: `${m.w}/${m.h}` } : undefined} />
@@ -144,23 +146,75 @@ export function MediaItem({ m, onOpen }: { m: Media; /** images: open them in th
   )
 }
 
-export function MediaGrid({ media }: { media: Media[] }) {
+/** A message's media: its pictures (pictures.ts: one large, several in the DM grid; a tap opens the
+ *  viewer), its videos and sound, then its other files as rows. A picture that can't be loaded
+ *  falls back to its file row (canvas v179, note n-email-pictures). */
+export function MediaGrid({ media, gallery = false }: { media: Media[]; /** a channel's Photos / Files page: every picture as a tile */ gallery?: boolean }) {
   if (!media.length) return null
-  const visual = media.filter((m) => /^(image|video)\//.test(m.mime))
-  const files = media.filter((m) => !/^(image|video)\//.test(m.mime))
-  const images = visual.filter((m) => m.mime.startsWith('image/'))
-  const [open, setOpen] = useState<number | null>(null)
+  const pics = media.filter((m) => isPicture(m.mime, m.name || m.url))
+  const videos = media.filter((m) => !pics.includes(m) && m.mime.startsWith('video/'))
+  const files = media.filter((m) => !pics.includes(m) && !videos.includes(m))
   return (
     <>
-      {visual.length > 0 && (
-        <div className={'media' + (visual.length === 1 ? ' one' : '')}>
-          {visual.map((m) => <MediaItem key={m.url} m={m} onOpen={m.mime.startsWith('image/') ? () => setOpen(images.indexOf(m)) : undefined} />)}
-        </div>
-      )}
-      {open !== null && <Lightbox images={images} start={open} onClose={() => setOpen(null)} />}
+      <Pictures pics={pics} gallery={gallery} />
+      {videos.length > 0 && <div className={'media' + (videos.length === 1 ? ' one' : '')}>{videos.map((m) => <MediaItem key={m.url} m={m} />)}</div>}
       {files.map((m) => <div key={m.url} style={{ marginTop: 6 }}><MediaItem m={m} /></div>)}
     </>
   )
+}
+
+/** Pictures in a message: one large (its own shape from dim, else 4:3 while it loads), 2 side by
+ *  side, 3 = 2 + 1 wide, more = 4 with +N on the last; a tap opens the viewer at that picture. One
+ *  that can't be loaded leaves the grid for its row ("Picture · couldn't be opened"), which saves
+ *  it (ON_SAVE, else a link to it). */
+export function Pictures({ pics, onSave, gallery = false }: { pics: Media[]; onSave?: (m: Media) => void; gallery?: boolean }) {
+  const [bad, setBad] = useState<Set<string>>(() => new Set())
+  const [open, setOpen] = useState<number | null>(null)
+  if (!pics.length) return null
+  const good = pics.filter((m) => !bad.has(m.url))
+  const failed = pics.filter((m) => bad.has(m.url))
+  const fail = (m: Media) => setBad((b) => (b.has(m.url) ? b : new Set(b).add(m.url)))
+  const shown = good.slice(0, 4)
+  return (
+    <div className={'pics' + (gallery ? ' wide' : '')}>
+      {gallery && good.length > 0 && (
+        <div className="media pics-all">{good.map((m, i) => <PictureTile key={m.url} m={m} tile onOpen={() => setOpen(i)} onBad={() => fail(m)} />)}</div>
+      )}
+      {!gallery && good.length === 1 && <PictureTile m={good[0]} onOpen={() => setOpen(0)} onBad={() => fail(good[0])} />}
+      {!gallery && good.length > 1 && (
+        <div className={'dm-grid n' + Math.min(4, good.length)} role="group" aria-label={`${good.length} pictures`}>
+          {shown.map((m, i) => <PictureTile key={m.url} m={m} tile more={i === 3 ? good.length - 4 : 0} onOpen={() => setOpen(i)} onBad={() => fail(m)} />)}
+        </div>
+      )}
+      {failed.map((m) => <PictureRow key={m.url} m={m} onSave={onSave} />)}
+      {open !== null && good.length > 0 && <Lightbox images={good} start={Math.min(open, good.length - 1)} onClose={() => setOpen(null)} />}
+    </div>
+  )
+}
+
+function PictureTile({ m, tile = false, more = 0, onOpen, onBad }: { m: Media; tile?: boolean; more?: number; onOpen: () => void; onBad: () => void }) {
+  const src = useMediaUrl(m.url)
+  return (
+    <a className={'dm-pic' + (tile ? ' tile' : ' one')} href={src} target="_blank" rel="noreferrer" aria-label={m.name ? `Picture ${m.name}` : 'Picture'}
+      style={tile ? undefined : { aspectRatio: m.w && m.h ? `${m.w} / ${m.h}` : '4 / 3' }}
+      onClick={(e) => { if (!src) { e.preventDefault(); return } if (e.metaKey || e.ctrlKey) return; e.preventDefault(); e.stopPropagation(); onOpen() }}>
+      {src ? <img src={src} alt={m.name ?? ''} loading="lazy" onError={onBad} /> : <span className="dm-pic-wait" aria-hidden="true" />}
+      {more > 0 && <span className="dm-more">+{more}</span>}
+    </a>
+  )
+}
+
+/** A picture that couldn't be opened: its kind, name, "Picture · couldn't be opened · size"; a tap saves it. */
+export function PictureRow({ m, onSave, busy }: { m: Media; onSave?: (m: Media) => void; busy?: boolean }) {
+  const src = useMediaUrl(m.url)
+  const inner = (
+    <>
+      <span className="dm-filebadge" aria-hidden="true">{pictureBadge(m.mime, m.name || m.url)}</span>
+      <span className="t"><b>{m.name || 'Picture'}</b><small>Picture · couldn’t be opened{m.size ? ` · ${sizeLabel(m.size)}` : ''}{busy ? ' · opening…' : ''}</small></span>
+    </>
+  )
+  if (onSave) return <button type="button" className="dm-filecard pic-row" onClick={() => onSave(m)} disabled={busy} aria-busy={busy || undefined}>{inner}</button>
+  return <a className="dm-filecard pic-row" href={src} target="_blank" rel="noreferrer" download={m.name}>{inner}</a>
 }
 
 // ---- lightbox -------------------------------------------------------------------

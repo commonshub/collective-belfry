@@ -9,6 +9,7 @@
 //    who may edit the channel. The others show when they hold at least one thing.
 // "Channel info" is gone; its parts live here (old links c/<id>/info… land on these screens).
 import { replaceHash } from '../core/nav'
+import { isVisual } from '../core/pictures'
 import { useState, type ReactNode } from 'react'
 import { canAdmin } from '../core/access'
 import { groupRole } from '../core/checkin'
@@ -42,10 +43,10 @@ export const CHANNEL_PAGES = new Set(['pinned', 'proposals', 'todos', 'photos', 
 export function menuCounts(id: string) {
   const f = channelFacts(id)
   const media = [...new Map(messages(id).flatMap((m) => m.media).map((x) => [x.url, x])).values()]
-  const files = media.filter((m) => !/^(image|video)\//.test(m.mime)).length + dropLinks(id).length
+  const files = media.filter((m) => !isVisual(m)).length + dropLinks(id).length
   const g = f.g
   const tops = topics(id).filter((t) => t !== ANNOUNCE).length + (messages(id).some((m) => isAnnouncement(m, g)) ? 1 : 0)
-  const visual = media.filter((m) => /^(image|video)\//.test(m.mime)).length
+  const visual = media.filter(isVisual).length
   return { f, files, topics: tops, photos: visual, active: recentlyActive(id).length }
 }
 
@@ -174,8 +175,8 @@ export function ChannelPage({ id, page }: { id: string; page: string }) {
   )
   else if (page === 'todos') body = <Tasks groupId={id} />
   else if (page === 'photos') {
-    const visual = [...new Map(messages(id).flatMap((m) => m.media).map((x) => [x.url, x])).values()].filter((m) => /^(image|video)\//.test(m.mime)).reverse()
-    body = <div className="pad">{visual.length ? <MediaGrid media={visual} /> : <div className="empty">Photos posted here show up here.</div>}</div>
+    const visual = [...new Map(messages(id).flatMap((m) => m.media).map((x) => [x.url, x])).values()].filter(isVisual).reverse()
+    body = <div className="pad">{visual.length ? <MediaGrid media={visual} gallery /> : <div className="empty">Photos posted here show up here.</div>}</div>
   }
   else if (page === 'files') body = <Files groupId={id} only="files" />
   else if (page === 'groups') body = (

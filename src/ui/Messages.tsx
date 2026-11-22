@@ -12,7 +12,8 @@ import { MAX_FILE, MAX_FILE_GUEST, bubbles, tooLarge } from '../core/dmfiles'
 import { isGuest } from '../core/invite'
 import { AttachSheet, DmRecordSheet, FilesBody } from './DmFiles'
 import { EmojiSheet, ReactionChips } from './Reactions'
-import { displayName, plainRefs, profiles } from '../core/model'
+import { displayName, plainRefs, profiles, type Media } from '../core/model'
+import { isPicture, pictureType } from '../core/pictures'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
@@ -20,7 +21,7 @@ import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
 import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
-import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow } from './common'
+import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow, Pictures, PictureRow } from './common'
 import { SendingLine } from './Sending'
 import { TypingDots, TypingLine } from './Typing'
 import { cleared, messageSent, onTyping, typed, typingIn, type Place } from '../core/typing'
@@ -326,8 +327,33 @@ function DmState({ d, r }: { d: Dm; r?: ReturnType<typeof report> }) {
   return <span className={'dm-state ' + (r?.status ?? 'queued')}>{label}</span>
 }
 
+/** An e-mail's files (canvas v179 messages/email-pictures): its pictures in the message, after the
+ *  text and in the e-mail's order (pictures put inline in an HTML mail too), read from the MIME on
+ *  this device (the wrap, or the large copy decrypted from the file server, as Full e-mail does);
+ *  then the other files as rows that save them. A picture that can't be read: its file row. */
 function Attachments({ d }: { d: Dm }) {
   const [busy, setBusy] = useState(-1)
+  const list = d.attachments!
+  const picIdx = list.flatMap((a, i) => (isPicture(a.type, a.name) ? [i] : []))
+  const [urls, setUrls] = useState<Record<number, string> | null>(null)
+  const [unread, setUnread] = useState(false)
+  useEffect(() => {
+    if (!picIdx.length) return
+    let on = true
+    const made: string[] = []
+    attachmentsOf(d).then((parts) => {
+      if (!on) return
+      const got: Record<number, string> = {}
+      for (const i of picIdx) {
+        const a = parts[i]
+        if (!a?.data.length) continue
+        const u = URL.createObjectURL(new Blob([a.data as BlobPart], { type: pictureType(a.type, a.name) }))
+        made.push(u); got[i] = u
+      }
+      setUrls(got)
+    }, () => on && setUnread(true))
+    return () => { on = false; made.forEach((u) => URL.revokeObjectURL(u)) }
+  }, [d.rid]) // eslint-disable-line react-hooks/exhaustive-deps
   const open = async (i: number) => {
     setBusy(i)
     try {
@@ -337,11 +363,18 @@ function Attachments({ d }: { d: Dm }) {
       const link = Object.assign(document.createElement('a'), { href: url, download: a.name })
       link.click()
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
-    } finally { setBusy(-1) }
+    } catch { /* the row stays; tapped again, tried again */ } finally { setBusy(-1) }
   }
+  const asMedia = (i: number, url: string): Media => ({ url, mime: pictureType(list[i].type, list[i].name), name: list[i].name, size: list[i].size })
+  const shown = urls ? picIdx.filter((i) => urls[i]) : []
+  const missing = unread ? picIdx : urls ? picIdx.filter((i) => !urls[i]) : []
+  const at = (m: Media) => shown.find((i) => urls![i] === m.url) ?? -1
   return (
     <div className="dm-files">
-      {d.attachments!.map((a, i) => (
+      {picIdx.length > 0 && !urls && !unread && <div className="dm-pic one" style={{ aspectRatio: '4 / 3' }} aria-label="Opening the pictures"><span className="dm-pic-wait" aria-hidden="true" /></div>}
+      <Pictures pics={shown.map((i) => asMedia(i, urls![i]))} onSave={(m) => { const i = at(m); if (i >= 0) void open(i) }} />
+      {missing.map((i) => <PictureRow key={i} m={asMedia(i, '')} busy={busy === i} onSave={() => void open(i)} />)}
+      {list.map((a, i) => picIdx.includes(i) ? null : (
         <button key={i} className="dm-file" onClick={() => void open(i)}>📎 {a.name} <small>{busy === i ? '…' : kb(a.size)}</small></button>
       ))}
     </div>

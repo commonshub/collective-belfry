@@ -854,10 +854,11 @@ export async function convFor(input: string, candidates: { pubkey: string; name:
 }
 
 /** Demo mode only (tests): an e-mail arrives from SENDER as the belfry would deliver it. */
-export async function demoMail(sender: string, subject: string, text: string, verified = true) {
+/** BODY: a whole MIME body with its own Content-Type header line(s) instead of plain TEXT (files). */
+export async function demoMail(sender: string, subject: string, text: string, verified = true, body?: string) {
   if (!isLocalOnly()) return
   const sk = hexToBytes(DEMO_BRIDGE)
-  const raw = `From: ${sender}\r\nTo: ${address() || 'me@demo'}\r\nSubject: ${subject}\r\nMessage-ID: <${crypto.randomUUID()}@example.org>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${text}\r\n`
+  const raw = body ? `From: ${sender}\r\nTo: ${address() || 'me@demo'}\r\nSubject: ${subject}\r\nMessage-ID: <${crypto.randomUUID()}@example.org>\r\nMIME-Version: 1.0\r\n${body}` : `From: ${sender}\r\nTo: ${address() || 'me@demo'}\r\nSubject: ${subject}\r\nMessage-ID: <${crypto.randomUUID()}@example.org>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${text}\r\n`
   const rumor = { kind: 1301, pubkey: getPublicKey(sk), created_at: Math.floor(Date.now() / 1000), content: raw,
     tags: [['email-id', crypto.randomUUID()], ['mail-from', addressOf(sender).address], ['p', me()], ['subject', subject], ['belfry-auth', verified ? 'pass' : 'none']] } as NostrEvent
   rumor.id = getEventHash(rumor)

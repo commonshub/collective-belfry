@@ -2,6 +2,7 @@
 // for the rest), the event's chat under it, RSVP or apply in one tap, the guest list for hosts.
 // And the screen someone with no account sees when they open an event's URL in the chat.
 import { LinkPair, copyText } from './LinkPair'
+import { isPictureMedia } from '../core/pictures'
 import { replaceHash } from '../core/nav'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import qrcode from 'qrcode-generator'
@@ -296,7 +297,7 @@ function Cover({ url }: { url: string }) {
 /** The event's photos, newest first; "Add photos" for everyone in the group. */
 function EventPhotos({ groupId, readOnly }: { groupId: string; readOnly: boolean }) {
   useVersion()
-  const images = messages(groupId).flatMap((m) => m.media).filter((m) => m.mime.startsWith('image/')).reverse()
+  const images = messages(groupId).flatMap((m) => m.media).filter(isPictureMedia).reverse()
   const [open, setOpen] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
