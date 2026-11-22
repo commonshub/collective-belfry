@@ -297,6 +297,19 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const got = r.state === 'opened' ? { state: 'opened', body: r.body } : { state: r.state }
     check(`sealed reports: ${c.name}`, eq(got, c.expected), { got, want: c.expected })
   }
+  // confirm (§5.2 2b, kind 8563, from belfry-android 921a6c1): "It was me" accepted once for all
+  if (sv.confirm) {
+    const cf = sv.confirm, cc = S.validChain(cf.chain.anchor, cf.chain.rosters)
+    for (const c of cf.cases) {
+      const v = cc ? S.confirmOk(cc, cf.account, { pubkey: c.seal_pubkey }, c.rumor) : { ok: 'no' }
+      const got = v.ok === 'ok' ? { accepted: true, device: v.device, roster: c.rumor.tags.find((t) => t[0] === 'e')[1] } : { accepted: false }
+      check(`sealed confirm: ${c.name}`, eq(got, c.expected), { got, want: c.expected, v })
+    }
+    const w = cf.wrap
+    let got
+    try { const { seal, rumor } = S.openSealed(unhex(w.letterbox_secret), w.wrap); const v = S.confirmOk(cc, cf.account, seal, rumor); const ordered = Object.fromEntries(Object.keys(w.expected.rumor).map((k) => [k, rumor[k]])); got = { seal_pubkey: seal.pubkey, rumor: ordered, accepted: v.ok === 'ok' } } /* the fields in the vector's order */ catch (e) { got = String(e) }
+    check(`sealed confirm wrap: ${w.name}`, eq(got, w.expected), { got, want: w.expected })
+  }
   console.log(bad ? `vectors (with sealed): ${bad} failed` : 'vectors (with sealed): all ok')
 }
 process.exit(bad ? 1 : 0)

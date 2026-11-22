@@ -272,14 +272,14 @@ export const addedNotices = (): AddedNotice[] => (real()
   ? R.addedNotices().map((n) => { const name = sessionName(n.device) || 'A device'; return { id: n.device, name, kind: kindOf(name), at: n.at } })
   : state.notices.filter((n) => state.mine.some((d) => d.id === n.id)))
 /** "It was me": the notice goes (on every tab, across restarts). */
-export async function itWasMe(id: string) {
-  if (real()) return R.answerNotice(id)
+export async function itWasMe(id: string, tell = true) {
+  if (real()) return R.answerNotice(id, tell)
   state.notices = state.notices.filter((n) => n.id !== id); touch()
 }
 /** "Not you? Remove it": the device is removed (its session ends first, §5.6), then the notice goes. */
 export async function removeAdded(id: string) {
   await removeDevice(id)
-  await itWasMe(id)
+  await itWasMe(id, false) // the roster without it clears it everywhere (§5.2 2b)
 }
 /** Demo: NAME was added to my devices without a prompt, AGO ms ago. */
 export function demoAdded(name: string, kind: DeviceKind = 'phone', ago = 0) {

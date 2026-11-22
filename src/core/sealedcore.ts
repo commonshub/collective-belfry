@@ -10,7 +10,7 @@ import { hmac } from '@noble/hashes/hmac'
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 import { getEventHash, getPublicKey, nip44, verifyEvent, type NostrEvent } from 'nostr-tools'
 
-export const ROSTER = 8560, KEYS = 8561, REQUEST = 8562, HISTORY = 8564, SEAL = 13, WRAP = 1059, MAIL = 1301, ANCHOR = 30078
+export const ROSTER = 8560, KEYS = 8561, REQUEST = 8562, CONFIRM = 8563, HISTORY = 8564, SEAL = 13, WRAP = 1059, MAIL = 1301, ANCHOR = 30078
 export const ANCHOR_D = 'belfry:sealed'
 export const MAX_DEVICES = 20
 export const MAX_RUMOR = 40_000 // bytes of a sealed rumor's JSON (§4, §8)
@@ -261,6 +261,41 @@ export function accept(author: Chain | null, seal: NostrEvent, rumor: Rumor, bel
   if (belfry && seal.pubkey === belfry) return rumor.pubkey === belfry && rumor.kind === MAIL
   if (!author || author.account !== rumor.pubkey || !Number.isInteger(rumor.created_at)) return false
   return hasDevice(author, seal.pubkey, rumor.created_at)
+}
+
+// ---- §5.2 2b: "It was me", answered once for every device ----------------------------------
+
+/** The 8563 rumor: DEVICE (this one, also its seal signer) confirms the device ADDED, which roster
+ *  ROSTER added to ACCOUNT's chain. Sealed to my own head letterbox (sealToLetterbox). */
+export function confirmRumor(device: string, account: string, added: string, roster: string, at: number): Rumor {
+  return withId({ kind: CONFIRM, pubkey: device, created_at: at, tags: [['p', account], ['device', added], ['e', roster]], content: '' })
+}
+
+/** The roster that LAST added DEVICE to C (in it, not in the roster before; the root for its own
+ *  devices): a device removed and added again is about its new roster (§5.2 2b). */
+export function lastAdded(c: Chain, device: string): Roster | undefined {
+  for (let i = c.rosters.length - 1; i >= 0; i--) {
+    if (!c.rosters[i].devices.includes(device)) continue
+    if (i === 0 || !c.rosters[i - 1].devices.includes(device)) return c.rosters[i]
+  }
+  return undefined
+}
+
+/** Whether an opened 8563 clears the notice for its device (§5.2 2b), in C (ACCOUNT's valid chain):
+ *  'ok' (the device it names), 'wait' (its roster isn't in the chain yet), 'no' (ignored). The seal
+ *  signer must be in the roster before the one named by e (the added device never confirms
+ *  itself, nor two added together each other), in the head now, and e must be the roster that
+ *  really added the device. */
+export function confirmOk(c: Chain, account: string, seal: NostrEvent, rumor: Rumor): { ok: 'ok' | 'wait' | 'no'; device?: string } {
+  if (rumor.kind !== CONFIRM || rumor.pubkey !== seal.pubkey || c.account !== account || rumor.content !== '') return { ok: 'no' }
+  const p = rumor.tags.filter((t) => t[0] === 'p'), dv = rumor.tags.filter((t) => t[0] === 'device'), e = rumor.tags.filter((t) => t[0] === 'e')
+  if (p.length !== 1 || p[0][1] !== account || dv.length !== 1 || !isKey(dv[0][1]) || e.length !== 1 || !isKey(e[0][1])) return { ok: 'no' }
+  const device = dv[0][1], roster = e[0][1]
+  const i = c.rosters.findIndex((r) => r.id === roster)
+  if (i < 0) return { ok: 'wait' }
+  if (i === 0 || lastAdded(c, device)?.id !== roster) return { ok: 'no' }
+  if (!c.rosters[i - 1].devices.includes(seal.pubkey) || !headOf(c).devices.includes(seal.pubkey)) return { ok: 'no' }
+  return { ok: 'ok', device }
 }
 
 // ---- handing keys over (§5.5) ------------------------------------------------------------

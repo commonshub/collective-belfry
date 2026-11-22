@@ -2163,4 +2163,5 @@ form .create-where { margin-bottom: 14px; }
 /* §5.2 2a, board messages/encryption-device-added: a device added without this one asking */
 .seal-banner.seal-added { position: relative; padding-right: 44px; }
 .seal-banner.seal-added .seal-x { position: absolute; top: 6px; right: 6px; width: 36px; height: 36px; font-size: 20px; color: var(--muted); }
+.seal-banner.seal-added .seal-added-all { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
 .seal-notyou { font-size: inherit; padding: 0; }

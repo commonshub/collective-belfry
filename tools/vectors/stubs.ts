@@ -7,6 +7,7 @@ export type Ev = { id: string; pubkey: string; kind: number; created_at: number;
 export const me = () => g.__ME
 export const setWriteGuard = () => {}
 export const belfryAdminKeys = (): string[] => []
+export const belfryGroupsKey = (): string => ''
 export const isAdmin = () => false
 export const agentOwner = (_: string): string | undefined => undefined
 export const queryOnce = async () => []

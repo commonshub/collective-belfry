@@ -27,6 +27,11 @@ type Conv = string
  *  reference), plus the letterbox of every head it accepted (sealing falls back to the last one). */
 type Pin = C.Pin & { heads: Record<string, string> }
 interface Fresh { root: string; at: number; shared: Conv[]; head?: string /* a switch: the new branch's head */ }
+/** 2a / 2b: a notice per added device; SEND: It was me was tapped here (an 8563 to send), SENT: it went. */
+export interface Notice { at: number; by?: string; done?: boolean; send?: boolean; sent?: boolean }
+/** The notice is about the roster BY that added the device now (2b, 2279e6e: removed and added again
+ *  = a new notice). One from before `by` was kept counts only for the roster dated its `at`. */
+const aboutRoster = (n: Notice | undefined, by: C.Roster | undefined) => !!n && !!by && (n.by ? n.by === by.id : n.at === by.created_at)
 /** What this device remembers (one kv entry, merged on every write). */
 interface State {
   keys: Record<string, string> // lb → secret hex: my key chain
@@ -41,7 +46,7 @@ interface State {
   elsewhere?: Elsewhere
   /** §5.2 2a: devices added to my head without this device having shown a prompt or a link code for
    *  them: device → the adding roster's time (s); DONE once "It was me" or Remove was tapped */
-  notices?: Record<string, { at: number; done?: boolean }>
+  notices?: Record<string, Notice>
   /** 2a: rosters dated from this (s) on raise notices (set at this version's first start: devices
    *  added before it never do) */
   noticeFrom?: number
@@ -75,8 +80,14 @@ function merge(a: State, b: State): State {
   for (const r of unshared) delete shared[r]
   const ea = a.elsewhere, eb = b.elsewhere
   const elsewhere = !ea ? eb : !eb ? ea : ea.root === eb.root ? { ...ea, answered: !!(ea.answered || eb.answered) } : ea.at >= eb.at ? ea : eb
-  const notices: Record<string, { at: number; done?: boolean }> = { ...(a.notices ?? {}) }
-  for (const [d, n] of Object.entries(b.notices ?? {})) { const m = notices[d]; notices[d] = !m ? n : { at: Math.min(m.at, n.at), ...(m.done || n.done ? { done: true } : {}) } }
+  const notices: Record<string, Notice> = { ...(a.notices ?? {}) }
+  for (const [d, n] of Object.entries(b.notices ?? {})) {
+    const m = notices[d]
+    if (!m) { notices[d] = n; continue }
+    // about two different rosters (removed and added again): the later one stays
+    if ((m.by ?? m.at) !== (n.by ?? n.at) && (m.by || n.by)) { notices[d] = m.at >= n.at ? m : n; continue }
+    notices[d] = { at: Math.min(m.at, n.at), ...(m.by || n.by ? { by: m.by || n.by } : {}), ...(m.done || n.done ? { done: true } : {}), ...(m.send || n.send ? { send: true } : {}), ...(m.sent || n.sent ? { sent: true } : {}) }
+  }
   const noticeFrom = a.noticeFrom && b.noticeFrom ? Math.min(a.noticeFrom, b.noticeFrom) : a.noticeFrom ?? b.noticeFrom
   const prompted = [...new Set([...(a.prompted ?? []), ...(b.prompted ?? [])])]
   return { ...(elsewhere ? { elsewhere } : {}), notices, ...(noticeFrom ? { noticeFrom } : {}), prompted, keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked) }
@@ -478,6 +489,8 @@ export async function openDm(wrap: NostrEvent, belfry?: string): Promise<Opened>
   }
   let o: { seal: NostrEvent; rumor: C.Rumor }
   try { o = C.openSealed(hexToBytes(secret), wrap) } catch { return { ok: false, retry: false } }
+  // §5.2 2b: "It was me" from another device of mine: never a message
+  if (o.rumor.kind === C.CONFIRM) return { ok: false, retry: (await takeConfirm(o.seal, o.rumor)) && nowS() - wrap.created_at < KEEP }
   if (belfry && o.seal.pubkey === belfry) return C.accept(null, o.seal, o.rumor, belfry) ? { ok: true, ...o } : { ok: false, retry: false }
   // the belfry's own mail before belfry.json gave its key: tried again then (not parked as waiting)
   if (!belfry && o.rumor.kind === C.MAIL && o.rumor.pubkey === o.seal.pubkey) return { ok: false, retry: true }
@@ -875,26 +888,66 @@ async function markPrompted(dev: string) {
  *  prompt or a link code for: one notice per device, kept across restarts. */
 async function noteAdded(c: C.Chain) {
   if (!device || !st.noticeFrom) return
-  const add: Record<string, number> = {}
+  const add: Record<string, Notice> = {}
   for (const d of C.headOf(c).devices) {
-    if (d === device.pub || st.notices?.[d] || st.prompted?.includes(d)) continue
-    const by = c.added.get(d)
+    const by = C.lastAdded(c, d)
+    if (d === device.pub || aboutRoster(st.notices?.[d], by) || st.prompted?.includes(d)) continue
     if (!by || by.n === 1 || by.created_at < st.noticeFrom) continue
-    add[d] = by.created_at
+    add[d] = { at: by.created_at, by: by.id }
   }
-  if (Object.keys(add).length) await commit((x) => { x.notices = { ...(x.notices ?? {}) }; for (const [d, at] of Object.entries(add)) if (!x.notices[d]) x.notices[d] = { at } })
+  if (Object.keys(add).length) await commit((x) => { x.notices = { ...(x.notices ?? {}) }; for (const [d, n] of Object.entries(add)) if (!aboutRoster(x.notices[d], { id: n.by!, created_at: n.at } as C.Roster)) x.notices[d] = n })
 }
 
-/** 2a: the notices to show: added devices still in my head, not answered. */
+/** 2a: the notices to show: added devices still in my head, about the roster that added them, not answered. */
 export function addedNotices(): { device: string; at: number }[] {
   const c = chainOf(me())
   if (!c || !device) return []
   const head = new Set(C.headOf(c).devices)
-  return Object.entries(st.notices ?? {}).filter(([d, n]) => !n.done && head.has(d) && d !== device!.pub).map(([d, n]) => ({ device: d, at: n.at * 1000 })).sort((a, b) => b.at - a.at)
+  return Object.entries(st.notices ?? {}).filter(([d, n]) => !n.done && head.has(d) && d !== device!.pub && aboutRoster(n, C.lastAdded(c, d))).map(([d, n]) => ({ device: d, at: n.at * 1000 })).sort((a, b) => b.at - a.at)
 }
-/** 2a: "It was me" (or after Remove): the notice goes, on every tab, across restarts. */
-export async function answerNotice(dev: string) {
-  await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, done: true } } })
+/** 2a: "It was me" (or after Remove): the notice goes, on every tab, across restarts. 2b: It was me
+ *  also tells my other devices (an 8563 to my own letterbox); Remove needs nothing (the roster). */
+export async function answerNotice(dev: string, tell = true) {
+  await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, done: true, ...(tell ? { send: true } : {}) } } })
+  if (tell) void sendConfirms()
+}
+
+/** 2b: the 8563s tapped here and not sent yet; one that can't go now goes at a later pass. Never
+ *  through the outbox (not a message, no e-mail path). */
+let confirming = false
+async function sendConfirms() {
+  if (confirming || !device) return
+  const c = chainOf(me())
+  const todo = Object.entries(st.notices ?? {}).filter(([, n]) => n.send && !n.sent)
+  if (!c || !todo.length) return
+  const head = C.headOf(c)
+  if (!head.devices.includes(device.pub) || !relayAuthed('main')) return
+  confirming = true
+  try {
+    for (const [dev] of todo) {
+      const by = C.lastAdded(c, dev)
+      // left my head (removed) or never added by a roster after the root: nothing to tell
+      if (!by || by.n === 1 || !head.devices.includes(dev) || !aboutRoster(st.notices?.[dev], by)) { await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, sent: true } } }); continue }
+      try {
+        await publishNow('main', C.sealToLetterbox(device.secret, C.confirmRumor(device.pub, me(), dev, by.id, nowS()), me(), head.lb))
+        await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, sent: true } } })
+      } catch { /* refused or offline: the next pass */ }
+    }
+  } finally { confirming = false }
+}
+
+/** 2b: an 8563 opened from my letterbox. True: keep the wrap and try again (its roster not in my
+ *  chain yet). A valid one clears the notice here, also before this device raised it. */
+async function takeConfirm(seal: NostrEvent, rumor: C.Rumor): Promise<boolean> {
+  const c = chainOf(me())
+  if (!c) return true
+  const v = C.confirmOk(c, me(), seal, rumor)
+  if (v.ok === 'wait') { void loadChain(me()); return true }
+  if (v.ok !== 'ok' || !v.device) return false
+  const dev = v.device, by = C.lastAdded(c, dev)!
+  await commit((x) => { const n = x.notices?.[dev]; x.notices = { ...(x.notices ?? {}), [dev]: { ...(aboutRoster(n, by) ? n : {}), at: by.created_at, by: by.id, done: true } } })
+  touch()
+  return false
 }
 
 /** One pass at a time: the store changes while a pass waits for the sessions list, and two passes
@@ -929,6 +982,7 @@ async function onStorePass() {
   if (!c || !deviceIn()) return
   const head = C.headOf(c)
   await noteAdded(c)
+  void sendConfirms()
   // only each device's newest request counts (newest created_at, then the lowest id); the older
   // ones of that device are left as they are
   const newest = new Map<string, NostrEvent>()

@@ -15109,5 +15109,671 @@
     }
    }
   ]
+ },
+ "confirm": {
+  "note": "sealed.md §5.2 step 2b, kind 8563: \"It was me\" answered once for all my devices. Added by belfry-android (tools/sealed_confirm_vectors.py, which reproduces this file's other events byte for byte) on 2026-11-22; to be taken into services/onboarding/tools/sealed_vectors.py. The rumor: kind 8563, pubkey = the confirming device (not the account), tags p (the account), device (the added device), e (the id of the roster that added it), content \"\"; sealed like any rumor (§4) to my own head letterbox, the seal signed by that device. A device clears its notice for the added device when the seal's signer (a) is in the roster BEFORE the one named by e, (b) is in the head now, and (c) e names the roster of my chain that added that device (in it, not in the roster before). Each case gives the opened rumor and the key that signed its seal; 'chain' is my chain for every case: root [phone], 2 adds the laptop, 3 adds the tablet and alice_extra together, 4 removes the laptop (new letterbox), anchored on 4. The cases marked 'read strictly' are Android's reading of the shape, for the lead to confirm. An 8563 is never shown as a message and never part of a shared history (8564): history.added_ids never holds one (kinds 14, 7 and 5 only).",
+  "account": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+  "chain": {
+   "anchor": {
+    "kind": 30078,
+    "created_at": 1795000401,
+    "tags": [
+     [
+      "d",
+      "belfry:sealed"
+     ],
+     [
+      "root",
+      "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+     ],
+     [
+      "head",
+      "1286dd6da457019d5285477ff38be95308e74d29f6c230c853591b8b7b2b0ad0"
+     ]
+    ],
+    "content": "",
+    "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+    "id": "546fab6af56cb0e17cfa5f9cec62450ebcea1fb04cb699ab3d4fe0928ab822cf",
+    "sig": "e33781d4ede1ab4b92fc5366d4b41f59fdfb42c750460d45cfa5457748a5f56f1112b7e8da410753c041ded3802412b792e4da80a8a279d1cd4fc7eaa0dc74b9"
+   },
+   "rosters": [
+    {
+     "kind": 8560,
+     "created_at": 1795000000,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "n",
+       "1"
+      ],
+      [
+       "lb",
+       "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+      ],
+      [
+       "device",
+       "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+      ]
+     ],
+     "content": "",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "id": "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae",
+     "sig": "a77fa5b6d052bd215f372551ee81e6565461daa42b9eaa64e774b2e9377024c38b95281ff9893a74ca8eceef7e8276bbc7ab37cad8c0a815937380a7cfdbb639"
+    },
+    {
+     "kind": 8560,
+     "created_at": 1795000100,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "n",
+       "2"
+      ],
+      [
+       "prev",
+       "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+      ],
+      [
+       "lb",
+       "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+      ],
+      [
+       "device",
+       "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+      ],
+      [
+       "device",
+       "2d2eae433b0420edf89347b2d0c8e0b9a0522202256e4d90da3e84355377c731"
+      ]
+     ],
+     "content": "",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "id": "11581c31392b646f4d3d9b2166feb7723a71cc9a88bbcf125dd40ad7d4e6181c",
+     "sig": "62ef58531ab864e6453a5d4ad00613cd89ec75e54555e12719b664cc1a2b46d75a51812f7ef3b506b47dea62fb20ae9c99139497efb457e03be9017be429bbcc"
+    },
+    {
+     "kind": 8560,
+     "created_at": 1795000300,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "n",
+       "3"
+      ],
+      [
+       "prev",
+       "11581c31392b646f4d3d9b2166feb7723a71cc9a88bbcf125dd40ad7d4e6181c"
+      ],
+      [
+       "lb",
+       "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+      ],
+      [
+       "device",
+       "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+      ],
+      [
+       "device",
+       "2d2eae433b0420edf89347b2d0c8e0b9a0522202256e4d90da3e84355377c731"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "device",
+       "847e8ca990365e9e87c92b03826f33e06a043a4a32740a08399b088c51221654"
+      ]
+     ],
+     "content": "",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "id": "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2",
+     "sig": "fe1b8d17d27b84301d9076d97b37031cd6dccc219bd9aea4f7822682b390c858d27d7b9d5178180377915b1d6763bd8b4b83c71897907aaf79c24c4a71b6f157"
+    },
+    {
+     "kind": 8560,
+     "created_at": 1795000400,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "n",
+       "4"
+      ],
+      [
+       "prev",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ],
+      [
+       "lb",
+       "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39"
+      ],
+      [
+       "device",
+       "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "device",
+       "847e8ca990365e9e87c92b03826f33e06a043a4a32740a08399b088c51221654"
+      ]
+     ],
+     "content": "",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "id": "1286dd6da457019d5285477ff38be95308e74d29f6c230c853591b8b7b2b0ad0",
+     "sig": "b78280a868f93a9feae2ff8ccac64c7dccd8d6ba10b6c948f2ea135e5c15a0404b6c983ae4a6012aa4545ece2cd569945a4380477b25a90b801573585a89b493"
+    }
+   ]
+  },
+  "cases": [
+   {
+    "name": "the phone confirms the tablet",
+    "note": "The phone was in roster 2, the one before roster 3 that added the tablet, and is in the head (roster 4). Accepted: the notice for the tablet goes.",
+    "rumor": {
+     "id": "7f55af94dbdeadd7210ac1f4df37667e00d0b4999947e015fd11925edffb3393",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": true,
+     "device": "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960",
+     "roster": "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+    }
+   },
+   {
+    "name": "the added device confirms itself",
+    "note": "The tablet signs the seal. It is not in the roster before the one that added it.",
+    "rumor": {
+     "id": "f7702f60d3d1fb495eb746edf509a0d6cd16c0c1130bb68ba8bc2f6297673aa7",
+     "pubkey": "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "a device added in the same roster",
+    "note": "alice_extra came in with the tablet (roster 3): two devices added together cannot confirm each other.",
+    "rumor": {
+     "id": "a7620f4eb83bf09717acac03bd6c433bd1ad6c1d0503e5353a0a34065fc232c9",
+     "pubkey": "847e8ca990365e9e87c92b03826f33e06a043a4a32740a08399b088c51221654",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "847e8ca990365e9e87c92b03826f33e06a043a4a32740a08399b088c51221654",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "the signer is no longer in the head",
+    "note": "The laptop was in roster 2, before the tablet came, but roster 4 removed it.",
+    "rumor": {
+     "id": "92369b28e2482d7cd97204b78961729a29d53fea9f6dffd1054bfa133aef6f0c",
+     "pubkey": "2d2eae433b0420edf89347b2d0c8e0b9a0522202256e4d90da3e84355377c731",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "2d2eae433b0420edf89347b2d0c8e0b9a0522202256e4d90da3e84355377c731",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "the signer was never in the chain",
+    "note": "Mallory's phone, sealed to Alice's letterbox.",
+    "rumor": {
+     "id": "e63753c30955865b099e7317fc24220396e18d3a8dcbea345a69eacec7759805",
+     "pubkey": "f2230fac4f8abda2edc9fe2d1afe7075cd364ae33844155552ef52c26b6d79a7",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "f2230fac4f8abda2edc9fe2d1afe7075cd364ae33844155552ef52c26b6d79a7",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "a roster that did not add the device: the one before",
+    "note": "e names roster 2, which added the laptop, not the tablet.",
+    "rumor": {
+     "id": "504671080827d5c1865772b2b14dce8a6a70d12bcda18769c9d11b5f83f18553",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "11581c31392b646f4d3d9b2166feb7723a71cc9a88bbcf125dd40ad7d4e6181c"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "a roster that did not add the device: a later one that keeps it",
+    "note": "e names roster 4: the tablet is in it, and was in roster 3 already.",
+    "rumor": {
+     "id": "84098873b466d9c5f5bda384baaf9bb70f2d27327dc8fa9ba185520d6290566a",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "1286dd6da457019d5285477ff38be95308e74d29f6c230c853591b8b7b2b0ad0"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "the root as the roster",
+    "note": "e names the root: there is no roster before it, it adds nobody.",
+    "rumor": {
+     "id": "b605261dd6d6eaebe52a18d9698d3dd4ab7270f0f6ee5774442b3945ecbb1052",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+      ],
+      [
+       "e",
+       "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "a roster that is not in the chain",
+    "note": "e is an id no roster of the chain has. Not accepted (a client may keep the wrap and judge it again when its chain moves, like any sealed rumor whose chain isn't loaded; it never clears a notice meanwhile).",
+    "rumor": {
+     "id": "7199d8f4895a801efb2785380528f76c452a2bd3dd8bd574742a4e1e06935d65",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "2c714b14c76ef50a2132ffa831411b0411cc58ab4bb9b2cfe66514113eaddd01"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "the wrong device for that roster",
+    "note": "Roster 3 is named, but the device is the laptop, which roster 2 added.",
+    "rumor": {
+     "id": "54d6c779687206384611e3f46464c06664c08291afe70a2d53b278024978e011",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "2d2eae433b0420edf89347b2d0c8e0b9a0522202256e4d90da3e84355377c731"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "p names another account",
+    "note": "The rumor is tagged for Bob.",
+    "rumor": {
+     "id": "b6172de86cd937f8a3ffdb2412e93221e07abfe0af9abac7848d63a96e6ded25",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "the rumor's pubkey is the account, not the device",
+    "note": "Step 2b: pubkey = the confirming device. Read strictly: a rumor whose pubkey is not the key that signed its seal is ignored.",
+    "rumor": {
+     "id": "b69740fb5b5c19d190f8f8a9fcab8c523b85dce46dc7ab241fff3cc43b392d15",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "two device tags",
+    "note": "A tag given twice makes it invalid (as for a roster, §3.3).",
+    "rumor": {
+     "id": "1148878cad2633664de356e61e087ed63ca1a8dd54436898917bd81b838efa7c",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ],
+      [
+       "device",
+       "847e8ca990365e9e87c92b03826f33e06a043a4a32740a08399b088c51221654"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "two e tags",
+    "note": "The same for e.",
+    "rumor": {
+     "id": "418a3051e6beeaf1d249d1a792e05983ad6db2660c4190437c381533083c6d59",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ],
+      [
+       "e",
+       "11581c31392b646f4d3d9b2166feb7723a71cc9a88bbcf125dd40ad7d4e6181c"
+      ]
+     ],
+     "content": ""
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   },
+   {
+    "name": "content that is not empty",
+    "note": "Step 2b: content \"\". Read strictly.",
+    "rumor": {
+     "id": "eb33252de2362b82656ed09cef89237e7cbd306b284d55fe9d0a73442990036b",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": "it was me"
+    },
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "expected": {
+     "accepted": false
+    }
+   }
+  ],
+  "wrap": {
+   "name": "confirm: the phone confirms the tablet",
+   "note": "The first case's rumor in its wrap, to Alice's head letterbox (alice_lb2). The opener computes the rumor's id; its pubkey is the phone, which also signed the seal.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1795000502,
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39"
+     ]
+    ],
+    "content": "Ahe2/Kp8r/0zcurWKAwqCj6/GAtZK7lyadb7R/Xb47WRaIdFxS3vVLMWk1YitIcN+q3eXaIejckFjDCsxapmSt/tDVTatNn4/YDW1lmIwPicCroDGQTwHyzL5ZMIu7ZYJWLTt7jxY5sr71ZyeF4ICiQokf1Sdbd+GYuIWCdmjLp0aLxtoyigYe+ypm6wQDVWui1qtVCYOKdsy09gAGvA6JesR6J7rI1poPrvpzlH1IAuZ/dbwo8SPvBMjZAep9Rfo4dx6/zKqRzW3wYHdvhVC6bHQTU7sA7PrwW0jzKwn8R2POdtDRoKaehJpy1zISrQ4wwAVuC1HCcXIQik2oxZrEPOox5ofUgNdy3arG4Pvme3FtFTm729/tILrbLpd0Lwz30goIYmsSLFX+CreXGnjle3ff2sIqCbmmvx+IMg87D2Ff5eG/AwlDVN2DlbAz9h6fqn4R3Ili12geSZF/KLkY+C5fpVmpvT/g2b7D6FifMu8n3DhXB/qkYgSlWdSdImxOCdl3kFuojLHQbicL2COsi3jAiVeJVuQRzX3tQN0xGhPnAnIcOiT/HwOEOHeNWiKBHpLdyQzD2++NsoD0oBmgd09Ok7gl6J5qY4sYEuQ86KJkpXn1c9pJ0y1wpTw/LROxpqGe3ntMwhJ+BTuXyxAFfx7UUYc33mbZ8ImyAq8QwpuY51ROwgi5Wd3LBLPLkIBtoKiZrNMXP4Ny/ZfgJ+LUOk4wD2I5HcKogDxHwjtkvnm38SmOtXDh/w/TEspHNhOhM/DWJkW7uYPTs/kjTgRjOt4UwrWAILvlsoZ0DTsq9ALYD2eGW7eqVzdCopMcHLzV4hEAra3tmTr89ATus5YiTuveaUpe8sgAHP6BMujBUDAl+kCa02E0OqLN9F4ixDhO+VAj/YMeSJXjtBZbiFHB1gpDokJH2C0oUSmDtm9kXrwz3410otOXOPSraJ9XINB5WVnX+Oa12c4m1Hr5J55ltXighLmU9dHS0ETrFjGwF6/ydqdqSZwVmfWl8009kGDUTPA15eVAvFFNnYtJSnI8I6XATfFnfy5drTIU1TwxTC7OhGfEFe23+48b89+m+GYS50hL5WhlZdyOpk8OedEaJqtyDnFCDblD6Cvsx0WOCoD1NECO408NIGGqrZ3hfkQhLN7sradLM0snlK6Aa+XTBWyOd/NMWzKgz4ODotlIXx8Pz7yFheq9wzvfTCrrbjn8CB5TmNso+/AD7dzWlMmv55b3tcdlcxyzr5JnRBPVo6jy20CK7aoTHXxQPrFHq5RJADkxT8vOvmesFZe06PWUJUsPASAc6pSIbYAv36v4vW3z0kjV1Z0NqXCGbY+ZVbv4GaIOovPaiYNfvbeIqzg7FRe6XBe1qaJm0WsAiI9N0q4BEEFXoM1YWWE9IdjYTTSVOeX8ZxJOaa7TeP7KvCfWDXd0V35DMAT33nDcgKw0m4O7TOWKWeEjzB8CKKfGFs96iW6lQIhUBT5JaivNOEr8BouQNB51akOmPheU5B02ovGvAWV2jblSJj1s8M45wpOPZ4NFgmgIZCA0hk5HwC5zMbRPd5bMjZQpYDpZla1thLZYqYFrp9GXUF7aXzfA6KNEA4p/0nkQXkkU9dnGmHsRHr4DbsCkQ+s1kenbDgtaeoKNXEzrSSuHa1VC2xl8c8yts1jIP/nX2Z3eemPee582eTmcUt3F8DFwewhi9zgnpPQREvhNKlGibo7GRV/K8P1yCAIgboBj/FpcB6jmEuQnSuDFTPCSwm2HgY3aWvINmNjwQKbRLDA3F8EAZqXgTCLblG",
+    "pubkey": "44104927385d695bfc49d2b6950a6a55c8061d9c11d72aa40b36ad9e12f660b2",
+    "id": "18569176d6ab502bfbfbc5712505a84f61e79ca9086b1050fb13835a447f75f0",
+    "sig": "27c86c696453220027be774d52c253c34072d290ac03b94317ff7eff9538ce0bd1cc581eb687dcbd677e778224ba7a0e746dd950fd01a61db650cb8f34e8b3fc"
+   },
+   "letterbox": "alice_lb2",
+   "letterbox_secret": "81d4e1c270212117d34e4b717adfce48d463e9594a97130b858848d361112d41",
+   "expected": {
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "rumor": {
+     "id": "7f55af94dbdeadd7210ac1f4df37667e00d0b4999947e015fd11925edffb3393",
+     "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "created_at": 1795000500,
+     "kind": 8563,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "device",
+       "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960"
+      ],
+      [
+       "e",
+       "4fd5daa6fff651024316cc2201166f45f89ecbfd6d6d65cf88b3f892bf2a23a2"
+      ]
+     ],
+     "content": ""
+    },
+    "accepted": true
+   }
+  }
  }
 }

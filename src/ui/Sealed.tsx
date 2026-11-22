@@ -101,7 +101,8 @@ export function AddedBanner() {
       <div key={n.id} className="seal-banner seal-added" role="status">
         <DeviceIcon kind={n.kind} size={20} />
         <span className="t"><b>{n.name} was added {addedWhen(n.at)}</b>It can read your conversations.<br />
-          <button className="seal-how" onClick={() => setAsked(n)}>Not you? Remove it</button></span>
+          <button className="seal-how" onClick={() => setAsked(n)}>Not you? Remove it</button>
+          <small className="seal-added-all">× It was me: clears this on all your devices</small></span>
         <button className="icon-btn seal-x" aria-label="It was me" title="It was me" onClick={() => void itWasMe(n.id)}>×</button>
       </div>
     ))}
