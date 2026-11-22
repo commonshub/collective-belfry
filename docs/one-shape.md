@@ -13,12 +13,14 @@ events that already exist.
   not count), ordered by the channel's newest message, thread reply or reaction. Computed on the device from the events it holds.
 - **Pinned for everyone**: `"pinned": ["<group id>", …]` in the content of the existing kind
   30078 `d=belfry:channel-order` event (belfry admins write it; a writer keeps every other
-  key). Unknown ids are skipped.
+  key). Unknown ids are skipped. The main channel (`general`) is always first in everyone's
+  list, whether listed or not, so a menu is never empty.
 - **Pinned for me**: one kind 30078 `d=belfry:pins` per person on the community relay, content
   NIP-44 v2 encrypted to self: `{"v":1,"c":["<group id>", …]}`. Newest wins; sent through the
   outbox. Guests keep it on the device only. Same pattern as `belfry:read`.
 - **Notify me of everything** (the bell, off by default) = push level `all` for that channel
-  (`docs/push.md`); off = `default`.
+  (`docs/push.md`); off = `default`. Every member has the channel's Settings row, with "Pin
+  for me" and "Notify me of everything"; admins also see "Pin for everyone" and the rest.
 - **Add a channel** (the ＋ on Channels): typing filters the channels the device knows; "Create"
   comes last. Any member may create (as today). There is no "All channels" screen.
 - A channel not in my list opens as a preview; writing or reacting brings it into the list.
