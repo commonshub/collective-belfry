@@ -108,6 +108,17 @@ class Handler:
             return "451 4.3.0 Try again later"
 
 
+async def listen(loop: asyncio.AbstractEventLoop, factory, port: int = PORT) -> asyncio.Server:
+    """Both families: mail-in sits on the IPv6 edge network, where Docker hands IPv6 senders
+    straight to the container's IPv6 address (an IPv4-only listener refused every IPv6 sender,
+    Gmail first, on 2026-11-22). IPv4 alone only where the container has no IPv6 at all."""
+    try:
+        return await loop.create_server(factory, host=["0.0.0.0", "::"], port=port)
+    except OSError as exc:
+        log.warning("no IPv6 listener (%s): IPv4 only", exc)
+        return await loop.create_server(factory, host="0.0.0.0", port=port)
+
+
 async def main() -> None:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO"), format="%(levelname)s %(name)s %(message)s"
@@ -133,7 +144,7 @@ async def main() -> None:
             )
 
         loop = asyncio.get_running_loop()
-        server = await loop.create_server(factory, host="0.0.0.0", port=PORT)
+        server = await listen(loop, factory)
         log.info("listening on %d for @%s (STARTTLS %s)", PORT, DOMAIN, "on" if ctx else "off")
         async with server:
             while True:
