@@ -13,7 +13,8 @@ const ratelimit = {};
 // account, and one dated more than 5 minutes from now is refused (enc.cjs)
 let prule = false;
 const PRULE = new Set([8571, 8572, 8573]);
-const hidden = (e, who) => prule && PRULE.has(e.kind) && !e.tags.some((t) => t[0] === "p" && t[1] === who);
+// (a group's 8571/8572 carry h and live on the groups relay, which has no such rule: §22)
+const hidden = (e, who) => prule && PRULE.has(e.kind) && !e.tags.some((t) => t[0] === "h") && !e.tags.some((t) => t[0] === "p" && t[1] === who);
 const blobs = new Map(); const uploads = [];
 const refuse = {}; // GET /refuse/<kind or 'anchor'>/<n>: the next n EVENTs of that kind (anchor: 30078 d belfry:sealed) get OK false // GET /silent/on: connections stay open, REQs get no answer (no EOSE), EVENTs no OK
 function match(e, f) {

@@ -188,6 +188,25 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await S.ev("[...document.querySelectorAll('.enc-devices .row-btn')].at(-1).click()"); await sleep(800);
   w = await S.ev("document.body.innerText");
   check("one device: Added, Last active, Earlier messages Shared, Remove this device", /Added/.test(w) && /Last active/.test(w) && /Earlier messages/.test(w) && /Shared/.test(w) && /Remove this device/.test(w), w.slice(0, 300));
+  // part 10: a private group (closed + private; its 39000 / 39002 as the relay would publish them)
+  const gid = "pod-garden-secret-7f3a", relaySk = sk("groups-relay");
+  const meta = finalizeEvent({ kind: 39000, created_at: Math.floor(Date.now() / 1000), tags: [["d", gid], ["name", "Garden committee"], ["about", "Private"], ["closed"], ["private"]], content: "" }, relaySk);
+  const mem = finalizeEvent({ kind: 39002, created_at: Math.floor(Date.now() / 1000), tags: [["d", gid], ["p", pkS], ["p", pkL]], content: "" }, relaySk);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([meta, mem]) });
+  await S.ev(`location.hash = '#/c/${gid}'`); await sleep(4000);
+  await S.ev(`(async () => { const i = document.querySelector('.composer textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(i, 'Garden plans, members only'); i.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const b = [...document.querySelectorAll('.composer button')].find((x) => /^Send/i.test(x.getAttribute('aria-label') || '') || x.classList.contains('send')); b && b.click() })()`);
+  const gsent = await until(async () => { const x = await dump(); return x.some((e) => e.kind === 8572 && e.tags.some((t) => t[0] === "h" && t[1] === gid)) }, 30000);
+  d = await dump();
+  check("private group: an envelope (h, d = K, maker) and an 8572, signed by Sam's account", !!gsent && d.some((e) => e.kind === 8571 && e.pubkey === pkS && e.tags.some((t) => t[0] === "h" && t[1] === gid) && e.tags.some((t) => t[0] === "maker")) && d.some((e) => e.kind === 8572 && e.pubkey === pkS && e.tags.some((t) => t[0] === "h" && t[1] === gid)), d.filter((e) => e.tags.some((t) => t[0] === "h" && t[1] === gid)).map((e) => e.kind));
+  check("…no clear kind 9 in the group, the text nowhere on the relay", !d.some((e) => e.kind === 9 && e.tags.some((t) => t[0] === "h" && t[1] === gid)) && !JSON.stringify(d).includes("Garden plans"));
+  await L.ev(`location.hash = '#/c/${gid}'`);
+  check("Lina reads it in the private group", await until(() => has(L, "Garden plans, members only"), 30000), await L.ev("document.body.innerText.slice(0, 300)"));
+  // §17.2: a clear message in the private group after its first key never counts
+  const clear9 = finalizeEvent({ kind: 9, created_at: Math.floor(Date.now() / 1000), tags: [["h", gid]], content: "A clear one, after the key" }, linaSk);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([clear9]) });
+  await sleep(3000);
+  check("…a clear kind 9 after the first key shows nowhere", !(await has(S, "A clear one, after the key")));
+  await S.shot("group");
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
     const w = new WebSocket("ws://127.0.0.1:4481"); const out = [];

@@ -52,10 +52,14 @@ export const hasEvent = (id: string) => events.has(id)
 /** An event held already (checked when it came in). */
 export const heldEvent = (id: string): Ev | undefined => events.get(id)
 
+/** enc/runtime.ts (§17.2): an event that must never count (a clear event in a private group after its first key). */
+let refuse: (e: NostrEvent) => boolean = () => false
+export const setRefuse = (f: (e: NostrEvent) => boolean) => { refuse = f }
+
 export function addEvents(list: NostrEvent[]) {
   let changed = false
   for (const e of list) {
-    if (events.has(e.id)) continue
+    if (events.has(e.id) || refuse(e)) continue
     events.set(e.id, e)
     writeQueue.push(e)
     changed = true

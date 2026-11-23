@@ -10,8 +10,9 @@ import { finalizeEvent, getPublicKey, type Filter, type NostrEvent } from 'nostr
 import { BELFRY } from '../../config'
 import { belfryGroupsKey, belfryNostrKey, encryptedFormat, loadAccessInfo, onAccessInfo } from '../access'
 import { kvGet, kvSet } from '../db'
-import { addEvents, all, latestCreatedAt, outboxItems, subscribe } from '../store'
-import { connectionOf, enqueueSigned, me, onOutbox, queryPaged, setExtraMainFilters, setPagedMainFilters } from '../sync'
+import { addEvents, all, latestCreatedAt, outboxItems, setRefuse, subscribe } from '../store'
+import { allGroups, group as groupOf } from '../model'
+import { connectionOf, enqueueSigned, me, onOutbox, queryPaged, setExtraGroupsFilters, setExtraMainFilters, setGroupWrap, setPagedMainFilters } from '../sync'
 import * as E from './core'
 
 let device: { secret: Uint8Array; pub: string } | null = null
@@ -212,6 +213,17 @@ async function startEncNow(clientSecret: string) {
   }, () => {})
   let t: ReturnType<typeof setTimeout> | null = null
   subscribe(() => { t ??= setTimeout(() => { t = null; void takeEnvelopes() }, 150) })
+  // part 10: private groups: their 8571/8572 on the groups relay, opened into the store; sends wrapped
+  setExtraGroupsFilters(() => { const ids = myPrivateGroups(); return device && ids.length ? [{ kinds: [E.KEY, E.MSG], '#h': ids }] : [] }, 'enc')
+  setGroupWrap((tpl) => wrapForGroup(tpl))
+  setRefuse(refuseClear)
+  let gt: ReturnType<typeof setTimeout> | null = null
+  let groupIds = ''
+  subscribe(() => { gt ??= setTimeout(() => {
+    gt = null
+    const ids = myPrivateGroups().sort().join(); if (ids !== groupIds) { groupIds = ids; setExtraGroupsFilters(() => { const l = myPrivateGroups(); return device && l.length ? [{ kinds: [E.KEY, E.MSG], '#h': l }] : [] }, 'enc') }
+    void openGroupMessages()
+  }, 200) })
   // removed by another device? at start, every 5 minutes, and back in the foreground (§16.6)
   void checkRemoved()
   setInterval(() => void checkRemoved(), 5 * 60e3)
@@ -542,6 +554,120 @@ export async function answerDevice(to: AddedDevice, what: 'shared' | 'removed') 
   answeredHere.set(to.device, { by: device.pub, answer: what })
   await kvSet(KV_ANSWERED, [...answeredHere.entries()]).catch(() => {})
   keyListeners.forEach((l) => l())
+}
+
+// ---- part 10: private groups (§4, §5, §6, §8, §16.1, §16.9, §18.4, §18.7, §22) -----------------
+
+/** A private group (docs/one-shape.md: closed + private): always encrypted, up to 1000 devices. */
+export const isPrivateGroup = (h?: string) => { const g = h ? groupOf(h) : undefined; return !!g && g.isPod && g.closed && g.inviteOnly }
+const myPrivateGroups = () => allGroups().filter((g) => g.isPod && g.closed && g.inviteOnly && g.members.has(me())).map((g) => g.id)
+/** §16.9: what stays in clear in a private group (the relay or the belfry reads it). */
+export function clearInGroup(e: { kind: number; pubkey: string; tags: string[][] }): boolean {
+  if ([9000, 9001, 9002, 9005, 9007, 9008, 9021, 9022, 39000, 39001, 39002, 39003].includes(e.kind)) return true
+  if (e.kind === 1985) return e.pubkey === belfryGroupsKey() || e.tags.some((t) => t[0] === 'L' && t[1] === 'belfry/vouch')
+  if (e.kind === 30078) { const d = e.tags.find((t) => t[0] === 'd')?.[1] ?? ''; return d.startsWith('belfry:inbox:') || d.startsWith('seen:') }
+  return false
+}
+const hOf = (e: { tags: string[][] }) => e.tags.find((t) => t[0] === 'h')?.[1]
+/** The date of a private group's first key known here (§17.2: clear events after it never count). */
+const groupFirstAt = (h: string) => encConvs.get('g:' + h)
+const opened = new Set<string>() // 8572s opened into the store (their outer ids)
+
+/** §17.2 (store.setRefuse): a clear event in a private group after its first key, outside §16.9's list. */
+function refuseClear(e: NostrEvent): boolean {
+  if (e.kind === E.KEY || e.kind === E.MSG || !('sig' in e) || !e.sig) return false // (opened rumors carry no signature)
+  const h = hOf(e)
+  if (!h || !isPrivateGroup(h) || clearInGroup(e)) return false
+  const f = groupFirstAt(h)
+  return f !== undefined && e.created_at > f
+}
+
+/** The group key named by a group 8572/8571 (d = K): held, or opened from the group's envelopes
+ *  in the store (all events of that d: the entry set is checked against `set`, §18.4). */
+const cantCheck = new Set<string>() // groups whose newest key's entry set doesn't add up here
+function groupKeyFor(h: string, K: string): KeyRec | undefined | 'wait' {
+  const held = keys.get(K)
+  if (held) return held
+  if (!device) return undefined
+  const envs = all(me()).filter((e) => e.kind === E.KEY && hOf(e) === h && e.tags.some((t) => t[0] === 'd' && t[1] === K))
+  let got: E.GroupKey | null = null
+  for (const env of envs) { try { got = E.openGroupEnvelope(device.secret, env, h) ?? got } catch { /* a bad envelope: skipped */ } if (got) break }
+  if (!got) return undefined
+  const v = E.acceptGroupKey(got, chainFor(got.account))
+  if (v === 'wait') { want([got.account]); return 'wait' }
+  if (v === 'no') return undefined
+  if (E.deviceSet(E.entryKeys(envs)) !== got.set) cantCheck.add(h); else cantCheck.delete(h)
+  const svc = got.account === belfryGroupsKey() || got.account === belfry()
+  const mc = chainOnly(me())
+  const rec: KeyRec = { K, k: got.k, conv: 'g:' + h, group: true, mine: !!mc && mc.lists.some((l) => l.devices.includes(got!.maker)), service: svc, lists: got.set, at: got.at }
+  holdKey(rec)
+  void saveKeys()
+  return rec
+}
+/** "Can't check who can read this" (group-who-cant-check): the entries seen don't add up to the set. */
+export const groupCantCheck = (h: string) => cantCheck.has(h)
+
+/** Open the private groups' 8572s into the store: their rumors are the group's events (§6). */
+async function openGroupMessages() {
+  if (!device) return
+  const add: NostrEvent[] = []
+  for (const e of all(me())) {
+    if (e.kind !== E.MSG || opened.has(e.id) || !('sig' in e) || !e.sig) continue
+    const h = hOf(e), K = E.named(e)
+    if (!h || !K || !isPrivateGroup(h)) continue
+    const key = groupKeyFor(h, K)
+    if (key === 'wait' || !key) continue // its key not here (no entry for this device: from when it joined, §8) or lists coming
+    let o: { seal: NostrEvent; rumor: E.Rumor }
+    try { o = E.openGroupMessage(key.k, e) } catch { opened.add(e.id); continue }
+    const v = E.acceptGroupMessage(e, o.seal, o.rumor, h, chainFor(o.rumor.pubkey))
+    if (v === 'wait') { want([o.rumor.pubkey]); continue }
+    opened.add(e.id)
+    if (v !== 'ok') continue
+    noteConv('g:' + h, key.at)
+    add.push({ ...o.rumor, sig: '' } as NostrEvent) // into the store as the group's event (mentions from the rumor only, §18.8)
+  }
+  if (add.length) addEvents(add)
+}
+
+/** §5 + §16.1 + §18.7 sending in a private group: the members' devices (39002 × their lists, read
+ *  whole on this connection), the newest key whose entry set is exactly that device set (mine, or
+ *  another member's), else a new key and its envelopes (signed by my account through the signer). */
+const groupPending = new Map<string, ReturnType<typeof E.groupEnvelopes>>() // K → envelopes not out yet
+async function wrapForGroup(tpl: { kind: number; content: string; tags: string[][]; created_at: number }) {
+  const h = hOf(tpl)
+  if (!h || !isPrivateGroup(h) || clearInGroup({ ...tpl, pubkey: me() }) || tpl.kind === E.KEY || tpl.kind === E.MSG) return null
+  if (!device) throw new Error('timeout: this device isn’t set up for encrypted messages yet')
+  const g = groupOf(h)!
+  const people = [...new Set([...g.members, me()])].sort()
+  const toRead = people.filter((a) => chainFor(a) !== E.SERVICE && (!readOnThisConnection(a) || chainFor(a) === undefined))
+  if (toRead.length && !(await readLists(toRead, 5000))) throw new Error('timeout: couldn’t check who can read this group')
+  if (listedHere() !== 'yes') throw new Error('timeout: this device isn’t set up for encrypted messages yet')
+  const devices: string[] = [], lines: { account: string; id: string }[] = []
+  for (const a of people) {
+    const c = chainFor(a)
+    if (c === undefined) continue // a member with no list gets nothing (held for them: §17.5 is about people conversations)
+    if (c === E.SERVICE) { devices.push(a); continue }
+    if (c.fork || c.invalidAbove) throw new Error('timeout: couldn’t check who can read this group')
+    devices.push(...E.receivers(E.current(c))); lines.push({ account: a, id: E.current(c).id })
+  }
+  if (devices.length > E.MAX_GROUP_DEVICES) throw new Error('error: Too many devices in this group to encrypt for everyone: its stewards are told.') // §4: it never falls back
+  const set = E.deviceSet(devices)
+  let key = E.pickKey([...keys.values()], 'g:' + h, set) as KeyRec | undefined
+  const before: { kind: number; created_at: number; tags: string[][]; content: string }[] = []
+  if (!key) {
+    const { k, K } = E.newKey()
+    const envs = E.groupEnvelopes(device.secret, k, h, devices, E.listsHash(lines))
+    key = { K, k, conv: 'g:' + h, group: true, mine: true, lists: set, at: Math.floor(Date.now() / 1000) }
+    holdKey(key)
+    groupPending.set(K, envs)
+    await saveKeys()
+  }
+  const pending = groupPending.get(key.K)
+  if (pending) before.push(...pending.map((x) => ({ ...x, created_at: Math.floor(Date.now() / 1000) })))
+  const rumor = E.withId({ ...tpl, pubkey: me() })
+  const mentions = tpl.tags.filter((t) => t[0] === 'p' && E.isKey(t[1])).map((t) => t[1]) // §17.14: outer p for the belfry's push only
+  const K = key.K
+  return { before, beforeOut: () => { groupPending.delete(K) }, event: E.groupMessage(device.secret, rumor, K, h, undefined, mentions) }
 }
 
 // ---- for the screens (Who can read this, Me › Devices) --------------------------------------

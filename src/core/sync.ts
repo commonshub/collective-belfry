@@ -134,6 +134,11 @@ export function onOutbox(sent: (item: OutboxItem, ev: NostrEvent) => void, faile
   failListeners.add(failed)
 }
 
+/** enc/runtime.ts: a private group's event, as what to publish instead: its key's envelopes first
+ *  (then beforeOut), then the 8572. Null: sent as it is. Throws "timeout: …" to be tried again. */
+type GroupWrap = (tpl: EventTemplate) => Promise<{ before: EventTemplate[]; beforeOut?: () => void; event: EventTemplate } | null>
+let groupWrap: GroupWrap | undefined
+export function setGroupWrap(f: GroupWrap) { groupWrap = f }
 let beforeFlushHook: (() => Promise<void>) | undefined
 /** sealedrt.ts: sealed wraps are checked against fresh heads before they go out. */
 export function setBeforeFlush(f: () => Promise<void>) { beforeFlushHook = f }
@@ -357,6 +362,19 @@ async function send(item: OutboxItem, step: (name: string) => void): Promise<Nos
     content = content ? content + '\n' + url : url
   }
   const tpl: EventTemplate = { kind: item.kind, content, tags, created_at: item.created_at }
+  // a private group (docs/encrypted.md §6): encrypted now, after its uploads (enc/runtime.ts)
+  if (!localOnly && groupWrap && item.target === 'groups') {
+    step('encrypting')
+    const w = await groupWrap(tpl)
+    if (w) {
+      for (const b of w.before) { step('signing'); await publish(item.target, await signer!.sign(b), step) }
+      w.beforeOut?.()
+      step('signing')
+      const ev = await signer!.sign(w.event)
+      await publish(item.target, ev, step)
+      return ev
+    }
+  }
   step('signing')
   const ev = await signer!.sign(tpl)
   if (localOnly) {
@@ -674,6 +692,10 @@ function moveMark(t: Target) {
 
 // sealed conversations (sealedrt.ts): its own filters on the community relay (rosters, anchors,
 // device requests, wraps to this device's key), set once it knows the device
+const extraGroupsBy = new Map<string, () => Filter[]>()
+const extraGroups = () => [...extraGroupsBy.values()].flatMap((f) => f())
+/** NAME's own live filters on the groups relay (enc/runtime.ts: a private group's 8571/8572). */
+export function setExtraGroupsFilters(f: () => Filter[], name = 'enc') { extraGroupsBy.set(name, f); resubscribe('groups') }
 const extraMainBy = new Map<string, () => Filter[]>()
 const extraMain = () => [...extraMainBy.values()].flatMap((f) => f())
 /** NAME's own live filters on the community relay (sealedrt.ts 'sealed', enc/runtime.ts 'enc'). */
@@ -716,6 +738,7 @@ function filters(target: Target): Filter[] {
   // a sign-in after the first answer) still gets every channel and every agreement
   if (target === 'groups') return [
     { kinds, since, limit: 2000 },
+    ...extraGroups(),
     { kinds: [39000, 39001, 39002, 39003], limit: 1000 },
     { kinds: [2100, 2101, 2102, 2103], '#h': ['charter'], limit: 2000 },
   ]
