@@ -2196,3 +2196,9 @@ form .create-where { margin-bottom: 14px; }
 .seal-banner.seal-added .seal-x { position: absolute; top: 6px; right: 6px; width: 36px; height: 36px; font-size: 20px; color: var(--muted); }
 .seal-banner.seal-added .seal-added-all { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
 .seal-notyou { font-size: inherit; padding: 0; }
+
+/* a guest in a topic from a card (cards/contribute-compose, contribute-save) */
+.guest-sending { margin: 0; padding: 0 16px 8px; font-size: 13px; color: var(--muted); text-align: center; }
+.guest-sending .link { font-size: 13px; padding: 0; background: none; border: 0; cursor: pointer; }
+.guest-save-card { margin: 8px 12px; padding: 12px 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
+.guest-save-card p { margin: 4px 0 10px; color: var(--muted); font-size: 14px; }

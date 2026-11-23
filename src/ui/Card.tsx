@@ -9,7 +9,7 @@ import { BELFRY, NAME } from '../config'
 import { setPendingInvite } from '../core/auth'
 import {
   CardFailed, cardErrorText, cardInfo, claimSignedIn, claimStart, claimVerify, dropForm, hashtagSlug, hashtagState,
-  cardDone, cardUrl, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
+  cardDone, cardUrl, setCardTopic, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
 } from '../core/cards'
 import type { SignedIn } from '../core/guestjoin'
 import { signedFetch } from '../core/sync'
@@ -38,6 +38,8 @@ export function CardScreen({ id, signedIn, onIn, onInvite, onStarted, onClose }:
   }, [id, tries])
   // a claimed card: its guest link, and the group opens half pulled down with the welcome
   const join = (group: string, invite: string) => {
+    // a topic card: its guest may post there before giving an e-mail (the lead's approved list)
+    setCardTopic(info && info.state !== 'unknown' && info.kind === 'topic' ? group : '')
     cardDone()
     dropForm()
     setPendingInvite(invite)

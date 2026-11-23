@@ -5,7 +5,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE, getBackend } from '../config'
 import type { Signer } from './auth'
-import { GUEST_MODE, askToJoin, reading } from './guestmode'
+import { GUEST_MODE, askToJoin, reading, guestTopicPost } from './guestmode'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { heldEvent, addEvents, all, dropOutbox, hasEvent, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
 
@@ -53,8 +53,9 @@ export async function enqueue(
   t: { kind: number; content?: string; tags: string[][]; created_at?: number },
   files: File[] = []
 ) {
-  // guest mode: nothing is sent before joining; the Join sheet opens instead
-  if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
+  // guest mode: nothing is sent before joining; the Join sheet opens instead (but a plain message
+  // in a topic reached through a card: guestmode.guestTopicPost, the lead's approved list)
+  if (reading() && !guestTopicPost(target, t, files)) { askToJoin(); throw new Error(GUEST_MODE) }
   const refused = target === 'groups' ? writeGuard?.(t) : undefined
   if (refused) throw new Error(refused)
   return put(target, t, files)

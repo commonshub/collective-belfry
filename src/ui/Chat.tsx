@@ -9,7 +9,7 @@ import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
-import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
+import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postGuestMessage, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
@@ -43,7 +43,8 @@ import { ChannelHeader } from './ChannelHeader'
 import { takeMid } from '../core/cards'
 import { agentOwner, belfryGroupsKey, canAdmin, isAdmin } from '../core/access'
 import { coHostToken, guestInfo } from '../core/auth'
-import { askToJoin, reading, useGuestMode } from '../core/guestmode'
+import { askToJoin, guestTopic, reading, useGuestMode } from '../core/guestmode'
+import { switchToLogin } from '../core/signedin'
 import { cleared, messageSent, typed, type Place } from '../core/typing'
 import { TypingLine } from './Typing'
 import { GuestBar, JoinSheet } from './GuestJoin'
@@ -923,7 +924,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           })}
         </div>
       </div>
-      {guestReading ? <GuestBar groupId={id} /> : <SaveAccountBar />}
+      {guestReading ? (guestTopic(id) ? <GuestTopicComposer groupId={id} /> : <GuestBar groupId={id} />) : <SaveAccountBar />}
       {!readOnly && only && (
         <div className="only-bar">
           <span className="hint">{only === 'thread'
@@ -1300,7 +1301,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft, above, className, plain = false }: { /** a line above the text field (who receives it: an e-mail thread) */ above?: ReactNode; /** an extra class (mail-mode: going out by e-mail) */ className?: string; /** plain text only: no files, no @people or #channels (an e-mail) */ plain?: boolean; /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft, above, below, imagesOnly = false, className, plain = false }: { /** a line above the text field (who receives it: an e-mail thread) */ above?: ReactNode; /** a line under it ("Sending as a guest · Log in") */ below?: ReactNode; /** photos only from the + (a guest in a topic from a card) */ imagesOnly?: boolean; /** an extra class (mail-mode: going out by e-mail) */ className?: string; /** plain text only: no files, no @people or #channels (an e-mail) */ plain?: boolean; /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   // typing indicators (docs/typing.md): this conversation or this thread; not by e-mail
   const tplace = useMemo<Place | null>(() => (groupId && draft && !plain ? (draft.startsWith('t:') ? { h: groupId, root: draft.slice(2) } : { h: groupId }) : null), [groupId, draft, plain])
@@ -1484,8 +1485,8 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
       <div className="bar">
         {!plain && <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a group' : 'Add photos or files'}
           onClick={() => (onEvent || canAnnounce || onRecord ? setMenu(true) : picker.current?.click())}>＋</button>}
-        <input ref={picker} type="file" multiple hidden
-          onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
+        <input ref={picker} type="file" multiple hidden {...(imagesOnly ? { accept: 'image/*' } : {})}
+          onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? []).filter((f) => !imagesOnly || f.type.startsWith('image/'))]); e.target.value = '' }} />
         {people.length > 0 && (
           <div className="mention-pop" role="listbox" aria-label="Mention someone">
             {people.map((p) => (
@@ -1551,6 +1552,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
         </Sheet>
       )}
     </div>
+    {below}
     </>
   )
 }
@@ -1712,6 +1714,33 @@ export function nsiteRef(text: string): string | null {
 /** A guest who joined with a name only (an event's guest, an older link), once they did
  *  something (a message, a reply, a reaction): a slim line above the composer to save the account.
  *  Save opens the same sheet as joining from guest mode: the e-mail, then the code sent to it. */
+/** A topic reached through a card, as a reading guest (cards/follow-channel, contribute-compose,
+ *  contribute-save): the composer to share at once, "Sending as a guest · Log in" under it; after
+ *  the first post, one card: "Shared. Don't lose your account" (name + e-mail: the Join sheet). */
+function GuestTopicComposer({ groupId }: { groupId: string }) {
+  useVersion()
+  const NO = 'belfry-topic-save-no:' + groupId
+  const [later, setLater] = useState(() => { try { return localStorage.getItem(NO) === '1' } catch { return false } })
+  const posted = all(me()).some((e) => e.pubkey === me() && e.kind === 9 && e.tags.some((t) => t[0] === 'h' && t[1] === groupId)) || outboxItems().some((o) => o.kind === 9 && o.tags.some((t) => t[0] === 'h' && t[1] === groupId))
+  return (
+    <>
+      {posted && !later && (
+        <div className="guest-save-card" role="region" aria-label="Save your account">
+          <b>Shared. Don’t lose your account</b>
+          <p>Add your e-mail to keep what you shared, get replies and follow this topic.</p>
+          <div className="row-btns two">
+            <button className="btn" onClick={askToJoin}>Save</button>
+            <button className="btn ghost" onClick={() => { setLater(true); try { localStorage.setItem(NO, '1') } catch { /* private mode */ } }}>Not now</button>
+          </div>
+        </div>
+      )}
+      <Composer groupId={groupId} plain imagesOnly draft={'c:' + groupId} placeholder="Share a link, a message, a photo"
+        onSend={(text, files) => postGuestMessage(groupId, text, files)}
+        below={<p className="guest-sending">Sending as a guest · <button type="button" className="link" onClick={() => void switchToLogin()}>Log in</button></p>} />
+    </>
+  )
+}
+
 function SaveAccountBar() {
   useVersion()
   useGuestMode()

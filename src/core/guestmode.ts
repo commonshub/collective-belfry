@@ -38,3 +38,18 @@ export function setOpening(o: Opening | null) {
   opening = o
   bump()
 }
+
+// ---- a topic reached through a card (Xavier, 23 Nov; the lead's approved list) -----------------
+// Its reading guest may post a plain message (text, links, photos) in that topic only, before giving
+// an e-mail. The topic is the one the card screen recorded (core/cards.ts 'belfry-card-topic').
+const cardTopicNow = (): string => { try { const v = localStorage.getItem('belfry-card-topic') ?? ''; return /^[A-Za-z0-9_-]{1,120}$/.test(v) ? v : '' } catch { return '' } }
+/** Reading in GROUP, which this browser reached through a topic card. */
+export const guestTopic = (group: string) => reading() && !!group && guestInfo()?.channel === group && cardTopicNow() === group
+/** The approved list, exactly: kind 9 to the groups relay whose tags are [["h", T]] plus imeta (its
+ *  photos, images only), T being that topic. Nothing else a reading guest writes goes. */
+export function guestTopicPost(target: string, t: { kind: number; tags: string[][] }, files: { type: string }[] = []): boolean {
+  if (target !== 'groups' || t.kind !== 9) return false
+  const h = t.tags.filter((x) => x[0] === 'h')
+  if (h.length !== 1 || !guestTopic(h[0][1])) return false
+  return t.tags.every((x) => x[0] === 'h' || x[0] === 'imeta') && files.every((f) => f.type.startsWith('image/'))
+}

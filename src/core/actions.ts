@@ -137,6 +137,11 @@ export const postMessage = (groupId: string, text: string, files: File[], topic?
     tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t]), ...mentionTags(text), ...extra],
   }, files)
 
+/** A reading guest's message in a topic reached through a card: tags [["h", T]] only, photos as
+ *  imeta (sync.ts lets exactly this through: guestmode.guestTopicPost). */
+export const postGuestMessage = (groupId: string, text: string, files: File[]) =>
+  enqueue('groups', { kind: 9, content: text, tags: [['h', groupId]] }, files)
+
 /** A reply in the thread of message ROOT (NIP-22 comment, kept in the group by its `h` tag). */
 export const postThreadReply = (groupId: string, root: { id: string; pubkey: string; kind: number }, text: string, files: File[]) =>
   enqueue('groups', {

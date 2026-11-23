@@ -90,6 +90,8 @@ export function displayName(pubkey: string, ps = profiles()) {
   const p = ps.get(pubkey)
   const n = p?.name || p?.nip05?.split('@')[0]
   if (n) return n
+  // a reading guest (a 9000 tagged reading, never named): "Guest" until they save (cards/contribute-save)
+  if (allGroups().some((g) => g.reading.has(pubkey))) return 'Guest'
   missing(pubkey)
   return fallbackName(pubkey)
 }
