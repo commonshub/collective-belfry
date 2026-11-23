@@ -235,3 +235,31 @@ is on the sender's list. Reports (7679): one per device of the sender.
 - Share "only this conversation".
 - One envelope per account with a key slot per device, in place of a wrap per device.
 - Sealing for agents and own-key accounts.
+
+## Appendix: readings
+
+Fixed with the first vectors (belfry-android `vectors/sealed.json`, section `v2`, key
+`readings`; 2026-11-23). Where a section above leaves a choice, these decide.
+
+- R1. A list has exactly one `d` and one `p`, and `p` is the account `d` names; else it is
+  not a list. R2. Its content is ""; else not a list.
+- R3. A `device` tag that is not 64 lower-case hex is skipped, the others count. R4. A device
+  given twice counts once, at its first place. R5. More than 20 devices: not a list (the
+  reader keeps the one it had).
+- R6. A kind 1059 with a `d` tag is a version 2 wrap only with exactly one `d`, exactly one
+  `p` and no `lb`; else invalid, dropped. R7. `d` is this device but `p` is not its account:
+  invalid.
+- R8. The belfry's key is accepted only as both the seal's signer and the rumor's `pubkey`,
+  with kind 1301; anything else under that key is dropped.
+- R9. A version 2 rumor without a `["list", <the reader's account>, <id>]` tag is dropped.
+  Not so for rumors carried inside a history pack (8564): the pack's rule decides (§6),
+  since version 1 rumors have no such tag.
+- R10. "First saw a list of A without S" = when this app first saw the list that LAST
+  dropped S. A list from before S was ever listed is not a removal. A rumor dated in the gap
+  between two stays of S is accepted.
+- R11. Over 100 devices: in a conversation sealed here before, hold with the one line, never
+  the old way; in one never sealed here, not sealed, said in the line.
+- R12. The `list` tags are the rumor's last tags, one per participant, in the order of the
+  accounts' hex; readers do not depend on the order.
+- R13. Bounds are inclusive (a rumor of the same second is accepted; a list exactly 10
+  minutes ahead is taken).
