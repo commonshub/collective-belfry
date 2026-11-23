@@ -1099,9 +1099,15 @@ async function takeHandovers() {
     const got = C.acceptKeys(me(), chains, opened.seal, opened.rumor)
     if (!got.length) { if (!chains.length) void loadChain(me(), 0); continue }
     handoverTried.set(w.id, 'done')
+    // §5.4 only (2026-11-23, as Android): this device was a device of the chain pinned before a fresh
+    // start and was out of the new head until this hand-over let it in. Never just because a head
+    // device sent me an 8561 (a device that added itself would get my whole key chain).
+    const cur = chainOf(me()), old = prev ? chains.find((c) => c.rosters[0].id === prev) : undefined
+    const wasOut = !cur || !C.headOf(cur).devices.includes(device!.pub) || !keyOf(C.headOf(cur).lb)
+    const freshStartReturn = !!old && C.allDevices(old).has(device!.pub) && wasOut
     const added = await addKeys(got)
     if (added.length) { keysArrived(added); scheduleMyDevice(2000) /* in the head now: my name (§3.5) */ }
-    await handBack(opened.seal.pubkey, got)
+    if (freshStartReturn) await handBack(opened.seal.pubkey, got)
   }
 }
 
