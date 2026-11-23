@@ -163,6 +163,12 @@ class Register(OdooApi):
                 d TEXT NOT NULL, pubkey TEXT NOT NULL, id TEXT NOT NULL, by TEXT NOT NULL,
                 at INTEGER NOT NULL, state TEXT NOT NULL, answered INTEGER,
                 PRIMARY KEY (d, pubkey));
+            CREATE TABLE IF NOT EXISTS group_cards (
+                id TEXT PRIMARY KEY, kind TEXT NOT NULL, batch TEXT NOT NULL,
+                state TEXT NOT NULL, group_id TEXT, invite TEXT, title TEXT,
+                made_by INTEGER, made_at INTEGER NOT NULL,
+                claimed_by INTEGER, claimed_key TEXT, claimed_at INTEGER);
+            CREATE INDEX IF NOT EXISTS group_cards_group ON group_cards (group_id);
             """
         )
         self._push_one_row_per_identity()
@@ -428,7 +434,8 @@ class Register(OdooApi):
                 if inv and inv.get("guest_max"):  # many guests: count, closed at the maximum
                     uses = int(inv.get("guest_uses") or 0) + 1
                     vals: dict[str, Any] = {"guest_uses": uses}
-                    if uses >= int(inv["guest_max"]):
+                    # a printed card's link (cards.py) counts its uses and never fills up
+                    if uses >= int(inv["guest_max"]) and not inv.get("guest_unlimited"):
                         vals["state"] = "used"
                     self._write("belfry.invite", [inv["id"]], vals)
                 elif inv and inv.get("state") in ("open", "reserved"):
@@ -1452,6 +1459,146 @@ class Register(OdooApi):
             self._write("belfry.pass", [pass_id], {"state": "active"})  # counts the use
             return {"kind": "guest", "channel": channel, "partner_id": pid, "pass_id": pass_id}
 
+    # ── printed cards (cards.py): a QR that starts a group, then brings people into it ───────
+    CARD_FIELDS = (
+        "id, kind, batch, state, group_id, invite, title, made_by, made_at, "
+        "claimed_by, claimed_key, claimed_at"
+    )
+
+    @staticmethod
+    def _card_row(row: tuple[Any, ...]) -> dict[str, Any]:
+        keys = (
+            "id",
+            "kind",
+            "batch",
+            "state",
+            "group",
+            "invite",
+            "title",
+            "made_by",
+            "made_at",
+            "claimed_by",
+            "claimed_key",
+            "claimed_at",
+        )
+        return dict(zip(keys, row, strict=True))
+
+    def card_make(self, ids: list[str], kind: str, batch: str, made_by: int, at: int) -> list[str]:
+        """New unclaimed cards; an id that exists already is left out of the answer."""
+        made = []
+        with self._lock:
+            for cid in ids:
+                cur = self._db.execute(
+                    "INSERT OR IGNORE INTO group_cards (id, kind, batch, state, made_by, made_at) "
+                    "VALUES (?, ?, ?, 'unclaimed', ?, ?)",
+                    (cid, kind, batch, int(made_by), int(at)),
+                )
+                if cur.rowcount:
+                    made.append(cid)
+        return made
+
+    def card_get(self, card_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {self.CARD_FIELDS} FROM group_cards WHERE id = ?", (card_id,)
+            ).fetchone()
+        return self._card_row(row) if row else None
+
+    def card_of_group(self, group: str) -> dict[str, Any] | None:
+        """The card GROUP was started from (claimed or retired; a reset card has no group)."""
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {self.CARD_FIELDS} FROM group_cards WHERE group_id = ? "
+                "ORDER BY claimed_at DESC LIMIT 1",
+                (group,),
+            ).fetchone()
+        return self._card_row(row) if row else None
+
+    def card_list(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {self.CARD_FIELDS} FROM group_cards ORDER BY made_at DESC, batch, rowid"
+            ).fetchall()
+        return [self._card_row(r) for r in rows]
+
+    def card_claim(
+        self, card_id: str, group: str, invite: str, title: str, partner: int, key: str, at: int
+    ) -> bool:
+        """The card is GROUP's from now on; False when it was not unclaimed any more."""
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE group_cards SET state = 'claimed', group_id = ?, invite = ?, title = ?, "
+                "claimed_by = ?, claimed_key = ?, claimed_at = ? "
+                "WHERE id = ? AND state = 'unclaimed'",
+                (group, invite, title, int(partner), key, int(at), card_id),
+            )
+            return bool(cur.rowcount)
+
+    def _card_invite_off(self, token: str | None) -> None:
+        for inv in self._all("belfry.invite") if token else []:
+            if inv.get("token") == token and inv.get("state") == "open":
+                self._write("belfry.invite", [inv["id"]], {"state": "revoked"})
+
+    def card_retire(self, card_id: str) -> bool:
+        """The card starts and joins nothing any more: its invite is revoked."""
+        with self._lock:
+            card = self.card_get(card_id)
+            if card is None or card["state"] == "retired":
+                return False
+            self._card_invite_off(card.get("invite"))
+            self._db.execute("UPDATE group_cards SET state = 'retired' WHERE id = ?", (card_id,))
+            return True
+
+    def card_reset(self, card_id: str) -> bool:
+        """Back to unclaimed: the invite is revoked, the group it started stays as it is."""
+        with self._lock:
+            card = self.card_get(card_id)
+            if card is None or card["state"] == "unclaimed":
+                return False
+            self._card_invite_off(card.get("invite"))
+            self._db.execute(
+                "UPDATE group_cards SET state = 'unclaimed', group_id = NULL, invite = NULL, "
+                "title = NULL, claimed_by = NULL, claimed_key = NULL, claimed_at = NULL "
+                "WHERE id = ?",
+                (card_id,),
+            )
+            return True
+
+    def card_invite(self, partner_id: int, pubkey: str, channel: str, days: int) -> str:
+        """The guest link a claimed card stands for: CHANNEL's, from the person who started it
+        (a member or a guest: `create_guest_invite` is for members only), with no end date and
+        no number of people. A guest's own access still lasts DAYS days. Returns its token."""
+        with self._lock:
+            partner = self._get("res.partner", int(partner_id)) or {}
+            inv_id = self._create(
+                "belfry.invite",
+                {
+                    "inviter_partner_id": int(partner_id),
+                    "inviter_name": partner.get("name") or False,
+                    "note": f"Printed card of #{channel}",
+                    "guest_channel": channel,
+                    "guest_days": int(days),
+                    "guest_inviter": pubkey,
+                    "guest_max": GUEST_MAX,
+                    "guest_unlimited": True,
+                    "guest_uses": 0,
+                    "agent_owner": False,
+                    "agent_unlimited": False,
+                    "guest_role": False,
+                    "member_role": False,
+                    "membership": False,
+                    "expires_at": False,
+                },
+            )
+            return str((self._get("belfry.invite", inv_id) or {}).get("token") or "")
+
+    def card_invite_uses(self, token: str | None) -> int:
+        with self._lock:
+            for inv in self._all("belfry.invite") if token else []:
+                if inv.get("token") == token:
+                    return int(inv.get("guest_uses") or 0)
+        return 0
+
     # ── an event's guests (events.py): no invite, the event's own group ──────────────────────
     def event_guest(
         self,
@@ -1576,7 +1723,7 @@ class Register(OdooApi):
             return
         uses = int(inv.get("guest_uses") or 0) + 1
         vals: dict[str, Any] = {"guest_uses": uses}
-        if uses >= int(inv.get("guest_max") or 1):
+        if uses >= int(inv.get("guest_max") or 1) and not inv.get("guest_unlimited"):
             vals["state"] = "used"
         self._write("belfry.invite", [inv["id"]], vals)
 
@@ -1918,9 +2065,10 @@ class Register(OdooApi):
     def _m_belfry_key_code_send(
         self, model, email, pubkey, app_name=False, purpose=False, data=False, *_a, **_k
     ):
-        """PURPOSE ``apply`` / ``login`` (applyverified.py): the mail's own words, and a code
-        that only ``check_key_code`` with the same purpose takes; DATA rides on the code and
-        comes back with the right one (what the person filled in before proving the address)."""
+        """PURPOSE ``apply`` / ``login`` (applyverified.py) / ``card`` (cards.py): the mail's
+        own words, and a code that only ``check_key_code`` with the same purpose takes; DATA
+        rides on the code and comes back with the right one (what the person filled in before
+        proving the address)."""
         email, pubkey = self._clean(email, pubkey)
         since = stamp(now() - dt.timedelta(minutes=CODE_WINDOW))
         codes = [c for c in self._all("belfry.key.code") if c.get("create_date", "") >= since]
@@ -1955,7 +2103,7 @@ class Register(OdooApi):
         )
         self._write("belfry.key.code", [cid], {"code_hash": self._hash(cid, code)})
         app = (app_name or "").strip()[:60]
-        if purpose in ("apply", "login"):
+        if purpose in ("apply", "login", "card"):  # card: a printed card's first scan (cards.py)
             what = (
                 f"to apply to {self.mailer.name}"
                 if purpose == "apply"
