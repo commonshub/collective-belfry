@@ -731,6 +731,10 @@ services:
       MAILCHECK: ${MAILCHECK:-}
       AVATARS: ${AVATARS:-1}
       SEALED_SELF_JOIN: ${SEALED_SELF_JOIN:-0}
+      # docs/encrypted.md: the format apps write (1 or 3, belfry.json "encrypted") and the
+      # device lists (kind 8570) the belfry publishes; both off / 1 until switched per belfry
+      ENCRYPTED_FORMAT: ${ENCRYPTED_FORMAT:-1}
+      DEVICE_LISTS: ${DEVICE_LISTS:-0}
       SMTP_HOST: ${SMTP_HOST:-mailpit}
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USER: ${SMTP_USER:-}

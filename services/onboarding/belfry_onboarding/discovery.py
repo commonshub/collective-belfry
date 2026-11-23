@@ -117,6 +117,9 @@ def document(settings: Any) -> dict[str, Any]:
         # docs/sealed.md §5.7: whether a device that signed in may add itself (apps read the
         # rosters of such joins whatever this says; they WRITE one only when it is true)
         "sealed": {"self_join": bool(getattr(settings, "sealed_self_join", False))},
+        # docs/encrypted.md §12: the format apps write in encrypted conversations (1 = the
+        # letterbox keys of docs/sealed.md, 3 = a key per conversation); they read both
+        "encrypted": {"format": 3 if getattr(settings, "encrypted_format", 1) == 3 else 1},
         "mint": {"url": _url(settings.mint_public_url), "unit": settings.mint_unit}
         if settings.mint_url
         else None,
@@ -370,6 +373,26 @@ def _session_rows(svc: Any, rows: list[dict[str, Any]], keep: tuple[str, ...]) -
     return [{**_session_row(r, keep), "chat": chat_session(svc, r, names)} for r in rows]
 
 
+def _revoked_and_by(
+    svc: Any, token: str, bunker: str, by: str | None
+) -> tuple[str | None, str | None]:
+    """(the client key of the session BUNKER, the name of the caller's own session BY), from
+    the account's sessions before the revoke; either None when not known."""
+    try:
+        rows = list(svc.keycast.list_sessions(token))
+    except Exception as exc:  # noqa: BLE001 — the revoke goes on
+        log.info("sessions: not read before a revoke: %r", exc)
+        return None, None
+    client, name = "", ""
+    for r in rows:
+        key = str(r.get("client_pubkey") or "").lower()
+        if r.get("bunker_pubkey") == bunker:
+            client = key
+        elif by and key == by and not name:
+            name = str(r.get("application_name") or "")
+    return (client if re.fullmatch(r"[0-9a-f]{64}", client) else None), (name or None)
+
+
 def _session_row(r: dict[str, Any], keep: tuple[str, ...]) -> dict[str, Any]:
     row = {k: r.get(k) for k in keep}
     row["application_name"], row["device"] = device.split(r.get("application_name"))
@@ -480,13 +503,13 @@ def register(app: FastAPI) -> None:
         found = await run_in_threadpool(community.member_token, services, partner)
         if found is None or found[0] != pubkey:
             raise ApiError(409, "own_key", "This key is your own: its sessions are not here.")
-        return partner, found[1]
+        return partner, found[1], pubkey
 
     @app.get(SESSIONS)
     async def api_sessions(request: Request) -> JSONResponse:
         """The signed-in member's sessions (NIP-46 connections in the signer), NIP-98."""
         services: Services = request.app.state.services
-        partner, token = await session_owner(request, "GET", SESSIONS, b"")
+        partner, token, _ = await session_owner(request, "GET", SESSIONS, b"")
         rows = await run_in_threadpool(services.keycast.list_sessions, token)
         from . import appsignin
 
@@ -511,13 +534,23 @@ def register(app: FastAPI) -> None:
     async def api_sessions_revoke(request: Request) -> JSONResponse:
         services: Services = request.app.state.services
         body = await request.body()
-        partner, token = await session_owner(request, "POST", SESSIONS + "/revoke", body)
+        partner, token, account = await session_owner(request, "POST", SESSIONS + "/revoke", body)
         try:
-            bunker = str(json.loads(body or b"{}").get("bunker_pubkey", ""))
+            data = json.loads(body or b"{}")
         except ValueError:
-            bunker = ""
+            data = {}
+        data = data if isinstance(data, dict) else {}
+        bunker = str(data.get("bunker_pubkey", ""))
         if not re.fullmatch(r"[0-9a-f]{64}", bunker):
             raise ApiError(422, "invalid", "bunker_pubkey: 64 hex characters")
+        # docs/encrypted.md §16.6: the caller's own device (its session's client key), so the
+        # removed device can be told which device removed it
+        by = data.get("by")
+        if by is not None and not (isinstance(by, str) and re.fullmatch(r"[0-9a-f]{64}", by)):
+            raise ApiError(422, "invalid", "by: the client key of one of your sessions, 64 hex")
+        from . import devices
+
+        client, by_name = await run_in_threadpool(_revoked_and_by, services, token, bunker, by)
         from . import appsignin
 
         # the app's sign-in first: it ends even when the signer does not answer; and its
@@ -527,6 +560,10 @@ def register(app: FastAPI) -> None:
         except Exception as exc:  # noqa: BLE001 — the signer's revoke below is what counts
             log.warning("sessions: the apps' sign-ins of a signed-out session not ended: %s", exc)
         await run_in_threadpool(services.keycast.revoke_session, token, bunker)
+        try:
+            await run_in_threadpool(devices.ended, services, token, client, by_name, account)
+        except Exception as exc:  # noqa: BLE001 — the sign-out itself is done
+            log.warning("sessions: the removed device not recorded: %r", exc)
         return JSONResponse({"state": "revoked"})
 
     @app.get(ME)

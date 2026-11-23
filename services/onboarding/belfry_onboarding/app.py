@@ -50,6 +50,7 @@ from . import (
     connect,
     console,
     core,
+    devices,
     discovery,
     drops,
     email_code,
@@ -166,6 +167,8 @@ def build_services(settings: Settings) -> Services:
     made = _build_services(settings)
     # the own signer makes a new account only with the key the register has for the person
     signerguard.install(made)
+    # every session made or ended updates the account's device list (devices.py)
+    devices.install(made)
     return made
 
 
@@ -300,6 +303,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             actions.running(app),  # buttons on messages: the belfry answers belfry: presses
             agents.running(app),  # members' agents follow their member into channels (agents.py)
             remoteapps.running(app),  # the remote signer of members' other Nostr apps
+            devices.running(app),  # device lists, kind 8570 (docs/encrypted.md §3)
         ):
             yield
 
@@ -365,6 +369,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     applyverified.register(app)  # /api/apply/*, /api/login/*: the chat's own form and log-in
     villagers.register(app)  # /api/villagers: a profile page per person (villagers.py)
     sitesessions.register(app)  # /api/site/*: the website's own accounts (sitesessions.py)
+    devices.register(app)  # /api/sessions/removed (docs/encrypted.md §16.6; devices.py)
     remoteapps.register(app)  # /api/remote-apps: sign in to other Nostr apps (remoteapps.py)
     eventchat.register(app)  # /api/events/<link>/chat, photos, links, participants
     sitenotify.register(app)  # /api/site/notifications, /notifications/<token> (sitenotify.py)

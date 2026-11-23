@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -153,6 +154,12 @@ class Settings(BaseSettings):
     # docs/sealed.md §5.7: a device that signed in adds itself to the person's devices. Off until
     # every released app reads such a roster (a client that doesn't would stay on the old head).
     sealed_self_join: bool = Field(default=False, alias="SEALED_SELF_JOIN")
+    # docs/encrypted.md §12: the format apps write in encrypted conversations, given in
+    # belfry.json "encrypted": 1 (docs/sealed.md) or 3 (a key per conversation). One way.
+    encrypted_format: Literal[1, 3] = Field(default=1, alias="ENCRYPTED_FORMAT")
+    # docs/encrypted.md §3: the belfry publishes every account's device list (kind 8570,
+    # devices.py). Off: nothing is published.
+    device_lists: bool = Field(default=False, alias="DEVICE_LISTS")
     # The 5-minute check of port 25 from outside (mailcheck.py): "" = when the MX points here
     # (or a check ever passed), "1" = always (the domain itself without an MX), "0" = never.
     mailcheck: str = Field(default="", alias="MAILCHECK")
