@@ -113,6 +113,9 @@ def document(settings: Any) -> dict[str, Any]:
         # the groups relay's owner key: posts the belfry's lines in channels and answers presses
         # on belfry: buttons (docs/actions.md §3); clients trust answers from it or from `nostr`
         "groups_key": _groups_key(settings),
+        # docs/sealed.md §5.7: whether a device that signed in may add itself (apps read the
+        # rosters of such joins whatever this says; they WRITE one only when it is true)
+        "sealed": {"self_join": bool(getattr(settings, "sealed_self_join", False))},
         "mint": {"url": _url(settings.mint_public_url), "unit": settings.mint_unit}
         if settings.mint_url
         else None,

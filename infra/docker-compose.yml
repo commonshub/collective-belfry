@@ -724,6 +724,7 @@ services:
       # here, 1 = always, 0 = never
       MAILCHECK: ${MAILCHECK:-}
       AVATARS: ${AVATARS:-1}
+      SEALED_SELF_JOIN: ${SEALED_SELF_JOIN:-0}
       SMTP_HOST: ${SMTP_HOST:-mailpit}
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USER: ${SMTP_USER:-}

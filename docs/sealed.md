@@ -20,6 +20,9 @@ person's devices. The signer is never asked: sealing, opening and signing happen
   keys by themselves, so such a device reads what the person can read; the person sees
   "‹device› was added · Not you? Remove it" on every device (§5.2 step 2a). Before that
   date a new device had to be allowed by hand.
+  Since 2026-11-23 (§5.7, Xavier: a signed-in device must work at once), where the belfry
+  turns it on, such a device adds ITSELF: it reads everything sealed from then on without any
+  of the person's devices being online; the same notice shows on every device.
 - E-mail: sealed on arrival and in the thread; in clear at the moment it enters or leaves the
   belfry's mail server, and at the other side's provider.
 - A removed or stolen device can no longer read, but it can still write messages dated before
@@ -355,6 +358,67 @@ hand-over this device made to it (remembered across restarts). While it waits, t
   a live session AND, after a switch (§3.3), are trusted on this device: a new letterbox's secret is
   never handed to a device this device would not answer without a prompt.
 - Signing out: the device revokes its session as today and wipes its keys. The others do the above.
+
+### 5.7 A device that signed in adds itself
+
+Xavier, 2026-11-23, after a first note on a new iPhone ended in "Locked on this device": "that
+situation should not happen. If I'm properly logged in … I expect to be on a trusted device
+and I should have access to my new notes and on other devices with older notes I would get a
+message to share old notes with me." So a device no longer waits for another device to let it
+in. It lets itself in for everything from now on; what came before arrives when one of the
+older devices is next online.
+
+**Where it is allowed.** Only when `belfry.json` says `"sealed": {"self_join": true}` (a server
+setting, `SEALED_SELF_JOIN`), read fresh in that pass. Reading a join is not behind the flag:
+every app and the server accept one from the day they know this section. The flag exists
+because an app that does not know the rule ignores the roster and stays on the old head.
+
+**When.** A device with a live chat session (its row in a fresh `/api/me/sessions`, `chat`
+true) that is not in my head, and whose head it has from a complete authenticated answer of
+this connection, does this at once, with no prompt on any device:
+
+1. make a new letterbox key pair;
+2. sign roster n+1 **itself**: `prev` = the head, `devices` = the head's devices in their
+   order, then this device, last; `lb` = the new letterbox; `ready` by the usual rule;
+3. have the account sign the anchor with `head` = that roster (the signer does this: it is
+   what proves the session; the roster alone proves nothing);
+4. publish both; the change is done as in §3.2 (both accepted, the roster on the anchored
+   path when read back), else undo locally and try again;
+5. hand the new letterbox's secret to every other device of the roster (5.5: one 8561 wrap
+   per device key, silent), and keep handing it to a device that asks (8562) and is in the head;
+6. publish its 8562 as before: a device of the head that holds the older letterboxes answers
+   it without a prompt (5.5, "a device that IS in the head but lacks a secret"), which is how
+   the earlier messages arrive. Until then the device shows, above them, "Earlier messages
+   arrive when one of your other devices is next open: ‹names›" and nothing is locked: it
+   reads and writes everything sealed from its join on.
+
+No chain yet → 5.1 as before. More than 20 devices → it asks as in 5.2 (someone must remove
+one). A device that was in the chain before and was removed never adds itself again: it asks
+(5.2), and the person answers on another device. Two devices joining at once: the anchor
+names one; the other reads the chain again and joins after it.
+
+**Validity (§3.3, added).** A roster is a valid step after `prev` also when: `n` = prev's + 1;
+its signer is NOT in prev's devices; its devices are exactly prev's, same order, plus the
+signer last; its `lb` is a letterbox the chain never had; **and it lies on the anchored
+path**. Not anchored, it is nothing: anyone can sign one. (Server: `sealed._joins`.) The
+device counts as added by itself (`added` → its own roster).
+
+**What the other devices do.** They follow the anchored head as for any roster, take the new
+secret from the joiner's 8561 (accepted: the giver is a device of the chain), answer its 8562
+without a prompt, and show the 2a notice, once for all (2b): "‹session name› was added
+‹time› · Not you? Remove it". Remove = 5.6 (revoke the session first; then a roster without
+it and a new letterbox, which the joiner never gets). A device of the head that does not have
+the new secret yet (the joiner went offline before handing it) shows "Waiting for ‹session
+name›" on newer sealed messages and asks (8562); any head device holding it answers.
+
+**What this gives up, said plainly.** Before, an outsider with a session on my account (the
+belfry's server, so its admins; someone with my mailbox) got my sealed messages only once one
+of my devices came online and added theirs (step 2), and only if fewer than 3 were added that
+day. Now they read everything sealed from the moment they join, with none of my devices
+needed, and the 3-a-day limit no longer stands in their way; and a joiner who never hands the
+new secret on keeps my own devices from reading new messages until I remove it. What stays:
+they never get anything sealed before they joined unless a device of mine hands it over, and
+every device of mine says who was added and offers Remove. §1's "Not protected" says the same.
 
 ## 6. When a conversation is sealed
 

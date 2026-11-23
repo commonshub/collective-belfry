@@ -930,3 +930,37 @@ def test_no_other_app_gets_a_chat_sessions_name(m, monkeypatch):
     assert apps.session_label(m, "sh.belfry.app://connect", "x") == "Belfry app"
     named[other] = "Notes"
     assert apps.session_label(m, other) == "Notes"
+
+
+# ── §5.7: a device that signed in adds itself ───────────────────────────────────────────────
+def test_a_signed_in_device_adds_itself_only_through_the_anchor():
+    t = tool()
+    A, P, L, T = "alice", "alice_phone", "alice_laptop", "alice_tablet"
+    r1 = t.roster(P, A, 1, None, "alice_lb1", [P], 1000)
+    join = t.roster(L, A, 2, r1, "alice_lb2", [P, L], 1100)  # signed by the laptop itself
+    pub_of = t.PUB
+
+    # anchored: the laptop is in, with the new letterbox
+    c = sealed.chain(t.anchor(A, r1, 1101, head=join), [r1, join])
+    assert [r.id for r in c.rosters] == [r1["id"], join["id"]]
+    assert c.lb == pub_of["alice_lb2"] and c.devices == (pub_of[P], pub_of[L])
+    assert c.added[pub_of[L]].signer == pub_of[L]
+
+    # not anchored: it counts for nothing (anyone can sign such a roster)
+    c = sealed.chain(t.anchor(A, r1, 1001), [r1, join])
+    assert [r.id for r in c.rosters] == [r1["id"]]
+
+    # never with the old letterbox, never dropping or reordering a device, never two at once
+    for bad in (
+        t.roster(L, A, 2, r1, "alice_lb1", [P, L], 1100),
+        t.roster(L, A, 2, r1, "alice_lb2", [L], 1100),
+        t.roster(L, A, 2, r1, "alice_lb2", [L, P], 1100),
+        t.roster(L, A, 2, r1, "alice_lb2", [P, T, L], 1100),
+    ):
+        c = sealed.chain(t.anchor(A, r1, 1101, head=bad), [r1, bad])
+        assert [r.id for r in c.rosters] == [r1["id"]]
+
+    # after a join the chain goes on as usual: the phone (kept in) removes the laptop
+    out = t.roster(P, A, 3, join, "alice_lb3", [P], 1200)
+    c = sealed.chain(t.anchor(A, r1, 1201, head=out), [r1, join, out])
+    assert c.head.id == out["id"] and c.devices == (pub_of[P],)

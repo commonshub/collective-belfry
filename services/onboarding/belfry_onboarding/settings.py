@@ -150,6 +150,9 @@ class Settings(BaseSettings):
     # Faces for e-mail correspondents (mailfaces.py): the belfry asks Gravatar for the picture
     # of an outside address, by its hash, and keeps it. AVATARS=0: never asks (apps draw initials).
     avatars: bool = Field(default=True, alias="AVATARS")
+    # docs/sealed.md §5.7: a device that signed in adds itself to the person's devices. Off until
+    # every released app reads such a roster (a client that doesn't would stay on the old head).
+    sealed_self_join: bool = Field(default=False, alias="SEALED_SELF_JOIN")
     # The 5-minute check of port 25 from outside (mailcheck.py): "" = when the MX points here
     # (or a check ever passed), "1" = always (the domain itself without an MX), "0" = never.
     mailcheck: str = Field(default="", alias="MAILCHECK")

@@ -219,6 +219,18 @@ def newest_anchor(events: list[dict[str, Any]], account: str) -> dict[str, Any] 
     return min(mine, key=lambda e: (-e["created_at"], e["id"])) if mine else None
 
 
+def _joins(prev: Roster, earlier_lbs: set[str], r: Roster) -> bool:
+    """§5.7: a device that signed in adds itself. Signed by the new device, every device of
+    ``prev`` kept in their order, the signer added last, a letterbox the chain never had. Only
+    the account's anchor makes it count: valid on the anchored path, never after its end."""
+    return (
+        r.n == prev.n + 1
+        and r.signer not in prev.devices
+        and r.devices == (*prev.devices, r.signer)
+        and r.lb not in earlier_lbs
+    )
+
+
 def _follows(prev: Roster, earlier_lbs: set[str], r: Roster) -> bool:
     """§3.3 "Roster n", given that ``r.prev`` is ``prev``."""
     if r.n != prev.n + 1 or r.signer not in prev.devices:
@@ -274,7 +286,7 @@ def chain(
             return None
         path, lbs = [root], {root.lb}
         for r in reversed(back):
-            if not _follows(path[-1], lbs, r):
+            if not (_follows(path[-1], lbs, r) or _joins(path[-1], lbs, r)):
                 return None
             path.append(r)
             lbs.add(r.lb)
