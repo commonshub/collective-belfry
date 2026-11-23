@@ -208,7 +208,6 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   const clear9 = finalizeEvent({ kind: 9, created_at: Math.floor(Date.now() / 1000), tags: [["h", gid]], content: "A clear one, after the key" }, linaSk);
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([clear9]) });
   await sleep(3000);
-  console.log("debug clear9:", JSON.stringify({ why: await S.ev(`window.__enc.why(${JSON.stringify(clear9)})`), at: clear9.created_at, shown: await has(S, "A clear one, after the key") }));
   check("…a clear kind 9 after the first key shows nowhere", !(await has(S, "A clear one, after the key")));
   // §23: a photo in the private group: encrypted before the upload; Lina's app opens it
   const upBefore = (await (await fetch(relayHttp + "/uploads")).json()).length;
