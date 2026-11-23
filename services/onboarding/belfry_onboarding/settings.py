@@ -10,7 +10,7 @@ import datetime as dt
 import os
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SECRETS_DIR = os.environ.get("SECRETS_DIR", "/run/secrets")
@@ -156,7 +156,16 @@ class Settings(BaseSettings):
     sealed_self_join: bool = Field(default=False, alias="SEALED_SELF_JOIN")
     # docs/encrypted.md §12: the format apps write in encrypted conversations, given in
     # belfry.json "encrypted": 1 (docs/sealed.md) or 3 (a key per conversation). One way.
-    encrypted_format: Literal[1, 3] = Field(default=1, alias="ENCRYPTED_FORMAT")
+    encrypted_format: int = Field(default=1, alias="ENCRYPTED_FORMAT")
+
+    @field_validator("encrypted_format", mode="before")
+    @classmethod
+    def _one_or_three(cls, v: object) -> int:
+        """Docker passes environment values as text: "1" and "3" are the only ones."""
+        n = int(str(v).strip() or 1)
+        if n not in (1, 3):
+            raise ValueError("ENCRYPTED_FORMAT must be 1 or 3")
+        return n
     # docs/encrypted.md §3: the belfry publishes every account's device list (kind 8570,
     # devices.py). Off: nothing is published.
     device_lists: bool = Field(default=False, alias="DEVICE_LISTS")
