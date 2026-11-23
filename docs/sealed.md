@@ -403,6 +403,17 @@ signer last; its `lb` is a letterbox the chain never had; **and it lies on the a
 path**. Not anchored, it is nothing: anyone can sign one. (Server: `sealed._joins`.) The
 device counts as added by itself (`added` → its own roster).
 
+**Readings fixed before the first build** (raised by the web, 2026-11-23). (1) A client
+accepts a join only where it sees it on the anchored path (root → the anchor's head). Never
+in the provisional tail after the anchored end, and never in a pinned part the client had not
+itself seen anchored. A join the client DID pin as anchored stays in its pin if the anchor
+later points back ("no going back" holds for it like any roster). (2) After a switch (§3.3)
+a joiner is NOT trusted by the join alone: the device keeps the Allow card for it and hands
+it nothing until the person allows. (3) "Newer than the roster that added it": for a device
+that added itself, that roster is its own join, and a request dated at or after it counts
+(`>=`, not `>`); the joiner dates its 8562 at or after its roster; a refusal is remembered
+per request, never against a later request of the same device.
+
 **What the other devices do.** They follow the anchored head as for any roster, take the new
 secret from the joiner's 8561 (accepted: the giver is a device of the chain), answer its 8562
 without a prompt, and show the 2a notice, once for all (2b): "‹session name› was added
