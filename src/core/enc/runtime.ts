@@ -323,8 +323,14 @@ export const encFirstAt = (accounts: string[]) => encConvs.get(E.peopleId(accoun
 
 // ---- sending ---------------------------------------------------------------------------------
 
+/** A guest among these accounts (a channel's guest, or this session's own guest account). */
+let guestTest: (pk: string) => boolean = () => false
+/** dm.ts: how to tell a guest (core/invite isGuest, auth guestInfo for my own session). */
+export const setGuestTest = (f: (pk: string) => boolean) => { guestTest = f }
+const guestIn = (accounts: string[]) => accounts.some((a) => guestTest(a))
+
 export class Held extends Error {
-  constructor(public reason: 'no_list' | 'not_listed' | 'no_device' | 'too_many' | 'full' | 'fork' | 'mail' | 'format', public who?: string) { super('held: ' + reason) }
+  constructor(public reason: 'no_list' | 'not_listed' | 'no_device' | 'too_many' | 'full' | 'fork' | 'mail' | 'format' | 'guest', public who?: string) { super('held: ' + reason) }
 }
 /** Words for a held message (state-held; §17.4, §17.5). */
 export function heldText(h: Held, name: (pk: string) => string): string {
@@ -333,6 +339,7 @@ export function heldText(h: Held, name: (pk: string) => string): string {
   if (h.reason === 'full') return 'You have 20 devices signed in · Remove one to send encrypted messages here'
   if (h.reason === 'too_many') return 'Too many devices to encrypt for everyone here'
   if (h.reason === 'mail') return 'E-mail from the chat waits for this belfry’s update'
+  if (h.reason === 'guest') return 'Not sent: this encrypted conversation now includes a guest, and guests can’t read encrypted messages yet'
   return 'Not sent: couldn’t check who can read this conversation'
 }
 
@@ -359,6 +366,10 @@ export async function encryptFor(rumor: E.Rumor, people: string[]): Promise<{ ev
   const all = [...new Set([m, ...people])].sort()
   if (E.peopleOf(rumor) !== E.peopleId(all)) throw new Error('the message is not for these people') // a programming error, never shown
   if (new TextEncoder().encode(JSON.stringify(E.withId(rumor))).length > E.MAX_RUMOR) throw new Error('the message is too long to encrypt') // before any key (P2.1)
+  // the lead, 2026-11-23 (until decided): guests aren't on the community relay's whitelist, so a
+  // conversation with a guest (or from a guest's session) stays unencrypted: no lock, the NIP-17 way.
+  // One already encrypted here never goes clear (§17.2): held instead.
+  if (guestIn(all)) { if (encConvs.has(E.peopleId(all))) throw new Held('guest'); return null }
   // P2.5: lists count only after one complete read for these accounts on this connection
   // (an account with no list known is read again at every try: its list may have come since)
   const toRead = all.filter((a) => chainFor(a) !== E.SERVICE && (!readOnThisConnection(a) || chainFor(a) === undefined))

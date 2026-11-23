@@ -1,3 +1,4 @@
+import { guestInfo } from './auth'
 import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, nip44, verifyEvent, type NostrEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -13,7 +14,7 @@ import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOn
 import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource, takeV1Secrets, v1SecretsHere } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
-import { Held as EncHeld, onV1Secrets, setV1Provider, repairKey, encCaughtUp, encDevice, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
+import { Held as EncHeld, onV1Secrets, setGuestTest, setV1Provider, repairKey, encCaughtUp, encDevice, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
 import { encryptedFormat, formatReady, freshFormat } from './access'
 import { KEY as ENC_KEY, MSG as ENC_MSG } from './enc/core'
 
@@ -422,6 +423,7 @@ export function startDms() {
   onEncKeys(() => { rejudgeClear(); void process() }) // format 3: conversation keys arrived (clear ones re-judged)
   onV1Secrets((list) => void takeV1Secrets(list)) // format 3: version-1 secrets from a key pack (§16.3)
   setV1Provider(() => v1SecretsHere()) // format 3: Share hands them on
+  setGuestTest((pk) => isGuest(pk) || (pk === me() && !!guestInfo())) // format 3: guests stay out of encryption for now (the lead)
   setInterval(() => { if (held.size && navigator.onLine) void sendHeld(true) }, 15_000) // a silent relay: asked again
   // §8: a history shared with this device: its messages, marked (sealedrt keeps who shared them);
   // its reactions are not applied (not proven to be authentic)
