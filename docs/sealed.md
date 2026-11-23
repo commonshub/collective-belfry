@@ -433,6 +433,14 @@ whatever above says otherwise).
   switch it is trusted when the endorsing device is trusted there. Remove needs no
   endorsement (it is signed by an older device). A joiner that leaves the head is no longer
   waiting for anything.
+- *From Android's first build of reading* (2026-11-23). Allow on the card endorses too: it
+  is the person's own tap on an older device, so that device publishes the endorsement roster
+  as "It was me" does. Any device IN the head that lacks the head letterbox's secret, after a
+  join or after a removal's rotation alike, is "a letterbox behind" (composer kept, Remove,
+  notices, answering, writing; only reading newer messages waits); the replaced-composer
+  waiting state is for a device OUTSIDE the head only. The waiting line cannot be per
+  message (a wrap does not say its conversation): it is a count on top of Messages and one
+  line above the composer of sealed conversations while any wrap waits.
 - *More readings* (Android's vectors, 2026-11-23). A stored pin whose path holds a join past
   its anchored head is cut back to before that join and followed from there (`moved`).
   "Fewer than 3 let in within 24 h", for a joiner's older keys: three OTHER devices, the
