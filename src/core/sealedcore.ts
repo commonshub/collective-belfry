@@ -214,7 +214,7 @@ const conv = (secret: Uint8Array, pub: string) => nip44.v2.utils.getConversation
  *  message, a note, an 8563, keys and history to my own devices): the belfry sends no push for it.
  *  Readers ignore it (and any wrap tag they don't know). */
 export const SILENT: string[] = ['silent', '1']
-export const isSilent = (w: { tags: string[][] }) => w.tags.some((t) => t[0] === 'silent' && t[1] === '1')
+export const isSilent = (w: { tags: string[][] }) => w.tags.some((t) => t.length === 2 && t[0] === 'silent' && t[1] === '1') // only the exact two-element tag counts
 
 /** RUMOR sealed by SIGNER and gift-wrapped, both encrypted to the key TO. */
 function wrapTo(signer: Uint8Array, rumor: Rumor, to: string, tags: string[][], f: Fixed = {}, now = Math.floor(Date.now() / 1000)): NostrEvent {

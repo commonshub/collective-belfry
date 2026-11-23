@@ -320,6 +320,24 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     try { const { seal, rumor } = S.openSealed(unhex(w.letterbox_secret), w.wrap); const v = S.confirmOk(cc, cf.account, seal, rumor); const ordered = Object.fromEntries(Object.keys(w.expected.rumor).map((k) => [k, rumor[k]])); got = { seal_pubkey: seal.pubkey, rumor: ordered, accepted: v.ok === 'ok' } } /* the fields in the vector's order */ catch (e) { got = String(e) }
     check(`sealed confirm wrap: ${w.name}`, eq(got, w.expected), { got, want: w.expected })
   }
+  // notes (Notes to myself) and silent (§4 Silent wraps), from belfry-android (sha e5e623a5…)
+  if (sv.notes) {
+    const me = sv.notes.account
+    for (const c of sv.notes.rumors) {
+      const got = { participants: M.dmParticipants(c.rumor, me), notes: M.isNoteRumor(c.rumor, me) }
+      check(`sealed notes: ${c.name}`, eq(got, { participants: [...c.expected.participants].sort(), notes: c.expected.notes }), { got, want: c.expected })
+    }
+    const w = sv.notes.wrap
+    try { const { seal, rumor } = S.openSealed(unhex(w.letterbox_secret), w.wrap); check(`sealed notes wrap: ${w.name}`, seal.pubkey === w.expected.seal_pubkey && rumor.id === w.expected.rumor.id && w.wrap.tags.some((t) => t[0] === 'p' && t[1] === me) && M.isNoteRumor(rumor, me), w.wrap.tags) } catch (e) { check(`sealed notes wrap: ${w.name}`, false, String(e)) }
+  }
+  if (sv.silent) {
+    for (const c of sv.silent.tags) { const got = { silent: S.isSilent({ tags: c.tags }), valid: !S.badLb({ tags: c.tags }) }; check(`sealed silent tags: ${c.name}`, eq(got, c.expected), { got, want: c.expected }) }
+    for (const c of sv.silent.wraps) {
+      let ok = S.isSilent(c.wrap) === c.expected.silent
+      if (c.sealed) { try { const { seal, rumor } = S.openSealed(unhex(sv.silent.letterbox_secret), c.wrap); ok = ok && seal.pubkey === c.expected.seal_pubkey && rumor.id === c.expected.rumor.id } catch (e) { ok = false } }
+      check(`sealed silent wraps: ${c.name}`, ok, c.expected)
+    }
+  }
   console.log(bad ? `vectors (with sealed): ${bad} failed` : 'vectors (with sealed): all ok')
 }
 process.exit(bad ? 1 : 0)

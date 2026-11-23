@@ -15775,5 +15775,1214 @@
     "accepted": true
    }
   }
+ },
+ "notes": {
+  "note": "Notes to myself (collective-belfry docs/one-shape.md \"Notes to myself\", ec048e3). Added by belfry-android (tools/sealed_notes_vectors.py, which writes this file's other sections back byte for byte) on 2026-11-23; to be taken into services/onboarding/tools/sealed_vectors.py. Notes is the ordinary direct conversation whose only participant is me: 'conversation' gives its participants (the conversation id is each platform's DM id of that set). 'rumors': what is and is not a note (expected.participants = the author and the p tags, sorted; notes = that set is exactly me). 'wrap': the first rumor sealed (§4) to my own head letterbox by my phone, on the chain 'a valid root' (not ready): the ONLY wrap of a note, since the recipient's copy and the self-copy are the same. 'plans': how a note is sent by 'device' given what the relay answered about my chain ('chain' null = no anchor; 'answer' complete = after authentication and to EOSE). Notes never waits for `ready`, and on a device that can seal a note is never sent the old way. No typing event (kind 21059 / 20002) is ever sent for this conversation. The row is the first of Messages, never unread.",
+  "account": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+  "conversation": {
+   "participants": [
+    "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+   ],
+   "android_id": "n:6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+  },
+  "rumors": [
+   {
+    "name": "a note",
+    "note": "Kind 14, pubkey = my account, exactly one p tag = my account.",
+    "rumor": {
+     "id": "3baec117912b086cec98a839f0ac28b2c654a19e7d5e114b53a427e796755f92",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000700,
+     "kind": 14,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ]
+     ],
+     "content": "Bring the extension reel, 2 plugs"
+    },
+    "expected": {
+     "participants": [
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": true
+    }
+   },
+   {
+    "name": "a reply to a note",
+    "note": "As in any direct conversation: [\"e\", <root>, \"\", \"root\"] after the p tag.",
+    "rumor": {
+     "id": "93ce738d44421a301a21f452d9bada975b39ec0d1897e05c67243a9f5f5e40ef",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000760,
+     "kind": 14,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "e",
+       "3baec117912b086cec98a839f0ac28b2c654a19e7d5e114b53a427e796755f92",
+       "",
+       "root"
+      ]
+     ],
+     "content": "And the long ladder"
+    },
+    "expected": {
+     "participants": [
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": true
+    }
+   },
+   {
+    "name": "a picture",
+    "note": "Kind 15 the same way: the one p tag first, then the file tags (dm-files.json).",
+    "rumor": {
+     "id": "fad952894bafa52690fa9c7cbb604592d518804b27a98514afc8af829ae29239",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000820,
+     "kind": 15,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "file-type",
+       "image/jpeg"
+      ],
+      [
+       "encryption-algorithm",
+       "aes-gcm"
+      ],
+      [
+       "decryption-key",
+       "b12755df90bbe75c6db70f525ec0973639f0a2f15b1d19f5802928b03f5a4821"
+      ],
+      [
+       "decryption-nonce",
+       "1b45177a7e13974c810a2034"
+      ],
+      [
+       "x",
+       "a72e308081bf17275315fa485041d81d838e4d7fa602e705b432b2b647bc51a4"
+      ],
+      [
+       "ox",
+       "37b229d82a08f461e70ce0f6137698b524435e8aeff8aab91e49bf2e273f5cb7"
+      ],
+      [
+       "size",
+       "48213"
+      ],
+      [
+       "dim",
+       "1200x900"
+      ]
+     ],
+     "content": "https://files.belfry.example/a72e308081bf17275315fa485041d81d838e4d7fa602e705b432b2b647bc51a4"
+    },
+    "expected": {
+     "participants": [
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": true
+    }
+   },
+   {
+    "name": "a reaction to a note",
+    "note": "Kind 7: e (the note, its author), p (its author = me), k.",
+    "rumor": {
+     "id": "c93d0d848954fc4f59a3776290820ca92a02943cce067e8f26885e545a65ff27",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000880,
+     "kind": 7,
+     "tags": [
+      [
+       "e",
+       "3baec117912b086cec98a839f0ac28b2c654a19e7d5e114b53a427e796755f92",
+       "",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "k",
+       "14"
+      ]
+     ],
+     "content": "✅"
+    },
+    "expected": {
+     "participants": [
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": true
+    }
+   },
+   {
+    "name": "a reaction taken back",
+    "note": "Kind 5: e (the reaction), k, and the one p tag.",
+    "rumor": {
+     "id": "0ecf8b608ec4de1d9a7233706ec029720d9c8bfc6804e9333474bdfffa9d5741",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000940,
+     "kind": 5,
+     "tags": [
+      [
+       "e",
+       "c93d0d848954fc4f59a3776290820ca92a02943cce067e8f26885e545a65ff27"
+      ],
+      [
+       "k",
+       "7"
+      ],
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ]
+     ],
+     "content": ""
+    },
+    "expected": {
+     "participants": [
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": true
+    }
+   },
+   {
+    "name": "a note with no p tag",
+    "note": "What older apps wrote. Read as a note: the participants of a rumor are its author and its p tags, here only me. Never written this way any more.",
+    "rumor": {
+     "id": "a49720dae476aa65a779942f4d1747d506b40be5a7075321d09c70aa4240210c",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1794914300,
+     "kind": 14,
+     "tags": [],
+     "content": "A note from before the p tag"
+    },
+    "expected": {
+     "participants": [
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": true
+    }
+   },
+   {
+    "name": "a message to Bob",
+    "note": "One p tag, but not mine: the conversation with Bob.",
+    "rumor": {
+     "id": "3ba5762819dcc15f9552f3fc5f79f4642d2662e899866b2d0945bb06d2503a15",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795001000,
+     "kind": 14,
+     "tags": [
+      [
+       "p",
+       "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb"
+      ]
+     ],
+     "content": "See you Sunday!"
+    },
+    "expected": {
+     "participants": [
+      "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": false
+    }
+   },
+   {
+    "name": "p names me and Bob",
+    "note": "Two participants: the conversation with Bob, not Notes.",
+    "rumor": {
+     "id": "1a56c6686e003b518dc93ae140178a8de17a7af6fcb359cb77c8b936869f4dac",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795001060,
+     "kind": 14,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "p",
+       "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb"
+      ]
+     ],
+     "content": "For the two of us"
+    },
+    "expected": {
+     "participants": [
+      "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": false
+    }
+   },
+   {
+    "name": "Bob's message to me",
+    "note": "One p tag = my account, but the author is Bob: the conversation with Bob. Nobody else can write into my Notes.",
+    "rumor": {
+     "id": "722d416637f10e3674379417d94b6ec4859d59d394cc3785801538a0ad58ad76",
+     "pubkey": "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb",
+     "created_at": 1795001120,
+     "kind": 14,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ]
+     ],
+     "content": "Thanks for the soup!"
+    },
+    "expected": {
+     "participants": [
+      "003378281254a37a3f8a82f3c65a86c4bcc2eac4bbd323ca5587482934143adb",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     "notes": false
+    }
+   }
+  ],
+  "wrap": {
+   "name": "notes: a note",
+   "note": "Alice's phone seals the note to her own head letterbox (alice_lb1). The chain has no `ready`; the rumor is accepted all the same, the seal's signer being in the head.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1795000702,
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ]
+    ],
+    "content": "AjjRe9OY82HzBizA7ZkhSoz9+tLSK5HDAMvwdjL938INpiThUlWDXS/shp81XngEyUlVfhLVxq0dw3JAvZF+Th5XG79u90CTYU89yGSrjkgrY5u/I9l/X6nKQusZQ8TBIoQieCmThHMguzL9B8zkGovy4LJW/3L97PslptFm7BLhSRQGZQcwXzsSKQ+l8nfATNYQuvURGKWZCcq/E6lk6VmzaYptFVWoxjRzjF5pNODY5nJplPaCA41VCh66IkjDwaohvXxukgDcxnuuauspN6Cjc/VnoyqzPrXkn0inZInTSUVwLoRF8Psky5wk/qClY5jxDimCPt2g8r9SbSPA4z+NUUNhLedCSEu1p3lSABbPDzY1qxvHVMQ2qaHMMPv6vvbnALIKvbeTW6WaqmlUOE/pVIPmvQb4p1fTKuLVHfIem1Up6LN9k3sxc/oHJgl8kEvqDclXc7/ov8SxippT/XjpTE+G9xMH9kUc62jSRqJnDE6llMkPrSf4m8iAnG+RptYcK1RQ/V1WsymdDMJtAmrIiRmNIVhPNtmKGxds2KKo5PCcA8v5PN4aWXJ+HU+PNqmljS48DYbHSSGMOe3J2gKBpslzAZtCpdvpb1PzlPnXeOQn+W7rIbb9GoNrEzpuXYVXZJ14cQ4jwc8cWARc9QcYbrepq5DJcFZ1FqC00bFXdUdkZbzuCAxDTreR15Z7UvBPXRmror4ztPn1N7DLLYZtR1N765bvatBLgC7egMnlvMCh0fFRhnZhRIVamGS9rV7sAdoN2EU5OyDOmyCM3bPBnFBwl2cb97Q/XS6bOrBVP/HC9UUjsvXt7hSpQZ+95UE9eaDQOUule5+7B2+s1BAb0OVnSHhHWhEkSYElmYFfjRI+hy4dHHEckBtdTek21ATsgtygZ5xRufNygwqZTmSY96CKnbafzSl3G+l9pjR/ENS02ekWpLIdOmzS+AF1ZolBca+3l2Kw7F+mvfgoW10kf4E1Nb77flifXWLhstLAT5JkVLJ0cqvWqQSM7Jw++VQ9eSOQJi+J8zI25fFThhibPB0MF8QUPZqagwohlIE/WS7J4WipDJoIwTG7yrsgOlDN5/jM4MRrpf3I9QF0SXZksaMEI+/x8cNvw9RhobeD6ibF7b8prmY2DH4AXnVFlpszXeERl4f3S6BlPA8/ntEu37TCOrRmf6E8EI7b4ZT4bvlxCdSiBzhOKLxtgizaRbbEMdKo9an/SWagtcH3K4nm5iGNbNIqTo2EAlrc3au+qfCxLR5VTNeYvuc9n65w4WhB",
+    "pubkey": "7bf23725045bfd7fdbc573a67a6a4190b5e33bf57baa96d278afe36db47abc1d",
+    "id": "be96c7711dfeca973e9619f187dcaf9f6b0a9335928dc008ebdb93bae07cf62c",
+    "sig": "0de2dd2494b9d38cfe0fe34cc67876d018d7b35159720f21423e2d99a3e35382e30551432383b3eba8e50a8e205039243be7327786434654aea306868a30a00b"
+   },
+   "letterbox": "alice_lb1",
+   "letterbox_secret": "4e41b66bcf3e993d6d0b7d759a4e4ad8a4474ded52b91ce20d363e129b34c214",
+   "chain": {
+    "anchor": {
+     "kind": 30078,
+     "created_at": 1795000001,
+     "tags": [
+      [
+       "d",
+       "belfry:sealed"
+      ],
+      [
+       "root",
+       "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+      ]
+     ],
+     "content": "",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "id": "71fdc6568d00fb70d030dfb39fa1a8c0b5e46922cdc55fd8e42e76030e6976eb",
+     "sig": "c092f48c8c75239a13b4fd3b320f363eab225963c5c8964698170d62df322ea61b750cb112b0c8aeb900662df225aa775517a3d0e25a2a9903e1837febf6e7a8"
+    },
+    "rosters": [
+     {
+      "kind": 8560,
+      "created_at": 1795000000,
+      "tags": [
+       [
+        "p",
+        "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+       ],
+       [
+        "n",
+        "1"
+       ],
+       [
+        "lb",
+        "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+       ],
+       [
+        "device",
+        "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+       ]
+      ],
+      "content": "",
+      "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+      "id": "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae",
+      "sig": "a77fa5b6d052bd215f372551ee81e6565461daa42b9eaa64e774b2e9377024c38b95281ff9893a74ca8eceef7e8276bbc7ab37cad8c0a815937380a7cfdbb639"
+     }
+    ]
+   },
+   "expected": {
+    "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "rumor": {
+     "id": "3baec117912b086cec98a839f0ac28b2c654a19e7d5e114b53a427e796755f92",
+     "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "created_at": 1795000700,
+     "kind": 14,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ]
+     ],
+     "content": "Bring the extension reel, 2 plugs"
+    },
+    "accepted": true,
+    "chain_ready": false,
+    "wraps": 1
+   }
+  },
+  "plans": [
+   {
+    "name": "my chain is not ready, this device is in its head",
+    "note": "The not-ready case: any other conversation would wait for `ready` (§6); Notes does not. One wrap, to my own head letterbox, the seal signed by this device, no signer call.",
+    "device": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "can_seal": true,
+    "answer": "complete",
+    "chain": {
+     "anchor": {
+      "kind": 30078,
+      "created_at": 1795000001,
+      "tags": [
+       [
+        "d",
+        "belfry:sealed"
+       ],
+       [
+        "root",
+        "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+       ]
+      ],
+      "content": "",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "id": "71fdc6568d00fb70d030dfb39fa1a8c0b5e46922cdc55fd8e42e76030e6976eb",
+      "sig": "c092f48c8c75239a13b4fd3b320f363eab225963c5c8964698170d62df322ea61b750cb112b0c8aeb900662df225aa775517a3d0e25a2a9903e1837febf6e7a8"
+     },
+     "rosters": [
+      {
+       "kind": 8560,
+       "created_at": 1795000000,
+       "tags": [
+        [
+         "p",
+         "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+        ],
+        [
+         "n",
+         "1"
+        ],
+        [
+         "lb",
+         "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+        ],
+        [
+         "device",
+         "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+        ]
+       ],
+       "content": "",
+       "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+       "id": "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae",
+       "sig": "a77fa5b6d052bd215f372551ee81e6565461daa42b9eaa64e774b2e9377024c38b95281ff9893a74ca8eceef7e8276bbc7ab37cad8c0a815937380a7cfdbb639"
+      }
+     ]
+    },
+    "expected": {
+     "decision": "seal",
+     "wraps": 1,
+     "lb": "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0",
+     "signer_calls": 0,
+     "old_way": false,
+     "makes_chain": false
+    }
+   },
+   {
+    "name": "my chain is ready",
+    "note": "As any sealed conversation, with one participant: still one wrap (the self-copy is the message).",
+    "device": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "can_seal": true,
+    "answer": "complete",
+    "chain": {
+     "anchor": {
+      "kind": 30078,
+      "created_at": 1795000101,
+      "tags": [
+       [
+        "d",
+        "belfry:sealed"
+       ],
+       [
+        "root",
+        "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+       ],
+       [
+        "head",
+        "e1352d15ea779f704c2e2bed907a330f45280b4066016f97f28b1b70fbf63377"
+       ]
+      ],
+      "content": "",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "id": "0d58e467ea085fdeaabfa07297305f8a9f20f3763ab858203cc30b0cb4232280",
+      "sig": "6694ebb4932695861613961b9d272a52334fb5fd02ffbdeff22b57b592f940ac555ad12e728ac7835cf6df3664ad8b2af0b24a71092b9043ebdcbe4c18cea364"
+     },
+     "rosters": [
+      {
+       "kind": 8560,
+       "created_at": 1795000000,
+       "tags": [
+        [
+         "p",
+         "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+        ],
+        [
+         "n",
+         "1"
+        ],
+        [
+         "lb",
+         "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+        ],
+        [
+         "device",
+         "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+        ]
+       ],
+       "content": "",
+       "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+       "id": "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae",
+       "sig": "a77fa5b6d052bd215f372551ee81e6565461daa42b9eaa64e774b2e9377024c38b95281ff9893a74ca8eceef7e8276bbc7ab37cad8c0a815937380a7cfdbb639"
+      },
+      {
+       "kind": 8560,
+       "created_at": 1795000050,
+       "tags": [
+        [
+         "p",
+         "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+        ],
+        [
+         "n",
+         "2"
+        ],
+        [
+         "prev",
+         "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+        ],
+        [
+         "lb",
+         "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+        ],
+        [
+         "device",
+         "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+        ],
+        [
+         "ready"
+        ]
+       ],
+       "content": "",
+       "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+       "id": "b2b0e3c29fff93bb65d3ade4273e39cd059961b735633720bb25beed3a7d17de",
+       "sig": "13b7883d023656a1253df082834ce3e24ae87ad64a62314079b409645ab2940bf49db9dcabc7122ffc731c9a3a301857e3f17640521f1e23a9111dfea93730bf"
+      },
+      {
+       "kind": 8560,
+       "created_at": 1795000100,
+       "tags": [
+        [
+         "p",
+         "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+        ],
+        [
+         "n",
+         "3"
+        ],
+        [
+         "prev",
+         "b2b0e3c29fff93bb65d3ade4273e39cd059961b735633720bb25beed3a7d17de"
+        ],
+        [
+         "lb",
+         "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+        ],
+        [
+         "device",
+         "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+        ],
+        [
+         "device",
+         "2d2eae433b0420edf89347b2d0c8e0b9a0522202256e4d90da3e84355377c731"
+        ]
+       ],
+       "content": "",
+       "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+       "id": "e1352d15ea779f704c2e2bed907a330f45280b4066016f97f28b1b70fbf63377",
+       "sig": "c49cb3d02d70b1f245be25d006c3030c8278a0850f510c6b5483456b4e77f33ee02e1d55f9e99b01e4607714a6e6268ae41a7080294b8eb6898e36cac325a4b9"
+      }
+     ]
+    },
+    "expected": {
+     "decision": "seal",
+     "wraps": 1,
+     "lb": "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0",
+     "signer_calls": 0,
+     "old_way": false,
+     "makes_chain": false
+    }
+   },
+   {
+    "name": "I have a chain, this device is not in its head",
+    "note": "A device of mine not added yet: the note waits with the usual waiting banner until the device is added. Never the old way.",
+    "device": "cc4bedd5d363f9ecd9fe549ff6f0a3f2601f0153ed85c196ee0e0b58493f1960",
+    "can_seal": true,
+    "answer": "complete",
+    "chain": {
+     "anchor": {
+      "kind": 30078,
+      "created_at": 1795000001,
+      "tags": [
+       [
+        "d",
+        "belfry:sealed"
+       ],
+       [
+        "root",
+        "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae"
+       ]
+      ],
+      "content": "",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "id": "71fdc6568d00fb70d030dfb39fa1a8c0b5e46922cdc55fd8e42e76030e6976eb",
+      "sig": "c092f48c8c75239a13b4fd3b320f363eab225963c5c8964698170d62df322ea61b750cb112b0c8aeb900662df225aa775517a3d0e25a2a9903e1837febf6e7a8"
+     },
+     "rosters": [
+      {
+       "kind": 8560,
+       "created_at": 1795000000,
+       "tags": [
+        [
+         "p",
+         "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+        ],
+        [
+         "n",
+         "1"
+        ],
+        [
+         "lb",
+         "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+        ],
+        [
+         "device",
+         "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af"
+        ]
+       ],
+       "content": "",
+       "pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+       "id": "4c61aee798cfeab2985d9e7fd0751fc3a6b93936bfdd4fe14ad65e516b10d8ae",
+       "sig": "a77fa5b6d052bd215f372551ee81e6565461daa42b9eaa64e774b2e9377024c38b95281ff9893a74ca8eceef7e8276bbc7ab37cad8c0a815937380a7cfdbb639"
+      }
+     ]
+    },
+    "expected": {
+     "decision": "wait_for_device",
+     "wraps": 0,
+     "signer_calls": 0,
+     "old_way": false,
+     "makes_chain": false
+    }
+   },
+   {
+    "name": "no chain, a definite answer",
+    "note": "A complete answer after authentication shows no anchor: the device makes the chain now (first-device path, §5.1) and holds the note, shown as sending, until the chain is anchored; then it is sealed as in the first case. Nothing unsealed goes out.",
+    "device": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "can_seal": true,
+    "answer": "complete",
+    "chain": null,
+    "expected": {
+     "decision": "make_chain_then_seal",
+     "wraps": 0,
+     "wraps_once_anchored": 1,
+     "signer_calls": 0,
+     "old_way": false,
+     "makes_chain": true
+    }
+   },
+   {
+    "name": "no chain known, the answer is not complete",
+    "note": "Silence, a CLOSED, an answer from before authentication: no chain is made and nothing is sent, sealed or not. The note is held, shown as sending, and decided at the first complete answer.",
+    "device": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+    "can_seal": true,
+    "answer": "incomplete",
+    "chain": null,
+    "expected": {
+     "decision": "hold",
+     "wraps": 0,
+     "signer_calls": 0,
+     "old_way": false,
+     "makes_chain": false
+    }
+   },
+   {
+    "name": "an account that cannot seal",
+    "note": "An agent, an account that holds its own key, a guest: no device key, so no chain. One NIP-17 wrap to my own account through the signer (p = me, no lb), as old direct messages. No lock, and never the \"nobody else\" sentence.",
+    "device": null,
+    "can_seal": false,
+    "answer": "complete",
+    "chain": null,
+    "expected": {
+     "decision": "old_way",
+     "wraps": 1,
+     "lb": null,
+     "old_way": true,
+     "makes_chain": false
+    }
+   }
+  ]
+ },
+ "silent": {
+  "note": "Silent wraps (collective-belfry docs/sealed.md §4 \"Silent wraps\", belfry-sh 27e149a). Added by belfry-android (tools/sealed_silent_vectors.py, which writes this file's other sections back byte for byte) on 2026-11-23; to be taken into services/onboarding/tools/sealed_vectors.py. A wrap (kind 1059) that addresses only its own sender carries one more tag, [\"silent\", \"1\"], on the wrap only: never in the seal or the rumor. 'carries': shape only, which wraps a client makes with it ('p' says whose key the wrap's p tag is). 'tags': which tag lists are silent; only the exact two-element tag counts, anything else is read as absent and the wrap stays valid (Android reads [\"silent\", \"1\", \"x\"] strictly as not silent; for the lead to confirm). 'wraps': real wraps of one note of Alice's, sealed (alice_lb1, the chain 'a valid root') and old-style: a reader opens each exactly as a wrap without the tag and ignores tags it does not know.",
+  "tag": [
+   "silent",
+   "1"
+  ],
+  "carries": [
+   {
+    "what": "sealed message: the copy to myself",
+    "note": "Kind 14 / 15 / 7 / 5 sealed to my own head letterbox beside the wrap for the other side.",
+    "p": "my account",
+    "sealed": true,
+    "expected": {
+     "silent": true
+    }
+   },
+   {
+    "what": "sealed message: the wrap for the other person",
+    "note": "The same rumor sealed to their head letterbox. Never silent.",
+    "p": "their account",
+    "sealed": true,
+    "expected": {
+     "silent": false
+    }
+   },
+   {
+    "what": "old-style message: the copy to myself",
+    "note": "NIP-17 through the signer, p = my account.",
+    "p": "my account",
+    "sealed": false,
+    "expected": {
+     "silent": true
+    }
+   },
+   {
+    "what": "old-style message: the wrap for the other person",
+    "note": "NIP-17 through the signer, p = their account. Never silent.",
+    "p": "their account",
+    "sealed": false,
+    "expected": {
+     "silent": false
+    }
+   },
+   {
+    "what": "a sealed note to myself",
+    "note": "The only wrap of a note (the notes section).",
+    "p": "my account",
+    "sealed": true,
+    "expected": {
+     "silent": true
+    }
+   },
+   {
+    "what": "an old-style note to myself",
+    "note": "On an account that cannot seal: one NIP-17 wrap to my own account.",
+    "p": "my account",
+    "sealed": false,
+    "expected": {
+     "silent": true
+    }
+   },
+   {
+    "what": "an 8563",
+    "note": "\"It was me\", sealed to my own head letterbox (the confirm section).",
+    "p": "my account",
+    "sealed": true,
+    "expected": {
+     "silent": true
+    }
+   },
+   {
+    "what": "keys for one of my devices",
+    "note": "The 8561 hand-over (§5.5): a NIP-59 wrap whose p is my receiving device.",
+    "p": "my device",
+    "sealed": false,
+    "expected": {
+     "silent": true
+    }
+   },
+   {
+    "what": "shared history for someone else",
+    "note": "An 8564 sealed to their head letterbox (§8). Never silent.",
+    "p": "their account",
+    "sealed": true,
+    "expected": {
+     "silent": false
+    }
+   },
+   {
+    "what": "a mail for the belfry",
+    "note": "A 1301 wrapped to the belfry's mail key (§7). Never silent; its copy to myself is.",
+    "p": "the belfry's key",
+    "sealed": false,
+    "expected": {
+     "silent": false
+    }
+   }
+  ],
+  "tags": [
+   {
+    "name": "the tag",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "silent",
+      "1"
+     ]
+    ],
+    "expected": {
+     "silent": true,
+     "valid": true
+    }
+   },
+   {
+    "name": "no tag",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   },
+   {
+    "name": "another value",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "silent",
+      "0"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   },
+   {
+    "name": "another value: true",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "silent",
+      "true"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   },
+   {
+    "name": "no value",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "silent"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   },
+   {
+    "name": "one more element",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "silent",
+      "1",
+      "x"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   },
+   {
+    "name": "another case",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "Silent",
+      "1"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   },
+   {
+    "name": "given twice",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "silent",
+      "1"
+     ],
+     [
+      "silent",
+      "1"
+     ]
+    ],
+    "expected": {
+     "silent": true,
+     "valid": true
+    }
+   },
+   {
+    "name": "the tag first",
+    "tags": [
+     [
+      "silent",
+      "1"
+     ],
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ]
+    ],
+    "expected": {
+     "silent": true,
+     "valid": true
+    }
+   },
+   {
+    "name": "an old-style wrap with the tag",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "silent",
+      "1"
+     ]
+    ],
+    "expected": {
+     "silent": true,
+     "valid": true
+    }
+   },
+   {
+    "name": "an unknown tag beside it",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "x-later",
+      "anything"
+     ],
+     [
+      "silent",
+      "1"
+     ]
+    ],
+    "expected": {
+     "silent": true,
+     "valid": true
+    }
+   },
+   {
+    "name": "only an unknown tag",
+    "tags": [
+     [
+      "p",
+      "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+     ],
+     [
+      "lb",
+      "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+     ],
+     [
+      "x-later",
+      "anything"
+     ]
+    ],
+    "expected": {
+     "silent": false,
+     "valid": true
+    }
+   }
+  ],
+  "letterbox": "alice_lb1",
+  "letterbox_secret": "4e41b66bcf3e993d6d0b7d759a4e4ad8a4474ded52b91ce20d363e129b34c214",
+  "account": "alice",
+  "wraps": [
+   {
+    "name": "silent: a sealed note",
+    "note": "Opened with alice_lb1 exactly as a wrap without the tag.",
+    "sealed": true,
+    "wrap": {
+     "kind": 1059,
+     "created_at": 1795000902,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "lb",
+       "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+      ],
+      [
+       "silent",
+       "1"
+      ]
+     ],
+     "content": "Ale8eWM7hGHKdN9smYNR14IecUM219L2AHt11auI9ecto4tUwpYlkWtZjVopS7mwTgJhlxY6jtBhvaE7fEUM40mxwwXOPhYS78cDz/2BRxbdAIqOo7EOSRV/r9QRhkTtHWUXvwuyXZoT2kVNJc8fhn1OQ6Md/5FCzZXx2rqhrUnjFRIo8mSm8yESEL/HsIVIi95SqA02wb9awyaBCzv/0vPivqBN6vz+FBFsIAqC0CO7c1vODNBLBQ83CF/3w6HSEkjNsXRbj9Bxh1FPNMMnYMr2sDGevq5PNbUfbWu12npcpqioTX1xDiW6yfvXV6dUpoJwmobB9tbRLdgtaEUsbl1P/YJkwgcb0ODda+QFkJmvLYf0QAVs85NmvWViA+aRR9zN9hLo+R9IyvgimxdUH/6HEv3JMZDFevr4DFXpgX7kXQo5dRv9LaD1fII/bUXeLjUwg6LZfTOWw6hxosNqdAG1Qs0cKBlJ+4jcLTKeyFQAOFylD9FubBmdjqETM5q2V7WzkiXvCqA6BoWp6KAtKwZjARYyHPckU4WcrjbSw5ssTPZRjiCquT3b8MsuDD5XNogw5kM/BKMbQtgDSlwqOXq2A7QLZOvkDCJOEy4BaXFMZMwxjHG0qmzKcOmrwbY9jv4lT1z37NwlER304Pe3x/sElnCzuLayewgEo64GYVBYRBLdZCQsFeHz6TkomL5qjfEA7/sSN3NzhtvicHbGnb7ZHvnYyZziRboTiDGa9JivcFmgEd9QsW69U9fjXgN3fzyx8fRvndjDSmv3xE9Ak+g9/dc7EwUnYYguTDTJs+kDqHLLQl3pqdHoqh/EoukrJvNgCTEHaUqlll5kMC8TVE0VefBuaFXf8y6EVZdzMxhXhUqoOBvmKxd7zpuwyxqwNOq43ZJbQFqzAbvYp2NR/ETr+UtNONJ///hdnhCWe4QdgGX5DsVvcoqwBZIeQBQQTC2htuXpocSMzDeDIX7rWl8YOymx6ZHV7otuks7W7yQ055PJ2De1sJvcqrDJ0EWXNL5uem4lGNlmX4rMczC6SEb6ah1b5xcCJzkNJBJIysFME8dLNGXUW4ZpdVaCnVhuIr0pm0lyOA+LDB2HZhC5LABiPiYP71YC37rrWOJOg2/XVrcefYgri/sol/6zjZ/12Y9G/SeO7aiHGL8J/UOTyJtx2C+0y6gVRGfOYvgogVL7g+Zm1JpUzTnyFajMaG0EVuh1kQLCx2WtilDDXVRdORpmmXlk/TNKPL64U3jBif3iHOsM/7/QMPddilDW/dqImEGq",
+     "pubkey": "4b2162839a2447da62f39caad4be608241e1cd9276528a3245a5028661473e07",
+     "id": "ac741e77f9b785fefb7873ece0f1facd642f51c11f9aeeafca15dae717670de3",
+     "sig": "9661304246f55248798964c606335b4c79acd307178751836386120ca8eca574a677b2ac0aa1f811432e090d4c40802f9e38cfabecec2ad55bf1059027de98e1"
+    },
+    "expected": {
+     "silent": true,
+     "opens": true,
+     "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "rumor": {
+      "id": "d4205fcbf4ee73ee06735c367140b492c41602d578aebe2b25ad3d3d4dcdd449",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "created_at": 1795000900,
+      "kind": 14,
+      "tags": [
+       [
+        "p",
+        "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+       ]
+      ],
+      "content": "Where the shed key hangs"
+     }
+    }
+   },
+   {
+    "name": "silent: a sealed note with tags a reader does not know",
+    "note": "An unknown tag and a silent tag of another value: both ignored, the wrap opens, and it is not silent.",
+    "sealed": true,
+    "wrap": {
+     "kind": 1059,
+     "created_at": 1795000902,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "lb",
+       "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0"
+      ],
+      [
+       "x-later",
+       "anything"
+      ],
+      [
+       "silent",
+       "0"
+      ]
+     ],
+     "content": "AvRyBFqG+1xtFP1b627nSahLjv5ZapmbWyzhZqK4QtEAs/Acqnz2PcS/zskyTpKFzSkvD+ikf9/oV6Yv8WIrIguuBcQSPTyGfYTfzbog95ZO4udKZNzHk65wK9ReK2Q9XfnVeib69n6AB6ALqW5sbyoNP4S+y0ke/gxBMIkS0B8DptLu3/jeygOqZDcr8hm6Ed2uzlMpp/3wsNITXoIYa2SCnjOpOssdnU0VckOBxzpuljzrevkLbQNZ6xveZeQD8X7hAo4LP+0+LuF5cdETZSg4miF1D4Eokwooc+f7IFamOcVuhKnz4J/unbQQ5HX+tSP9ebRdjUYP3ZG0K4NLXMqzEx3iyPT85HHL4H+63vl4PFRTMt0+k2oA3AL9FeamR/b0ycpWLM4NmPsLAq1qjPryP3JkJGY3oCu6t4KErXcevB8Gh6e3qZ0GDTWA+5pKf17FyofemN0OPTyjf5OB9ABVfe3WIXhXdqH+0S2/VWd9lCTKh8zcLCpsB+u2+M3qUgyTUS8u1VAgRuBPnwOUqtyaojqbkiFLMxc0iv7+/PJdA8x/4ryfU9Ege11+q151VEFkSI7iYSvjOgMsgWwBiBo8M0lJ6vjr8c/Yn4ghTZz92F2i/QdphBgCQ9ny/yE4Ge42AsUdS3EiicvWpS6lcjngw/n+xxRXS+ycG4UhAuFrTqXMUTkXHADW7A+C+QQOy5IOTlgniHQUIZXAUurQL2B0FwBcZ+EqZviahoH9od6czKJrQxxxx2gjxFVcM6XsuHP8CbdcLH+4+L1loFPy4kU/d6FmWC1ckl3R2n/RCNYs3Px2ljMl/ciuY/WwCxZlr4uk6tauRQEF4d8KxrZvRnGUCs7rW2S7l4s6ECg7qMlHPj0JflXPebUdQsJxYR02av/fxgdM9LFDWP6B+3OkszSUjfXFjr/pAnXLXaMUqmsbY2AyFY0iifP7Ei1ypTxWsmuOg/JR2GIliS+m8xxYg3aGFJTBlPfW5AuBFL1XpBgkjhWesrsm62DDoDwrysmgMICjtsdrn90c66YcINLI4bCttyRsJH0U9dhKvY6787TrGRv6ebjI+xzR+189SGC4u3d5n756nebR4wpCCmtyn262MXUtPLkHx46oPc9JUqnhxKh/a/v/DLpPKKX7ZQPriBoWyZEJhIryNheAO2luhSA39fRoM66lIb6CZx4ehWFPiwjo1/DcpjaNdyENZOXIWKGhLa8y/ZH+mDa69S3amx1kGTtTe5Sq5wJiTWaDwJnZnJlS2ykzE6UAiXvUSjIAkFQp",
+     "pubkey": "1d024552a8005f506b396523af25150ab9ff28e6b2d00532b59f80f10622b639",
+     "id": "a4d7085931f8a8b90b866c406e15e412a112af5702ec5631d9caa882d8a502e7",
+     "sig": "553566a98394901c519c76c51443f883d6f46e1965b1ade0a7ee539b38d611a4d9c6582bbf6089e6633d30f11f4e42d65e9b792fb7951a391fdb0f1225cf4dc9"
+    },
+    "expected": {
+     "silent": false,
+     "opens": true,
+     "seal_pubkey": "cd6d11967be8970f75fe4728a958931c670ba7220a069e9c41c09531ed8154af",
+     "rumor": {
+      "id": "d4205fcbf4ee73ee06735c367140b492c41602d578aebe2b25ad3d3d4dcdd449",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "created_at": 1795000900,
+      "kind": 14,
+      "tags": [
+       [
+        "p",
+        "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+       ]
+      ],
+      "content": "Where the shed key hangs"
+     }
+    }
+   },
+   {
+    "name": "silent: an old-style note",
+    "note": "NIP-17: sealed by Alice's account to itself, opened with her account key. No lb.",
+    "sealed": false,
+    "wrap": {
+     "kind": 1059,
+     "created_at": 1795000902,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "silent",
+       "1"
+      ]
+     ],
+     "content": "AnfW4yqfncITnYMJsvuBr/l6CU9Dut4nmsfXHismI4TeVc/IukLlO6RQJ3Sj76mfs6f1NzISdGCWtz73I7fgCBB5qwsduaY4pV/fXCSOfOjeocC1qt0G35acKv+b0zo7SQcvbid4PpKdWEbzC4KVqaACmSe1x3EIDwoYeiXoew/sBvdqSPDfSNyWdViAgcQxTVJf/6HRGCDBeD9WzvxdSKf/XrJLC9E1lrD2++BWMWi29pKFF0dLKdZTOJAyfOObo9n46TsZ4qw7+6PSPs7lhJuI3Q/zZXYUPzU50BIgu+w69AoHzA7JN3266Y+IHI7vcXep3jlcgp8xoXHsmUZSojRN/Nc2sA25sIlLnuYdoDuEEXySYQ7+4J83/kZpu1w3kRMQpKhNb98LyXwKoz7WH3yyLwYkke58ZscyyW+fZomerjueeDbyOtovJwjUAuF2TxH6tz+jB7QniPFSjMFp0GI8oDrXbj6hniI9KMlNC3o8vviTdfYJH8M88wrQpjlN2ZW6jVkmuOh6Y0rntS0OCkLjJ6qUF9NIITS5AVIMgbP9vjWYCPn/rRTF1xSmh+LgIsSGzvaOy8tEjTMxhc/XyaDiNupwsUIyvYLVVFT2MWkzt+KId54GpPZHB+nnSwgYp1TtuB2immGaXMyLcAiQdb/6Kmu/KQKMHIYbkiL3ZlI7+n3w47E8CmgI6MtMmEo3rF0JQEGQKzfCmaUQ7miyKn8h6rF0SJzJb8UundjCB5rIpqZwqzao4BP69TzcJW84m/wgc0kg1JzsJo3M3HfJ1icgdc1X++L+fm2v8AohdOX2CF2Vkophjs++9XXEYOtzD+lBYyJKhCRgsI7wWbBxfxhye50lFu+DfN4MNxz+5yTNDkeJyPAvC52P6Az88nq51XWBqkNKs7X3bjuD0nUzpEBBXabObQl1G9tV8f5J09YxZ3V4GX2htqPB12iZtDvGfGOfCIJkaIobcuryKWC8HsZvMDfi4CcaS80559xJ2JKg4Tz98iPVG8Hua7fbv7/s9f8Rn1tLEsX232oLtfM8hMTEdLC5cU4M5BEEJFUG9wVMuWSnGzQ5kY4sJ+15oaV4+TDf7BThAnOXedL8wgRZl7DzfkmHRALce+NGzoq9fJ9aFoNcHqt0TqBUq+YZAM21nhbnSJdAvc3vgyh65G+Tay7uuuvRZbUeIto7rF4hGN7nWt5kgMENhTTBuOtgQN1ZgD0ePnFEYuRPtg6bP1/QrB8i8zZ/1+62YnyceqRSxGrxYzyBSCy7cH2LahnMrlwiA84u",
+     "pubkey": "fdf7e95fb9125a7126008048320b8db006226369bab15e7c28e2a91853e060cc",
+     "id": "5c70f79fd6c55f25202877f218570f8279ca7f0af5e5cb836f2e95652fd09386",
+     "sig": "a68e7ae0ca9f452e4f82aa774557d8ce2b470fa004f37a649f56d6ff911905f3844259b87116086657078d8b142ab9009585bdf88f20cee17b085ef7ca90beab"
+    },
+    "expected": {
+     "silent": true,
+     "opens": true,
+     "seal_pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "rumor": {
+      "id": "d4205fcbf4ee73ee06735c367140b492c41602d578aebe2b25ad3d3d4dcdd449",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "created_at": 1795000900,
+      "kind": 14,
+      "tags": [
+       [
+        "p",
+        "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+       ]
+      ],
+      "content": "Where the shed key hangs"
+     }
+    }
+   },
+   {
+    "name": "silent: an old-style note with a tag a reader does not know",
+    "note": "Opens as before.",
+    "sealed": false,
+    "wrap": {
+     "kind": 1059,
+     "created_at": 1795000902,
+     "tags": [
+      [
+       "p",
+       "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+      ],
+      [
+       "x-later",
+       "anything"
+      ]
+     ],
+     "content": "AootR8TULICV2D8Zxs0HEk11nNmX9+SwbWcJ8wGtDwtvxurn4LwmRpI4pmWFXtukCaEVJDsC0K4yMdKGlK+3OqTIBK9x59CDZNpOQ5IzjQUG/LmKz/VBHtPneuBTS1jIwBQnfLM1Ra6mh+9k/zxd6IjBs3TCTKeigovMZmBwV8BDFX6tdpaDE8hLagQelQ+FGGTJNdlb3WCgICHs6gFNR8BGgssPOF9wxLr7dm10P+AZAW5tu8AQyVmE29gBykpyXcpuVNpm9id4luMYZS/UZMp3NF0dFN0Xx42l3tFe8l97SA8r/m7b+A6EICXaEwKMUbC7ahR1FIuEkCFHqyuwP2gLEJuUE9J/M5i+tanDDNdjVfQAbLoUwFP2KiU8yA99KEwWFmTd02aZsAD9tc8rjTgTuBeioEYnxQodno29Kfpe5To7ngZn0VPzwB6tNI+4euefCrWOFZEjT0IWoOXrLrMSTVPB2cFeIBVN+bpzSi8Ya8b3gh5aZRabzs541jxFwuEeDFO+BljhwWIFuCd1hnlixzDhQe6tT+66jZiEckVEd0Pbi8nbNN0Ho9rjQcoHy0lh3UEP5Dp3c2IxHxkObtw0WpxqsV49wUSamscM57Qhw9nj/7KJ28ScfnQeD6noBxv/UWVKSxY2vF8QU3pnxNmNQ0fnkq8XgwyK3Wt9MNkLYOReP6+cdSDO6W+ZB9zbVhcn55UAQii7iEWCQ5w7JXI/36Pu6kgSOj3gvBEohrJyrm9VvNdVwbR9gdOaPIlDwfvY3v4MybdWvHnUQZQdBHl/BkrR59qpiMcZM+x4/ao2nmfYPpDZVZ5yYjCUFfTVRrDIALAGdMbyglOpCp0rT2h7oHnJpLnRbwq323qK0NK5noNXCDXZnAMvX6QhrpXRxwBPmIhtDbAbu3YLUPNc4CkKV1Dv48nUpbgTMw2tV1s4wSYXl64roLYhPHJlmH2oJdb156vBE4dOvAjUcqkM/cx3eFx41oJHKxFANjXntsRsZ7EmtRx7BG6rH1/YgPUhdOleCF5vMfygA5FoB4b/vuJrrXknEvoTVFoyyEoPrphjFk4lEwg2oHV2vGBGJqNl/cooG+TxVz4SzSlpmHfeTMJ3Mm27jUfuBIPrg9Ukb1K/3XJHW0HqsENGoaiF0sjci/Fy4D+/J05f3jFLsgUaHwthgz4ZYXRubxbsiUTwmg7IXT4tIk5MqdOdi+LM4aZDPzomsbspd6WQX3HrDqVTLz3R1rHLwRt7AQuRV9Rk1Jxc6OJd+OCyzaLOTbCdkY9inpxG",
+     "pubkey": "3882bec54b3e30ba166ebe67c931cb1f06835aef2baad6832d72e46e6eccae9e",
+     "id": "793245df7b01923bbb990da1b249546e704c2a0db6e447cf2dddf78403a8244a",
+     "sig": "6ca3975b6b4b598c2c08409f346bae02d93911a04cf5bf63bcec201fea0891efaa4667915c4a89a4f686d485756d23b083db7baa54f477e3450206cb9a105c67"
+    },
+    "expected": {
+     "silent": false,
+     "opens": true,
+     "seal_pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+     "rumor": {
+      "id": "d4205fcbf4ee73ee06735c367140b492c41602d578aebe2b25ad3d3d4dcdd449",
+      "pubkey": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+      "created_at": 1795000900,
+      "kind": 14,
+      "tags": [
+       [
+        "p",
+        "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2"
+       ]
+      ],
+      "content": "Where the shed key hangs"
+     }
+    }
+   }
+  ]
  }
 }
