@@ -290,7 +290,9 @@ function FilesItem({ files, caption }: { files: Dm[]; caption?: Dm }) {
 function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttributes<HTMLDivElement> }) {
   const r = d.mine ? report(d.emailId) : undefined
   const end = d.kind === 1301 ? undefined : endRef(d.text) // a reference at the end: its preview box
-  const og = d.kind === 14 || d.kind === 4 ? outsideLink(d.text, d.tags) : undefined // an outside page: its preview (channels/og-dm)
+  // an outside page: its preview (channels/og-dm), never in a sealed conversation: asking would tell the belfry
+  // which links were sent in it (the lead's ruling, 23 Nov)
+  const og = (d.kind === 14 || d.kind === 4) && !d.sealed && !isSealed(d.conv) ? outsideLink(d.text, d.tags) : undefined
   return (
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')} {...hold}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
@@ -423,7 +425,7 @@ const kb = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(
 function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean }) {
   const [text, setText] = useState('')
   // the first outside link: its preview above the field, ✕ = sent without one (channels/og-composer)
-  const dmLink = isMail(conv) ? undefined : outsideLink(text)
+  const dmLink = isMail(conv) || isSealed(conv) ? undefined : outsideLink(text) // (none in a sealed conversation)
   const [droppedLink, setDroppedLink] = useState('')
   const [subject, setSubject] = useState('')
   const [error, setError] = useState('')
