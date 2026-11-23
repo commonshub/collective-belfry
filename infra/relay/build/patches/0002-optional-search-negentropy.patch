@@ -1,0 +1,132 @@
+From 0f8363ccc73260fd5e685daf33bbca012387222a Mon Sep 17 00:00:00 2001
+From: belfry <belfry@localhost>
+Date: Mon, 23 Nov 2026 18:23:52 +0000
+Subject: [PATCH 2/2] Build: search and negentropy become optional features of
+ the rnostr binary (Belfry builds without them)
+
+---
+ Cargo.toml   | 13 ++++++++-----
+ src/bench.rs |  2 ++
+ src/lib.rs   | 16 ++++++++++++----
+ src/relay.rs | 13 +++++++++----
+ 4 files changed, 31 insertions(+), 13 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 6686eda..6e430f3 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -19,14 +19,12 @@ anyhow = "1.0.86"
+ clap = { version = "4.5.16", features = ["derive"] }
+ clio = { version = "0.3.5", features = ["clap-parse"] }
+ indicatif = "0.17.8"
+-nostr-db = { version = "0.4.5", path = "./db", default-features = false, features = ["search"] }
+-nostr-relay = { version = "0.4.9", path = "./relay", default-features = false, features = ["search"] }
++nostr-db = { version = "0.4.5", path = "./db", default-features = false }
++nostr-relay = { version = "0.4.9", path = "./relay", default-features = false }
+ nostr-extensions = { version = "0.4.9", path = "./extensions", default-features = false, features = [
+     "metrics",
+     "rate_limiter",
+     "count",
+-    "search",
+-    "negentropy",
+ ] }
+ rayon = "1.10.0"
+ thiserror = "1.0.63"
+@@ -41,13 +39,18 @@ serde_json = "1.0.127"
+ tempfile = "3.12.0"
+ 
+ [features]
+-default = ["search-japanese", "search-korean"]
++default = ["search", "negentropy", "search-japanese", "search-korean"]
++# Belfry builds with --no-default-features: no NIP-50 search, no NIP-77 negentropy.
++search = ["nostr-db/search", "nostr-relay/search", "nostr-extensions/search"]
++negentropy = ["nostr-extensions/negentropy"]
+ search-japanese = [
++    "search",
+     "nostr-db/search-japanese",
+     "nostr-relay/search-japanese",
+     "nostr-extensions/search-japanese",
+ ]
+ search-korean = [
++    "search",
+     "nostr-db/search-korean",
+     "nostr-relay/search-korean",
+     "nostr-extensions/search-korean",
+diff --git a/src/bench.rs b/src/bench.rs
+index 739687a..d7b7ee6 100644
+--- a/src/bench.rs
++++ b/src/bench.rs
+@@ -23,7 +23,9 @@ pub struct BenchOpts {
+     pub count: bool,
+ }
+ 
++#[cfg_attr(not(feature = "search"), allow(unused_mut))]
+ pub fn bench_opts(mut opts: BenchOpts) -> anyhow::Result<u64> {
++    #[cfg(feature = "search")]
+     opts.filter.build_words();
+     let count = bench(&opts.path, &opts.filter, opts.count)?;
+     Ok(count)
+diff --git a/src/lib.rs b/src/lib.rs
+index e1c4ee4..7b7daed 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -135,10 +135,17 @@ pub fn import<F: Fn(usize)>(
+             .filter_map(|s| {
+                 let event = Event::from_data(s.as_bytes());
+                 match event {
+-                    Ok(mut event) => {
+-                        if search {
+-                            event.build_note_words();
+-                        }
++                    Ok(event) => {
++                        #[cfg(feature = "search")]
++                        let event = {
++                            let mut event = event;
++                            if search {
++                                event.build_note_words();
++                            }
++                            event
++                        };
++                        #[cfg(not(feature = "search"))]
++                        let _ = search;
+                         Some(event)
+                     }
+                     Err(e) => {
+@@ -201,6 +208,7 @@ fn create_pb(total: u64) -> ProgressBar {
+ 
+ pub fn export_opts(opts: ExportOpts) -> anyhow::Result<usize> {
+     fn run_export_opts<F: Fn(usize)>(mut opts: ExportOpts, f: F) -> anyhow::Result<usize> {
++        #[cfg(feature = "search")]
+         opts.filter.build_words();
+         if let Some(desc) = opts.desc {
+             opts.filter.desc = desc;
+diff --git a/src/relay.rs b/src/relay.rs
+index c83e30b..221213a 100644
+--- a/src/relay.rs
++++ b/src/relay.rs
+@@ -45,16 +45,21 @@ async fn run_relay(config: &PathBuf, watch: bool) -> Result<()> {
+ 
+ fn register_extensions(app_data: App) -> nostr_relay::Result<App> {
+     let db = app_data.db.clone();
+-    app_data
++    let app_data = app_data
+         .add_extension(nostr_extensions::Metrics::new())?
+         .add_extension(nostr_extensions::Auth::new())?
+         // Belfry: after Auth, which sets the authenticated pubkey it reads.
+         .add_extension(nostr_extensions::PrivateKinds::new())?
+         .add_extension(nostr_extensions::Ratelimiter::new())?
+         .add_extension(nostr_extensions::Count::new(db.clone()))?
+-        .add_extension(nostr_extensions::EventPolicy::new())?
+-        .add_extension(nostr_extensions::Search::new())?
+-        .add_extension(nostr_extensions::Negentropies::new(db))
++        .add_extension(nostr_extensions::EventPolicy::new())?;
++    #[cfg(feature = "search")]
++    let app_data = app_data.add_extension(nostr_extensions::Search::new())?;
++    #[cfg(feature = "negentropy")]
++    let app_data = app_data.add_extension(nostr_extensions::Negentropies::new(db))?;
++    #[cfg(not(feature = "negentropy"))]
++    drop(db);
++    Ok(app_data)
+ }
+ 
+ #[cfg(test)]

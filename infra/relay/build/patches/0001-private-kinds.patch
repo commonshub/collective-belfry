@@ -1,0 +1,713 @@
+From a7300b32fcb9ddfbfccef17725c3becdd1435d36 Mon Sep 17 00:00:00 2001
+From: belfry <belfry@localhost>
+Date: Mon, 23 Nov 2026 18:23:41 +0000
+Subject: [PATCH 1/2] Private kinds: delivered only to the pubkeys in their p
+ tags (Belfry)
+
+---
+ extensions/src/lib.rs           |   4 +
+ extensions/src/private_kinds.rs | 666 ++++++++++++++++++++++++++++++++
+ src/relay.rs                    |   2 +
+ 3 files changed, 672 insertions(+)
+ create mode 100644 extensions/src/private_kinds.rs
+
+diff --git a/extensions/src/lib.rs b/extensions/src/lib.rs
+index 5c99c78..c81910c 100644
+--- a/extensions/src/lib.rs
++++ b/extensions/src/lib.rs
+@@ -4,6 +4,10 @@ pub use auth::Auth;
+ pub mod event_policy;
+ pub use event_policy::EventPolicy;
+ 
++// Belfry: kinds delivered only to the pubkeys in their p tags.
++pub mod private_kinds;
++pub use private_kinds::PrivateKinds;
++
+ #[cfg(feature = "metrics")]
+ pub mod metrics;
+ #[cfg(feature = "metrics")]
+diff --git a/extensions/src/private_kinds.rs b/extensions/src/private_kinds.rs
+new file mode 100644
+index 0000000..cfb7091
+--- /dev/null
++++ b/extensions/src/private_kinds.rs
+@@ -0,0 +1,666 @@
++//! Private kinds (Belfry).
++//!
++//! Events of the configured kinds are delivered only to a connection that is NIP-42
++//! authenticated as one of the pubkeys in the event's `p` tags, both for stored results and
++//! for live broadcasts. A REQ whose filter can only match these kinds must ask for the
++//! authenticated pubkey's own `#p` (so `limit` and paging stay honest); otherwise it is
++//! answered CLOSED. COUNT and NEG-OPEN, which cannot be filtered per event, are refused when a
++//! filter could match a private kind and is not of that own form. Writing an event of these
++//! kinds is refused when its `created_at` is more than `max_skew` seconds from the relay's
++//! clock.
++//!
++//! Enabled only when the `[private_kinds]` section is present:
++//!
++//! ```toml
++//! [private_kinds]
++//! kinds = [8571, 8572, 8573]
++//! max_skew = 300
++//! ```
++
++use crate::auth::AuthState;
++use metrics::{counter, describe_counter};
++use nostr_relay::db::{now, Filter};
++use nostr_relay::{
++    message::{ClientMessage, IncomingMessage, OutgoingMessage},
++    Extension, ExtensionMessageResult, Result, Session, Setting, SettingUpdate,
++};
++use serde::Deserialize;
++
++#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
++#[serde(default, deny_unknown_fields)]
++pub struct PrivateKindsSetting {
++    /// Kinds delivered only to the authenticated pubkeys of their `p` tags.
++    pub kinds: Vec<u16>,
++    /// Largest allowed distance, in seconds, between an event's `created_at` and the relay's clock.
++    #[serde(deserialize_with = "nostr_relay::setting::deserialize_scalar")]
++    pub max_skew: u64,
++}
++
++impl Default for PrivateKindsSetting {
++    fn default() -> Self {
++        Self {
++            kinds: vec![8571, 8572, 8573],
++            max_skew: 300,
++        }
++    }
++}
++
++impl PrivateKindsSetting {
++    fn is_private(&self, kind: u16) -> bool {
++        self.kinds.contains(&kind)
++    }
++
++    /// The filter asks only for private kinds.
++    fn only_private(&self, filter: &Filter) -> bool {
++        !filter.kinds.is_empty() && filter.kinds.iter().all(|k| self.is_private(*k))
++    }
++
++    /// The filter could match an event of a private kind.
++    fn may_match_private(&self, filter: &Filter) -> bool {
++        filter.kinds.is_empty() || filter.kinds.iter().any(|k| self.is_private(*k))
++    }
++
++    /// Every result of the filter is addressed to `me`: `#p` is present and holds only `me`.
++    fn own_only(filter: &Filter, me: Option<&str>) -> bool {
++        let Some(me) = me else {
++            return false;
++        };
++        match filter.tags.get(b"p".as_slice()) {
++            Some(list) if !list.is_empty() => list.iter().all(|v| hex_eq(v, me)),
++            _ => false,
++        }
++    }
++
++    /// A REQ is refused when one of its filters asks only for private kinds and is not
++    /// limited to the caller's own `#p`.
++    fn refuse_req(&self, filters: &[Filter], me: Option<&str>) -> bool {
++        filters
++            .iter()
++            .any(|f| self.only_private(f) && !Self::own_only(f, me))
++    }
++
++    /// COUNT and NEG-OPEN can't be filtered per event: refused when a filter could match a
++    /// private kind and is not of the own form (only private kinds, own `#p`).
++    fn refuse_aggregate(&self, filters: &[&Filter], me: Option<&str>) -> bool {
++        filters.iter().any(|f| {
++            self.may_match_private(f) && !(self.only_private(f) && Self::own_only(f, me))
++        })
++    }
++
++    fn skewed(&self, created_at: u64, now: u64) -> bool {
++        created_at.abs_diff(now) > self.max_skew
++    }
++}
++
++fn hex_eq(bytes: &[u8], hex: &str) -> bool {
++    let hex = hex.as_bytes();
++    if hex.len() != bytes.len() * 2 {
++        return false;
++    }
++    const DIGITS: &[u8; 16] = b"0123456789abcdef";
++    bytes.iter().enumerate().all(|(i, b)| {
++        hex[2 * i].to_ascii_lowercase() == DIGITS[(b >> 4) as usize]
++            && hex[2 * i + 1].to_ascii_lowercase() == DIGITS[(b & 15) as usize]
++    })
++}
++
++/// The parts of an outgoing EVENT message this extension needs.
++#[derive(Deserialize)]
++struct WireEvent {
++    kind: u16,
++    #[serde(default)]
++    tags: Vec<Vec<String>>,
++}
++
++#[derive(Deserialize)]
++struct WireMessage(String, serde::de::IgnoredAny, WireEvent);
++
++#[derive(Default, Debug)]
++pub struct PrivateKinds {
++    setting: Option<PrivateKindsSetting>,
++    /// The decimal text of each private kind, to skip parsing messages that can't hold one.
++    needles: Vec<String>,
++}
++
++impl PrivateKinds {
++    pub fn new() -> Self {
++        describe_counter!(
++            "nostr_relay_private_kinds_refused",
++            "Messages refused or withheld by the private kinds rule"
++        );
++        Self::default()
++    }
++
++    fn authed(session: &Session) -> Option<&str> {
++        session
++            .get::<AuthState>()
++            .and_then(AuthState::pubkey)
++            .map(String::as_str)
++    }
++
++    /// Whether an outgoing message may reach a connection authenticated as `me`.
++    fn deliver(&self, setting: &PrivateKindsSetting, text: &str, me: Option<&str>) -> bool {
++        if !self.needles.iter().any(|n| text.contains(n.as_str())) {
++            return true;
++        }
++        match serde_json::from_str::<WireMessage>(text) {
++            Ok(WireMessage(command, _, event)) if command == "EVENT" => {
++                if !setting.is_private(event.kind) {
++                    return true;
++                }
++                let Some(me) = me else {
++                    return false;
++                };
++                event
++                    .tags
++                    .iter()
++                    .any(|t| t.len() > 1 && t[0] == "p" && t[1].eq_ignore_ascii_case(me))
++            }
++            // Not an EVENT with an event object (EOSE, CLOSED, NOTICE, OK...).
++            Ok(_) => true,
++            // An EVENT we can't read is withheld; any other message passes.
++            Err(_) => !OutgoingMessage(text.to_owned()).is_event(),
++        }
++    }
++}
++
++impl Extension for PrivateKinds {
++    fn name(&self) -> &'static str {
++        "private_kinds"
++    }
++
++    fn setting<'a>(&'a mut self, setting: &mut Setting) -> Result<SettingUpdate<'a>> {
++        let parsed: Option<PrivateKindsSetting> = if setting.extra.contains_key(self.name()) {
++            Some(setting.parse_extension(self.name())?)
++        } else {
++            None
++        };
++        Ok(Box::new(move || {
++            self.needles = parsed
++                .iter()
++                .flat_map(|s| s.kinds.iter().map(|k| k.to_string()))
++                .collect();
++            self.setting = parsed;
++        }))
++    }
++
++    fn outgoing(
++        &self,
++        msg: &OutgoingMessage,
++        session: &mut Session,
++        _ctx: &mut <Session as actix::Actor>::Context,
++    ) -> bool {
++        let Some(setting) = &self.setting else {
++            return true;
++        };
++        let ok = self.deliver(setting, &msg.0, Self::authed(session));
++        if !ok {
++            counter!("nostr_relay_private_kinds_refused", "command" => "deliver").increment(1);
++        }
++        ok
++    }
++
++    fn message(
++        &self,
++        msg: ClientMessage,
++        session: &mut Session,
++        _ctx: &mut <Session as actix::Actor>::Context,
++    ) -> ExtensionMessageResult {
++        let Some(setting) = &self.setting else {
++            return ExtensionMessageResult::Continue(msg);
++        };
++        let me = Self::authed(session);
++        match &msg.msg {
++            IncomingMessage::Event(event) if setting.is_private(event.kind()) => {
++                if setting.skewed(event.created_at(), now()) {
++                    counter!("nostr_relay_private_kinds_refused", "command" => "EVENT")
++                        .increment(1);
++                    return OutgoingMessage::ok(
++                        &event.id_str(),
++                        false,
++                        &format!(
++                            "invalid: created_at must be within {} seconds of the relay's clock",
++                            setting.max_skew
++                        ),
++                    )
++                    .into();
++                }
++            }
++            IncomingMessage::Req(sub) if setting.refuse_req(&sub.filters, me) => {
++                counter!("nostr_relay_private_kinds_refused", "command" => "REQ").increment(1);
++                return OutgoingMessage::closed(&sub.id, &refusal(me)).into();
++            }
++            IncomingMessage::Count(sub)
++                if setting.refuse_aggregate(&sub.filters.iter().collect::<Vec<_>>(), me) =>
++            {
++                counter!("nostr_relay_private_kinds_refused", "command" => "COUNT").increment(1);
++                return OutgoingMessage::closed(&sub.id, &refusal(me)).into();
++            }
++            IncomingMessage::NegOpen(open) if setting.refuse_aggregate(&[&open.filter], me) => {
++                counter!("nostr_relay_private_kinds_refused", "command" => "NEG-OPEN")
++                    .increment(1);
++                return msg.reject(refusal(me));
++            }
++            _ => {}
++        }
++        ExtensionMessageResult::Continue(msg)
++    }
++}
++
++fn refusal(me: Option<&str>) -> String {
++    if me.is_some() {
++        "restricted: these kinds are served only with your own #p".to_owned()
++    } else {
++        "auth-required: these kinds are served only to their recipients".to_owned()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{create_test_app, Auth};
++    use actix_web::web;
++    use actix_web_actors::ws;
++    use anyhow::Result;
++    use futures_util::{Sink, SinkExt as _, Stream, StreamExt as _};
++    use nostr_relay::create_web_app;
++    use nostr_relay::db::{
++        secp256k1::{rand::thread_rng, Keypair, XOnlyPublicKey},
++        Event,
++    };
++    use serde_json::{json, Value};
++    use std::time::Duration;
++
++    fn hex_of(key: &Keypair) -> String {
++        XOnlyPublicKey::from_keypair(key).0.to_string()
++    }
++
++    fn filter(v: Value) -> Filter {
++        serde_json::from_value(v).unwrap()
++    }
++
++    const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
++    const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
++
++    #[test]
++    fn config_defaults_and_validation() {
++        let s: PrivateKindsSetting = serde_json::from_value(json!({})).unwrap();
++        assert_eq!(s, PrivateKindsSetting::default());
++        let s: PrivateKindsSetting =
++            serde_json::from_value(json!({"kinds": [1], "max_skew": "60"})).unwrap();
++        assert_eq!((s.kinds, s.max_skew), (vec![1], 60));
++        assert!(serde_json::from_value::<PrivateKindsSetting>(json!({"other": 1})).is_err());
++        assert!(serde_json::from_value::<PrivateKindsSetting>(json!({"kinds": [70000]})).is_err());
++    }
++
++    #[test]
++    fn section_absent_means_off_and_present_means_on() -> Result<()> {
++        let mut ext = PrivateKinds::new();
++        let mut setting = nostr_relay::Setting::default();
++        ext.setting(&mut setting)?();
++        assert!(ext.setting.is_none());
++        setting.extra.insert("private_kinds".into(), json!({}));
++        ext.setting(&mut setting)?();
++        assert_eq!(ext.setting, Some(PrivateKindsSetting::default()));
++        setting.extra.insert("private_kinds".into(), json!({"bad": 1}));
++        assert!(ext.setting(&mut setting).is_err());
++        setting.extra.remove("private_kinds");
++        ext.setting(&mut setting)?();
++        assert!(ext.setting.is_none());
++        Ok(())
++    }
++
++    #[test]
++    fn delivery_rule() -> Result<()> {
++        let mut ext = PrivateKinds::new();
++        let mut setting = nostr_relay::Setting::default();
++        setting.extra.insert("private_kinds".into(), json!({}));
++        ext.setting(&mut setting)?();
++        let s = ext.setting.clone().unwrap();
++        let msg = |kind: u16, tags: Value| {
++            format!(
++                r#"["EVENT","sub",{}]"#,
++                json!({"id": "00", "pubkey": A, "created_at": 1, "kind": kind,
++                       "tags": tags, "content": "", "sig": "00"})
++            )
++        };
++        let to_a = msg(8572, json!([["p", A]]));
++        let to_both = msg(8571, json!([["p", B], ["e", A], ["p", A]]));
++        let no_p = msg(8573, json!([["e", A]]));
++        let public = msg(1, json!([]));
++        assert!(ext.deliver(&s, &to_a, Some(A)));
++        assert!(ext.deliver(&s, &to_a, Some(&A.to_uppercase())));
++        assert!(!ext.deliver(&s, &to_a, Some(B)), "another member");
++        assert!(!ext.deliver(&s, &to_a, None), "unauthenticated");
++        assert!(ext.deliver(&s, &to_both, Some(A)) && ext.deliver(&s, &to_both, Some(B)));
++        assert!(!ext.deliver(&s, &no_p, Some(A)), "no p tag: never");
++        assert!(ext.deliver(&s, &public, None));
++        assert!(ext.deliver(&s, &public, Some(B)));
++        // a kind-1 whose content mentions 8572 still passes
++        assert!(ext.deliver(&s, &msg(1, json!([["t", "8572"]])), None));
++        for other in [r#"["EOSE","8572"]"#, r#"["CLOSED","8572","x"]"#, r#"["NOTICE","8572"]"#] {
++            assert!(ext.deliver(&s, other, None), "{other}");
++        }
++        assert!(!ext.deliver(&s, r#"["EVENT","s",{"kind":8572,"tags":"x"}]"#, Some(A)));
++        Ok(())
++    }
++
++    #[test]
++    fn req_rule() {
++        let s = PrivateKindsSetting::default();
++        let refuse = |f: Value, me| s.refuse_req(&[filter(f)], me);
++        assert!(refuse(json!({"kinds": [8572]}), Some(A)));
++        assert!(refuse(json!({"kinds": [8572]}), None));
++        assert!(refuse(json!({"kinds": [8572], "#p": [B]}), Some(A)));
++        assert!(refuse(json!({"kinds": [8571, 8572], "#p": [A, B]}), Some(A)));
++        assert!(refuse(json!({"kinds": [8572], "#p": [A]}), None));
++        assert!(!refuse(json!({"kinds": [8572], "#p": [A]}), Some(A)));
++        assert!(!refuse(json!({"kinds": [8571, 8572, 8573], "#p": [A]}), Some(A)));
++        // filters that can match other kinds are filtered per event, never closed
++        assert!(!refuse(json!({"kinds": [1, 8572]}), Some(A)));
++        assert!(!refuse(json!({}), None));
++        assert!(!refuse(json!({"ids": [A]}), Some(B)));
++        assert!(!refuse(json!({"kinds": [1]}), None));
++        // one refused filter closes the whole REQ
++        assert!(s.refuse_req(
++            &[filter(json!({"kinds": [1]})), filter(json!({"kinds": [8573]}))],
++            Some(A)
++        ));
++        // aggregates: anything that may match a private kind needs the own form
++        let agg = |f: Value, me| s.refuse_aggregate(&[&filter(f)], me);
++        assert!(agg(json!({}), Some(A)));
++        assert!(agg(json!({"kinds": [1, 8572]}), Some(A)));
++        assert!(!agg(json!({"kinds": [1]}), None));
++        assert!(!agg(json!({"kinds": [8572], "#p": [A]}), Some(A)));
++    }
++
++    #[test]
++    fn skew_rule() {
++        let s = PrivateKindsSetting::default();
++        let now = 1_000_000;
++        assert!(!s.skewed(now, now));
++        assert!(!s.skewed(now - 300, now));
++        assert!(!s.skewed(now + 300, now));
++        assert!(s.skewed(now - 301, now));
++        assert!(s.skewed(now + 301, now));
++        assert!(s.skewed(now - 400, now));
++    }
++
++    // ---- end to end, over a websocket ----
++
++    async fn recv<S, E>(framed: &mut S) -> Result<Value>
++    where
++        S: Stream<Item = std::result::Result<ws::Frame, E>> + Unpin,
++        E: std::error::Error + Send + Sync + 'static,
++    {
++        loop {
++            let frame = actix_rt::time::timeout(Duration::from_secs(5), framed.next())
++                .await?
++                .ok_or_else(|| anyhow::anyhow!("stream ended"))??;
++            if let ws::Frame::Text(text) = frame {
++                return Ok(serde_json::from_slice(&text)?);
++            }
++        }
++    }
++
++    async fn send<S>(framed: &mut S, text: String) -> Result<()>
++    where
++        S: Sink<ws::Message> + Unpin,
++        <S as Sink<ws::Message>>::Error: std::error::Error + Send + Sync + 'static,
++    {
++        framed.send(ws::Message::Text(text.into())).await?;
++        Ok(())
++    }
++
++    /// Reads the AUTH challenge and, with a key, authenticates.
++    async fn login<S, E>(framed: &mut S, key: Option<&Keypair>) -> Result<()>
++    where
++        S: Stream<Item = std::result::Result<ws::Frame, E>> + Sink<ws::Message> + Unpin,
++        E: std::error::Error + Send + Sync + 'static,
++        <S as Sink<ws::Message>>::Error: std::error::Error + Send + Sync + 'static,
++    {
++        let challenge = recv(framed).await?;
++        assert_eq!(challenge[0], "AUTH");
++        if let Some(key) = key {
++            let event = Event::create(
++                key,
++                now(),
++                22242,
++                vec![vec!["challenge".into(), challenge[1].as_str().unwrap().into()]],
++                String::new(),
++            )?;
++            send(framed, format!(r#"["AUTH",{event}]"#)).await?;
++            let ok = recv(framed).await?;
++            assert_eq!(ok[2], json!(true), "{ok}");
++        }
++        Ok(())
++    }
++
++    async fn publish<S, E>(framed: &mut S, event: &Event) -> Result<Value>
++    where
++        S: Stream<Item = std::result::Result<ws::Frame, E>> + Sink<ws::Message> + Unpin,
++        E: std::error::Error + Send + Sync + 'static,
++        <S as Sink<ws::Message>>::Error: std::error::Error + Send + Sync + 'static,
++    {
++        send(framed, format!(r#"["EVENT",{event}]"#)).await?;
++        loop {
++            let reply = recv(framed).await?;
++            if reply[0] == "OK" {
++                return Ok(reply);
++            }
++        }
++    }
++
++    /// Sends a REQ and gathers the ids of the stored events up to EOSE, or the CLOSED reason.
++    async fn req<S, E>(
++        framed: &mut S,
++        sub: &str,
++        filter: Value,
++    ) -> Result<std::result::Result<Vec<String>, String>>
++    where
++        S: Stream<Item = std::result::Result<ws::Frame, E>> + Sink<ws::Message> + Unpin,
++        E: std::error::Error + Send + Sync + 'static,
++        <S as Sink<ws::Message>>::Error: std::error::Error + Send + Sync + 'static,
++    {
++        send(framed, json!(["REQ", sub, filter]).to_string()).await?;
++        let mut ids = vec![];
++        loop {
++            let m = recv(framed).await?;
++            match (m[0].as_str(), m[1].as_str()) {
++                (Some("EVENT"), Some(s)) if s == sub => {
++                    ids.push(m[2]["id"].as_str().unwrap().to_owned())
++                }
++                (Some("EOSE"), Some(s)) if s == sub => return Ok(Ok(ids)),
++                (Some("CLOSED"), Some(s)) if s == sub => {
++                    return Ok(Err(m[2].as_str().unwrap().to_owned()))
++                }
++                _ => {}
++            }
++        }
++    }
++
++    /// Next live EVENT id on a subscription.
++    async fn next_live<S, E>(framed: &mut S, sub: &str) -> Result<String>
++    where
++        S: Stream<Item = std::result::Result<ws::Frame, E>> + Unpin,
++        E: std::error::Error + Send + Sync + 'static,
++    {
++        loop {
++            let m = recv(framed).await?;
++            if m[0] == "EVENT" && m[1] == sub {
++                return Ok(m[2]["id"].as_str().unwrap().to_owned());
++            }
++        }
++    }
++
++    fn app_with(name: &str, members: &[&str], private: bool) -> Result<web::Data<nostr_relay::App>> {
++        let app = create_test_app(name)?;
++        {
++            let mut w = app.setting.write();
++            let mut extra = json!({
++                "auth": {
++                    "enabled": true,
++                    "req": {"pubkey_whitelist": members},
++                    "event": {"pubkey_whitelist": members},
++                }
++            });
++            if private {
++                extra["private_kinds"] = json!({"kinds": [8571, 8572, 8573], "max_skew": 300});
++            }
++            w.extra = serde_json::from_value(extra)?;
++        }
++        Ok(web::Data::new(
++            app.add_extension(Auth::new())?
++                .add_extension(PrivateKinds::new())?,
++        ))
++    }
++
++    #[actix_rt::test]
++    async fn end_to_end() -> Result<()> {
++        let mut rng = thread_rng();
++        let (a, b, c) = (
++            Keypair::new_global(&mut rng),
++            Keypair::new_global(&mut rng),
++            Keypair::new_global(&mut rng),
++        );
++        let (ha, hb, hc) = (hex_of(&a), hex_of(&b), hex_of(&c));
++        let app = app_with("private-kinds-e2e", &[&ha, &hb, &hc], true)?;
++        let mut srv = actix_test::start(move || create_web_app(app.clone()));
++
++        let mut wa = srv.ws_at("/").await.unwrap();
++        login(&mut wa, Some(&a)).await?;
++        let mut wb = srv.ws_at("/").await.unwrap();
++        login(&mut wb, Some(&b)).await?;
++        let mut wc = srv.ws_at("/").await.unwrap();
++        login(&mut wc, Some(&c)).await?;
++
++        // live subscriptions, opened before anything is written
++        assert_eq!(
++            req(&mut wb, "live", json!({"kinds": [8572], "#p": [hb]})).await?,
++            Ok(vec![])
++        );
++        assert_eq!(req(&mut wc, "live", json!({"kinds": [1, 8572]})).await?, Ok(vec![]));
++
++        let p = |h: &str| vec!["p".to_owned(), h.to_owned()];
++        let to_a = Event::create(&a, now(), 8572, vec![p(&ha)], "x".into())?;
++        let to_b = Event::create(&a, now(), 8572, vec![p(&hb)], "x".into())?;
++        let to_ab = Event::create(&a, now(), 8571, vec![p(&ha), p(&hb)], "x".into())?;
++        let no_p = Event::create(&a, now(), 8573, vec![], "x".into())?;
++        let public = Event::create(&a, now(), 1, vec![], "hello".into())?;
++        for e in [&to_a, &to_b, &to_ab, &no_p] {
++            assert_eq!(publish(&mut wa, e).await?[2], json!(true));
++        }
++
++        // live path: b gets the two events for b, c (another member) gets none of them,
++        // then both get the public note
++        assert_eq!(next_live(&mut wb, "live").await?, to_b.id_str());
++        assert_eq!(publish(&mut wa, &public).await?[2], json!(true));
++        assert_eq!(next_live(&mut wc, "live").await?, public.id_str());
++
++        // stored path
++        assert_eq!(
++            req(&mut wa, "s1", json!({"kinds": [8572], "#p": [ha]})).await?,
++            Ok(vec![to_a.id_str()])
++        );
++        assert_eq!(
++            req(&mut wb, "s1", json!({"kinds": [8572], "#p": [hb]})).await?,
++            Ok(vec![to_b.id_str()])
++        );
++        let mut both = req(&mut wb, "s2", json!({"kinds": [8571, 8572], "#p": [hb]}))
++            .await?
++            .unwrap();
++        both.sort();
++        let mut want = vec![to_b.id_str(), to_ab.id_str()];
++        want.sort();
++        assert_eq!(both, want, "several p tags: any one matches");
++        // REQ rule
++        for f in [json!({"kinds": [8572]}), json!({"kinds": [8572], "#p": [hb]})] {
++            let r = req(&mut wa, "s3", f).await?;
++            assert!(r.as_ref().unwrap_err().starts_with("restricted:"), "{r:?}");
++        }
++        // filters that may also match other kinds: filtered per event
++        let ids = req(&mut wc, "s4", json!({"kinds": [1, 8571, 8572, 8573]})).await?;
++        assert_eq!(ids, Ok(vec![public.id_str()]));
++        let ids = req(&mut wc, "s5", json!({"ids": [to_a.id_str(), to_b.id_str(), no_p.id_str()]}))
++            .await?;
++        assert_eq!(ids, Ok(vec![]), "ids filter by another member");
++        let ids = req(&mut wb, "s6", json!({"ids": [to_a.id_str(), to_b.id_str()]})).await?;
++        assert_eq!(ids, Ok(vec![to_b.id_str()]));
++        let ids = req(&mut wa, "s7", json!({"ids": [no_p.id_str()]})).await?;
++        assert_eq!(ids, Ok(vec![]), "no p tag: not even its author");
++
++        // skew both ways
++        for at in [now() - 400, now() + 400] {
++            let e = Event::create(&a, at, 8572, vec![p(&ha)], "x".into())?;
++            let r = publish(&mut wa, &e).await?;
++            assert_eq!(r[2], json!(false));
++            assert!(r[3].as_str().unwrap().starts_with("invalid:"), "{r}");
++        }
++        let old_note = Event::create(&a, now() - 400, 1, vec![], "old".into())?;
++        assert_eq!(publish(&mut wa, &old_note).await?[2], json!(true), "kind 1 unaffected");
++
++        // unauthenticated connection: nothing private, even with an ids filter
++        let mut wu = srv.ws_at("/").await.unwrap();
++        login(&mut wu, None).await?;
++        let r = req(&mut wu, "u", json!({"ids": [to_a.id_str()]})).await?;
++        assert!(r.is_err() || r == Ok(vec![]), "{r:?}");
++        Ok(())
++    }
++
++    #[actix_rt::test]
++    async fn unauthenticated_reader_without_read_whitelist() -> Result<()> {
++        let mut rng = thread_rng();
++        let a = Keypair::new_global(&mut rng);
++        let ha = hex_of(&a);
++        let app = create_test_app("private-kinds-open")?;
++        app.setting.write().extra = serde_json::from_value(json!({
++            "auth": {"enabled": true},
++            "private_kinds": {}
++        }))?;
++        let app = web::Data::new(
++            app.add_extension(Auth::new())?
++                .add_extension(PrivateKinds::new())?,
++        );
++        let mut srv = actix_test::start(move || create_web_app(app.clone()));
++        let mut wa = srv.ws_at("/").await.unwrap();
++        login(&mut wa, Some(&a)).await?;
++        let mut wu = srv.ws_at("/").await.unwrap();
++        login(&mut wu, None).await?;
++        assert_eq!(req(&mut wu, "live", json!({"kinds": [1, 8572]})).await?, Ok(vec![]));
++        let e = Event::create(&a, now(), 8572, vec![vec!["p".into(), ha.clone()]], "x".into())?;
++        let note = Event::create(&a, now(), 1, vec![], "x".into())?;
++        assert_eq!(publish(&mut wa, &e).await?[2], json!(true));
++        assert_eq!(publish(&mut wa, &note).await?[2], json!(true));
++        assert_eq!(next_live(&mut wu, "live").await?, note.id_str(), "live: private withheld");
++        assert_eq!(
++            req(&mut wu, "s", json!({"ids": [e.id_str(), note.id_str()]})).await?,
++            Ok(vec![note.id_str()])
++        );
++        let r = req(&mut wu, "s2", json!({"kinds": [8572], "#p": [ha]})).await?;
++        assert!(r.unwrap_err().starts_with("auth-required:"));
++        Ok(())
++    }
++
++    #[actix_rt::test]
++    async fn section_absent_changes_nothing() -> Result<()> {
++        let mut rng = thread_rng();
++        let (a, b) = (Keypair::new_global(&mut rng), Keypair::new_global(&mut rng));
++        let (ha, hb) = (hex_of(&a), hex_of(&b));
++        let app = app_with("private-kinds-off", &[&ha, &hb], false)?;
++        let mut srv = actix_test::start(move || create_web_app(app.clone()));
++        let mut wa = srv.ws_at("/").await.unwrap();
++        login(&mut wa, Some(&a)).await?;
++        let mut wb = srv.ws_at("/").await.unwrap();
++        login(&mut wb, Some(&b)).await?;
++        let e = Event::create(&a, now(), 8572, vec![vec!["p".into(), ha]], "x".into())?;
++        assert_eq!(publish(&mut wa, &e).await?[2], json!(true));
++        let old = Event::create(&a, now() - 400, 8572, vec![], "x".into())?;
++        assert_eq!(publish(&mut wa, &old).await?[2], json!(true));
++        let mut got = req(&mut wb, "s", json!({"kinds": [8572]})).await?.unwrap();
++        got.sort();
++        let mut want = vec![e.id_str(), old.id_str()];
++        want.sort();
++        assert_eq!(got, want);
++        Ok(())
++    }
++}
+diff --git a/src/relay.rs b/src/relay.rs
+index 7f65daa..c83e30b 100644
+--- a/src/relay.rs
++++ b/src/relay.rs
+@@ -48,6 +48,8 @@ fn register_extensions(app_data: App) -> nostr_relay::Result<App> {
+     app_data
+         .add_extension(nostr_extensions::Metrics::new())?
+         .add_extension(nostr_extensions::Auth::new())?
++        // Belfry: after Auth, which sets the authenticated pubkey it reads.
++        .add_extension(nostr_extensions::PrivateKinds::new())?
+         .add_extension(nostr_extensions::Ratelimiter::new())?
+         .add_extension(nostr_extensions::Count::new(db.clone()))?
+         .add_extension(nostr_extensions::EventPolicy::new())?
