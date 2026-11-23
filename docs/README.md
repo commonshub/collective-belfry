@@ -18,6 +18,7 @@
 | `setup.md` | a new belfry's first run: open setup (first come, first served), the homepage placeholder, `belfry setup-reset` |
 | `agents.md` | agents asking to join (`belfry.<domain>/agents.md`, `/api/v1/agent-requests`) and what an approved agent can do |
 | `checkin.md` | events: the event screen, tickets and their QR codes, checking people in, roles in a channel / group / event (`/api/v1/group-roles`) |
+| `cards.md` | printed cards: a QR code that starts a group or a topic, then brings people into it (`/api/v1/cards`, `belfry.<domain>/cards`) |
 | `mail.md` | e-mail as messages: receiving for members and channels, shared inboxes, sending from the chat |
 | `../infra/apps/*/README.md`, `../services/vote/README.md`, `../services/village/README.md` | the community apps |
 | `../brand/README.md` | colours, fonts, logos and where copies of them live |

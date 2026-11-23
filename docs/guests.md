@@ -17,6 +17,11 @@ A belfry admin can make the link a **member link** instead (`"as": "member", "ro
 "membership"`): see docs/roles.md. Opening and joining work as below; joining makes them a member
 with that role.
 
+A **printed card** (docs/cards.md) stands for a guest link of the group started from it: the same
+link and the same endpoints, with no end date and no number of people (`guest_unlimited`); a
+guest's own access still lasts 30 days. The visitor who started the group is a guest too, and the
+steward of that one group ("A guest as steward" there).
+
 `GET /channel-invites/<token>` (no auth) → `{"community", "channel", "channel_name", "about",
 "inviter", "state": "open"|"used"|"expired"|"revoked", "days", "role", "as": "guest"|"member"}`
 (member links add `member_role`, `member_role_label`, `membership`); 404 `not_found`.

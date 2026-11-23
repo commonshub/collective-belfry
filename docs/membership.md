@@ -17,7 +17,8 @@ All paths are under `https://belfry.<domain>/api/v1`, signed with NIP-98.
   (or group). The protocol keeps the old word: ids `pod-<slug>-<4 hex>`, the parent's card is a
   kind 9 with `["pod", <id>]`. Any member creates one and is its admin; its admins let people in
   (members directly, others as guests of that group: docs/guests.md). Being in a group makes
-  nobody a member of the belfry.
+  nobody a member of the belfry. A group can also be started from a printed card, by a guest
+  too, who is then the steward of that group and of no other (docs/cards.md §4).
 - **Channel**: unchanged. "Groups relay" stays the internal name of the NIP-29 relay.
 
 ## Membership settings
