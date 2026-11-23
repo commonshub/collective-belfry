@@ -19,7 +19,8 @@ with that role.
 
 A **printed card** (docs/cards.md) stands for a guest link of the group started from it: the same
 link and the same endpoints, with no end date and no number of people (`guest_unlimited`); a
-guest's own access still lasts 30 days. The visitor who started the group is a guest too, and the
+guest's own access still lasts 30 days, and the link makes at most 100 new guest accounts a day
+(then `410 closed`, as a used-up link). The visitor who started the group is a guest too, and the
 steward of that one group ("A guest as steward" there).
 
 `GET /channel-invites/<token>` (no auth) → `{"community", "channel", "channel_name", "about",

@@ -191,7 +191,12 @@ def hashtag_state(svc: Services, name: str) -> str:
     )
     if any(events.tag(e, "d" if e.get("kind") == 39000 else "h") == name for e in found):
         return "taken"
-    if mail.channel_id(svc, name):
+    # what mail.channel_id asks, step by step: it answers "no channel" when the relay behind
+    # the slug lookup fails (right for mail, which then bounces); here that must be an error
+    chosen = mailalias.channel_of(svc, name)
+    if chosen and mail.channel_exists(svc, chosen):
+        return "taken"
+    if mail.channel_exists(svc, name) or mail.channel_by_slug(svc, name):
         return "taken"
     if mailalias._person(svc, name):  # 503 signer when it can't be asked
         return "taken"
@@ -365,8 +370,9 @@ def start(
             pass_id = int(got["pass_id"]) if got and got.get("kind") == "guest" else None
             if pass_id is None:  # no pass to add to (an admin whose own pass lapsed): no guest
                 who = {**who, "guest": False}
-        row = svc.odoo.read_one("belfry.pass", int(pass_id), ["date_end"]) if pass_id else None
-        until = str((row or {}).get("date_end") or "")
+        if pass_id:
+            # their own group: this pass has no end while the card is theirs (docs/cards.md §4)
+            until = svc.odoo.card_steward_pass(card["id"], int(pass_id))
     try:
         make_group(svc, card, group, form, who, until)
         if fresh:

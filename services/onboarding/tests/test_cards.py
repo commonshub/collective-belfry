@@ -82,9 +82,8 @@ def land(world, monkeypatch) -> Land:
     monkeypatch.setattr(guests, "_channel_event", lambda svc, kind, tags: publish(svc, kind, tags))
     monkeypatch.setattr(checkin, "groups_pubkey", lambda svc: pk(w.gkey))
     # the world's relay stand-in calls every word a channel: here only the ones a test names
-    monkeypatch.setattr(
-        mail, "channel_id", lambda svc, name: name if name in out.channels else None
-    )
+    monkeypatch.setattr(mail, "channel_exists", lambda svc, name: name in out.channels)
+    monkeypatch.setattr(mail, "channel_by_slug", lambda svc, name: None)
     for limiter in (cards.LOOKUPS, cards.HASHTAGS, applyverified.PER_IP):
         limiter._seen.clear()
     usernames._taken.clear()
@@ -349,8 +348,7 @@ def test_a_saved_guest_starts_a_group_and_is_its_steward_only(land):
         land.mirror(group)
         put = land.of(9000, group)[0]
         assert ["p", pk(gus), "admin"] in put["tags"] and ["role", "admin"] in put["tags"]
-        end = (dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)).isoformat()
-        assert ["guest", end] in put["tags"]
+        assert ["guest", "2099-12-31"] in put["tags"]  # theirs to keep (no end while the card is)
         # still a guest: a guest pass for the group, no membership
         assert member_key(rsvc, pk(gus)) is None
         passes = rsvc.odoo.search_read(
@@ -425,7 +423,7 @@ def test_a_visitor_with_a_new_address_becomes_a_guest_and_the_steward(land):
         assert out["signed_in"] is True and out["bunker_url"].startswith("bunker://")
         assert re.fullmatch(r"[0-9a-f]{64}", out["pubkey"]) and out["npub"].startswith("npub1")
         assert set(out) <= {"signed_in", "bunker_url", "pubkey", "npub", "nip05", "group"}
-        # a saved guest: her name, her proven address, a guest pass of the group for 30 days
+        # a saved guest: her name, her proven address, a guest pass of her group with no end
         partner = rsvc.odoo.search_read(
             "res.partner", [["email", "=", "vera@example.org"]], ["name"]
         )
@@ -433,7 +431,7 @@ def test_a_visitor_with_a_new_address_becomes_a_guest_and_the_steward(land):
         passes = rsvc.odoo.search_read(
             "belfry.pass", [["partner_id", "=", partner[0]["id"]]], ["tier", "state", "date_end"]
         )
-        end = (dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)).isoformat()
+        end = "2099-12-31"
         assert [(p["tier"], p["state"], p["date_end"]) for p in passes] == [
             ("guest", "active", end)
         ]
@@ -818,3 +816,137 @@ def test_batches_the_print_view_and_reset(land):
         assert r.status_code == 200 and r.json()["group"] != group
         assert post(c, "/cards/ABCDEF/reset").status_code == 303
         assert CSRF not in "".join(m["id"] for m in rsvc.odoo.card_list())
+
+
+def test_a_hashtag_is_never_free_on_a_relay_that_fails(land, monkeypatch):
+    rsvc = land.rsvc
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    card = land.card("topic")
+    land.channels.add("garden-1a2b")
+    with TestClient(create_app(rsvc)) as c:
+        # a channel's plain slug reaches it by mail: taken
+        monkeypatch.setattr(
+            mail, "channel_by_slug", lambda svc, n: "garden-1a2b" if n == "garden" else None
+        )
+        assert get(c, "/cards/hashtag/garden").json() == {"state": "taken"}
+        assert get(c, "/cards/hashtag/bread").json() == {"state": "free"}
+
+        def down(svc, name):
+            raise OSError("relay unreachable")
+
+        monkeypatch.setattr(mail, "channel_by_slug", down)
+        r = get(c, "/cards/hashtag/bread")
+        assert r.status_code == 503 and r.json()["error"] == "relay"
+        r = call(c, bob, f"/cards/{card}/claim", {**FORM, "hashtag": "bread"})
+        assert r.status_code == 503 and r.json()["error"] == "relay"
+        assert not land.of(9007) and rsvc.odoo.card_get(card)["state"] == "unclaimed"
+        # mail's own lookup still answers "no channel" there, as before
+        monkeypatch.undo()
+
+
+# ── the steward keeps their group; the link makes only so many accounts a day ───────────────
+def test_a_guest_steward_does_not_lose_their_group_after_30_days(land, monkeypatch):
+    from belfry_onboarding import core, register
+
+    rsvc = land.rsvc
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        _key, r = visitor_claim(c, card, "vera@example.org")
+        assert r.status_code == 200, r.text
+        me, group = r.json()["pubkey"], r.json()["group"]
+        token = rsvc.odoo.card_get(card)["invite"]
+        # someone who joins by the card is a guest for 30 days, as ever
+        r = call(c, PrivateKey(), f"/channel-invites/{token}/join", {"name": "Gil"})
+        gil = r.json()["pubkey"]
+
+    def passes(pubkey):
+        return rsvc.odoo.search_read(
+            "belfry.pass",
+            [["keycast_pubkey", "=", pubkey], ["guest_channel", "=", group]],
+            ["state", "date_end"],
+        )
+
+    assert [(p["state"], p["date_end"]) for p in passes(me)] == [("active", register.FOREVER)]
+    assert ["guest", register.FOREVER] in land.of(9000, group)[0]["tags"]
+    real = dt.datetime.now(dt.UTC).date()
+    monkeypatch.setattr(core, "today", lambda: real + dt.timedelta(days=31))
+    core.expire(rsvc)
+    out = [e for e in land.of(9001, group)]
+    assert [t for e in out for t in e["tags"] if t[0] == "p"] == [["p", gil]]  # Gil, not Vera
+    assert passes(me)[0]["state"] == "active"
+    assert me in checkin.group_state(rsvc, group).admins
+    # the card is reset: her pass ends as any guest's, 30 days from now
+    assert rsvc.odoo.card_reset(card)
+    end = (real + dt.timedelta(days=30)).isoformat()
+    assert [(p["state"], p["date_end"]) for p in passes(me)] == [("active", end)]
+    monkeypatch.setattr(core, "today", lambda: real + dt.timedelta(days=30))
+    core.expire(rsvc)
+    assert passes(me)[0]["state"] == "active"
+    monkeypatch.setattr(core, "today", lambda: real + dt.timedelta(days=31))
+    core.expire(rsvc)
+    assert passes(me)[0]["state"] == "expired"
+    assert ["p", me] in land.of(9001, group)[-1]["tags"]
+
+
+def test_retiring_also_puts_the_stewards_usual_end_back(land):
+    from belfry_onboarding import register
+
+    rsvc = land.rsvc
+    gus = saved_guest(rsvc)
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        group = call(c, gus, f"/cards/{card}/claim", FORM).json()["group"]
+        rows = rsvc.odoo.search_read(
+            "belfry.pass", [["keycast_pubkey", "=", pk(gus)]], ["guest_channel", "date_end"]
+        )
+        end = (dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)).isoformat()
+        assert {r["guest_channel"]: r["date_end"] for r in rows} == {
+            "garden": end,  # the channel they were a guest of keeps its own end
+            group: register.FOREVER,
+        }
+        assert call(c, gus, f"/cards/{card}/retire", {}).status_code == 200
+        rows = rsvc.odoo.search_read(
+            "belfry.pass", [["keycast_pubkey", "=", pk(gus)]], ["guest_channel", "date_end"]
+        )
+        assert {r["date_end"] for r in rows} == {end}
+
+
+def test_a_cards_link_makes_only_so_many_new_accounts_a_day(land, monkeypatch, caplog):
+    from belfry_onboarding import register
+
+    rsvc = land.rsvc
+    monkeypatch.setattr(register, "CARD_NEW_GUESTS_PER_DAY", 3)
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        group = call(c, bob, f"/cards/{card}/claim", FORM).json()["group"]
+        token = rsvc.odoo.card_get(card)["invite"]
+        first = PrivateKey()
+        assert call(c, first, f"/channel-invites/{token}/join", {}).status_code == 200
+        for _ in range(2):
+            r = call(c, PrivateKey(), f"/channel-invites/{token}/join", {})
+            assert r.status_code == 200 and r.json()["reading"] is True
+        # the fourth new account: refused as a used-up link is
+        with caplog.at_level("WARNING", logger="belfry_onboarding.register"):
+            for _ in range(3):
+                r = call(c, PrivateKey(), f"/channel-invites/{token}/join", {})
+                assert r.status_code == 410 and r.json()["error"] == "closed", r.text
+        said = [m for m in caplog.messages if "new guest accounts in 24 hours" in m]
+        assert len(said) == 1 and card in said[0]  # once an hour per card
+        # the same device asking again gets its account; people with an account are never refused
+        assert call(c, first, f"/channel-invites/{token}/join", {}).status_code == 200
+        cy, _ = person(rsvc, "cy@belfry.test", "Cy")
+        r = call(c, cy, f"/channel-invites/{token}/join", {})
+        assert r.status_code == 200 and r.json()["guest"] is False
+        gus = saved_guest(rsvc)
+        r = call(c, gus, f"/channel-invites/{token}/join", {})
+        assert r.status_code == 200 and r.json()["new"] is False
+        # the link itself stays open, and the count lives in the register: a restart keeps it
+        assert rsvc.odoo.invite_by_token(token)["state"] == "open"
+        again = Register(rsvc.odoo.path, rsvc.settings)
+        with pytest.raises(Exception, match="This invite is used"):
+            again.join_guest(token, "", pk(PrivateKey()), True)
+        # a day later there is room again
+        for p in rsvc.odoo.search_read("belfry.pass", [["guest_channel", "=", group]], ["id"]):
+            rsvc.odoo.write("belfry.pass", [p["id"]], {"create_date": "2026-01-01 00:00:00"})
+        assert call(c, PrivateKey(), f"/channel-invites/{token}/join", {}).status_code == 200

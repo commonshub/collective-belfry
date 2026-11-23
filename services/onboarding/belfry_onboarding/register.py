@@ -29,6 +29,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,10 @@ GUEST_MAX = 50  # the most people a guest link can be made for
 GUEST_LINK_DAYS = 30  # the longest a guest link can work
 GUEST_MAX_DEFAULT = 1  # a link is for one person…
 GUEST_LINK_DAYS_DEFAULT = 1  # …and works for a day, unless its maker asks for more
+# a printed card's link (cards.py) has no number of people, so anyone who finds it could make
+# accounts without end: at most this many NEW guest accounts through one card in any 24 hours
+# (people who join with an account they have are never counted, never refused)
+CARD_NEW_GUESTS_PER_DAY = 100
 
 
 class Register(OdooApi):
@@ -171,6 +176,7 @@ class Register(OdooApi):
             CREATE INDEX IF NOT EXISTS group_cards_group ON group_cards (group_id);
             """
         )
+        self._card_full_told: dict[int, float] = {}  # invite → when the log last said "full"
         self._push_one_row_per_identity()
         self._profile_visibility_once()
 
@@ -1368,6 +1374,9 @@ class Register(OdooApi):
             inv = self._usable(inv)
             if inv["state"] != "open":
                 raise _user_error(f"This invite is {inv['state']}.")
+            if inv.get("guest_unlimited") and self._card_link_full(inv):
+                # the refusal of a link that is used up (guests.py: 410 ``closed``)
+                raise _user_error("This invite is used.")
             unnamed = bool(unnamed) or not (name or "").strip()
             pid = self._create(
                 "res.partner",
@@ -1539,6 +1548,54 @@ class Register(OdooApi):
             if inv.get("token") == token and inv.get("state") == "open":
                 self._write("belfry.invite", [inv["id"]], {"state": "revoked"})
 
+    def _card_link_full(self, inv: dict[str, Any]) -> bool:
+        """Whether a card's link made CARD_NEW_GUESTS_PER_DAY new guest accounts in the last 24
+        hours (counted from the passes it made, so a restart forgets nothing). Said in the log
+        once an hour per link."""
+        since = stamp(now() - dt.timedelta(hours=24))
+        made = sum(
+            1
+            for p in self._all("belfry.pass")
+            if p.get("invite_id") == inv["id"] and str(p.get("create_date") or "") >= since
+        )
+        if made < CARD_NEW_GUESTS_PER_DAY:
+            return False
+        told = self._card_full_told
+        if time.monotonic() - told.get(inv["id"], -3600.0) >= 3600:
+            told[inv["id"]] = time.monotonic()
+            row = self._db.execute(
+                "SELECT id FROM group_cards WHERE invite = ?", (inv.get("token"),)
+            ).fetchone()
+            log.warning(
+                "cards: card %s (#%s) made %d new guest accounts in 24 hours: no more for now",
+                row[0] if row else "?",
+                inv.get("guest_channel"),
+                made,
+            )
+        return True
+
+    def card_steward_pass(self, card_id: str, pass_id: int) -> str:
+        """The guest who started a group from a card keeps it: their guest pass of that group
+        has no end while the card is theirs (``card_retire`` / ``card_reset`` put the usual
+        end back). Returns the pass's end date."""
+        with self._lock:
+            self._write(
+                "belfry.pass", [int(pass_id)], {"date_end": FOREVER, "guest_card": card_id}
+            )
+        return FOREVER
+
+    def _card_steward_back(self, card_id: str) -> None:
+        """The card is no longer its steward's: their guest pass ends as any guest's does,
+        counted from today."""
+        for p in self._all("belfry.pass"):
+            if p.get("guest_card") == card_id:
+                days = int(p.get("guest_days") or 30)
+                end = (now().date() + dt.timedelta(days=days)).isoformat()
+                vals: dict[str, Any] = {"guest_card": False}
+                if p.get("state") in ("pending", "active"):
+                    vals["date_end"] = end
+                self._write("belfry.pass", [p["id"]], vals)
+
     def card_retire(self, card_id: str) -> bool:
         """The card starts and joins nothing any more: its invite is revoked."""
         with self._lock:
@@ -1546,6 +1603,7 @@ class Register(OdooApi):
             if card is None or card["state"] == "retired":
                 return False
             self._card_invite_off(card.get("invite"))
+            self._card_steward_back(card_id)
             self._db.execute("UPDATE group_cards SET state = 'retired' WHERE id = ?", (card_id,))
             return True
 
@@ -1556,6 +1614,7 @@ class Register(OdooApi):
             if card is None or card["state"] == "unclaimed":
                 return False
             self._card_invite_off(card.get("invite"))
+            self._card_steward_back(card_id)
             self._db.execute(
                 "UPDATE group_cards SET state = 'unclaimed', group_id = NULL, invite = NULL, "
                 "title = NULL, claimed_by = NULL, claimed_key = NULL, claimed_at = NULL "

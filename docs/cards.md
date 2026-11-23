@@ -76,7 +76,7 @@ Who may: a member, or a guest who has saved their account (a name and a proven e
    (`9007` `[["h", id]]`, `9002` with `name` and `about`, no access tags) whose id is the hashtag;
 2. puts the person in with the admin role: one `9000` with `["p", <key>, "admin"]`,
    `["role", "admin"]`, `["by", <key>]`, `["name", <their name>]`, and for a guest
-   `["guest", <the day their access ends>]` (the shape `/group-roles` and co-host links write);
+   `["guest", "2099-12-31"]` (their pass of this group has no end, §4; the shape `/group-roles` and co-host links write);
 3. for a group, posts in `general` exactly what the chat posts: kind 9,
    `⬡ New group: <title> · <about>` (no ` · ` without an about), tags
    `[["h", "general"], ["pod", <id>]]`. A topic is not announced: it is a channel in the list;
@@ -158,7 +158,10 @@ No authentication, 30 a minute per client address. `{"state": "free" | "taken" |
   `ws-`, `prop-`, the mail system's names (`postmaster`, `abuse`, `admin`, …, and `hello`,
   `info`, `support`, `help`, which only a belfry admin gives to a channel), and the names
   accounts start with (`guest-12`, `member-7`, digits);
-- a relay or signer that does not answer is `503` (`relay` / `signer`), never "free".
+- a relay or signer that does not answer is `503` (`relay` / `signer`), never "free": the
+  lookups behind a channel's mail address are asked one by one here, because
+  `mail.channel_id` itself answers "no channel" when its slug lookup fails (right for mail).
+  The list of channels behind the slug lookup is cached for a minute.
 
 The claim checks again (`409 hashtag_taken`).
 
@@ -189,6 +192,15 @@ invite of the register (docs/guests.md), used through the existing endpoints
 (`guest_unlimited` on the invite; `expires_at` empty). Its inviter is the person who started the
 group. A guest's own access keeps the normal rule: 30 days from the day they joined.
 
+Because the link never fills up, it makes at most **100 new guest accounts per card in any 24
+hours** (`register.CARD_NEW_GUESTS_PER_DAY`; counted from the passes the link made, so a restart
+keeps the count). Over that, `POST /channel-invites/<token>/join` by a key nobody knows answers
+what a used-up link answers: `410 {"error": "closed"}` ("This invite is used."), and the log says
+so once an hour per card. Never counted and never refused: someone joining with an account they
+have (a member, a guest of something else), and the same device asking again. `GET
+/channel-invites/<token>` keeps saying `open`. Agents that take the link with their own key
+(`/guest-invites/<token>/accept`) are not counted.
+
 ## 4. A guest as steward
 
 New rule (approved 2026-11-23): **a guest may be the steward of the group they started from a
@@ -205,8 +217,10 @@ and only for an account with a proven address. (`/group-roles` already let a gro
 the admin role to a guest with a saved address; it still refuses one without, `guest_not_saved`,
 and agents.)
 
-Not solved in v1: a guest steward's access to their own group ends with their guest pass (30
-days), like any guest's. They keep it by becoming a member.
+They keep their group: the guest pass of **that group** has no end (`date_end` 2099-12-31,
+`guest_card` = the card's id on the pass) for as long as the card is claimed by them. Retiring
+or resetting the card puts the usual end back, 30 days from that moment; then it expires like
+any guest pass (a 9001 takes them out). Their other guest passes are untouched.
 
 ## 5. The console: `belfry.<domain>/cards`
 
@@ -237,4 +251,3 @@ yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the l
 - A preview of the group's recent messages before joining.
 - Deleting unused cards, moving a card to another group.
 - The phone apps (no `/g/*` in apple-app-site-association or assetlinks).
-- Renewing a guest steward's access (§4).
