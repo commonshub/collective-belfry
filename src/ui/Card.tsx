@@ -45,6 +45,8 @@ export function CardScreen({ id, signedIn, onIn, onInvite, onStarted, onClose }:
     onInvite(group)
   }
   useEffect(() => { if (info?.state === 'claimed') join(info.group, info.invite) }, [info]) // eslint-disable-line react-hooks/exhaustive-deps
+  // a card that can't be started any more: what was typed for it goes (the lead's review)
+  useEffect(() => { if (info?.state === 'retired' || info?.state === 'archived' || info?.state === 'unknown') dropForm() }, [info])
 
   if (offline) return (
     <Dead title="No connection" onClose={onClose} again={() => setTries((n) => n + 1)}>
@@ -112,7 +114,7 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted }: {
   const word = kind === 'topic' ? 'topic' : 'group'
   const fail = (e: unknown) => {
     const x = e instanceof CardFailed ? e : new CardFailed('failed')
-    if (x.code === 'claimed' && x.extra.group && x.extra.invite) { setTaken({ group: x.extra.group, invite: x.extra.invite }); setStep('taken'); return }
+    if (x.code === 'claimed' && x.extra.group && x.extra.invite) { dropForm(); setTaken({ group: x.extra.group, invite: x.extra.invite }); setStep('taken'); return }
     if (x.code === 'hashtag_taken') { setTag('taken'); setStep('form') }
     setError(cardErrorText(x, kind))
   }

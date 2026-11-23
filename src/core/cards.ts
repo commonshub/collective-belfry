@@ -247,7 +247,7 @@ async function demoClaim(id: string, kind: CardKind, f: CardForm): Promise<strin
 }
 
 // ---- for the group's stewards (settings, "The card") -------------------------------------------
-//   GET  /groups/<id>/card   → {id, started_by, joined_by_scan}   (404: no card)
+//   GET  /groups/<id>/card   → {id, started_by: {name, pubkey}, joined_by_scan}   (404: no card)
 //   POST /cards/<id>/retire  → 200
 export interface GroupCard { id: string; startedBy: string; joinedByScan: number }
 type Send = (url: string, method: string, body?: unknown) => Promise<Response>
@@ -260,7 +260,10 @@ export async function groupCard(group: string, send: Send): Promise<GroupCard | 
   if (!r.ok) throw cardFailure(r.status, d)
   if (typeof d.id !== 'string' || !CARD_ID.test(d.id)) return null
   const n = typeof d.joined_by_scan === 'number' && Number.isInteger(d.joined_by_scan) && d.joined_by_scan >= 0 ? d.joined_by_scan : 0
-  return { id: d.id, startedBy: typeof d.started_by === 'string' ? d.started_by.slice(0, 100) : '', joinedByScan: n }
+  const by = d.started_by as { name?: unknown } | undefined
+  // started_by = {name, pubkey}: the name only is shown
+  const name = by && typeof by === 'object' && typeof by.name === 'string' ? plainLabel(by.name) : ''
+  return { id: d.id, startedBy: name, joinedByScan: n }
 }
 export async function retireCard(id: string, send: Send): Promise<void> {
   if (!CARD_ID.test(id)) throw new CardFailed('unknown')
