@@ -368,6 +368,8 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     } else view = b === 'group' ? <GroupPage key={id} id={id} />
       // the header's menu (ChannelMenu.tsx); old links to the channel's info land on its screens
       : (b === 'info' || b === 'about') && c !== 'members' ? <ChannelView id={id} menu />
+      // the first open from a card: half pulled down (cards canvas; not linked from anywhere yet)
+      : b === 'mid' ? <ChannelView id={id} mid />
       : b === 'info' ? <ChannelPage key="members" id={id} page="members" />
       : b && OLD_PAGES[b] ? <ChannelPage key={OLD_PAGES[b]} id={id} page={OLD_PAGES[b]} />
       : b && CHANNEL_PAGES.has(b) ? <ChannelPage key={b} id={id} page={b} />

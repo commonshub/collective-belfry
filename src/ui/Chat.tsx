@@ -489,7 +489,7 @@ function NewChannel({ onClose, category }: { onClose: () => void; /** made from 
 
 // ---- a channel's messages ------------------------------------------------------
 
-export function ChannelView({ id, topic, focus, activeThread, menu = false }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string; /** an old link to its info: the header's menu open */ menu?: boolean }) {
+export function ChannelView({ id, topic, focus, activeThread, menu = false, mid = false }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string; /** an old link to its info: the header's menu open */ menu?: boolean; /** half pulled down (a card's first open) */ mid?: boolean }) {
   const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
   const g = group(id)
@@ -510,7 +510,7 @@ export function ChannelView({ id, topic, focus, activeThread, menu = false }: { 
   return (
     <div className="screen">
       {/* ☰ · the name and its subtitle · search; notifications and settings are rows of its menu (2026-11-17) */}
-      <ChannelHeader id={id} topic={topic} onTopic={openTopic} initialOpen={menu}
+      <ChannelHeader id={id} topic={topic} onTopic={openTopic} initialOpen={menu} initialMid={mid}
         left={<LeftButton id={id} />}
         right={<button className="icon-btn" aria-label={`Search ${groupName(id)}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>} />
       {g?.isProposal && <SiteBar groupId={id} />}

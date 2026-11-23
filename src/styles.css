@@ -539,6 +539,15 @@ a.chip { text-decoration: none; color: inherit; }
 .chead-handle:hover span, .chead-handle:focus-visible span { background: var(--muted); }
 .chead.dragging .chead-handle { transition: none; }
 @media (prefers-reduced-motion: reduce) { .chead-panel, .chead-handle { transition: none; } }
+/* mid: half pulled down, in the flow so the chat moves under it (cards canvas, 23 Nov) */
+.gmid { padding: 4px 20px 0; border-bottom: 1px solid var(--line); background: var(--bg); }
+.gmid-about { margin: 0 0 2px; max-height: 44px; font-size: 16px; line-height: 22px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.gmid-about > * { margin: 0; display: inline; }
+.gmid-about > * + *::before { content: ' '; }
+.gmid-more { font-size: 15px; font-weight: 600; padding: 0; background: none; border: 0; cursor: pointer; }
+.gmid-facts { font-size: 15px; color: var(--muted); padding: 6px 0 0; }
+.gmid-handle { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 2px; }
+.gmid-bar { width: 40px; height: 5px; border-radius: 3px; background: var(--line); }
 
 /* ---- ☰ with the unread count; search ---- */
 .menu-btn { position: relative; }

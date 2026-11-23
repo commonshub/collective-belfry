@@ -7,23 +7,28 @@
 import { GroupName } from './GroupName'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { markSeen } from '../core/actions'
-import { channelIcon, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group, nameOf } from '../core/model'
+import { channelIcon, displayName, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group, nameOf } from '../core/model'
 import { BELFRY } from '../config'
 import { dropOutbox, outboxItems, useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Btn, Sheet } from './common'
 import { SummaryLine } from './ChannelLine'
 import { ChannelMenu, ChannelSubtitle } from './ChannelMenu'
-import { PodShape } from './icons'
+import { Markdown } from './markdown'
+import { ChevronDownIcon, ChevronUpIcon, PodShape } from './icons'
 
-export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = false }: {
+export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = false, initialMid = false }: {
   id: string; left: ReactNode; right: ReactNode; topic?: string; onTopic: (t?: string) => void
   /** an old link to the channel's info: open the menu */
   initialOpen?: boolean
+  /** half pulled down (cards canvas, claim-done / join-visitor): the description, who looks after
+   *  it and how many, ⌃ ⌄; the chat stays under it. Touching the chat or the composer folds it. */
+  initialMid?: boolean
 }) {
   useVersion()
   const g = group(id)
   const [open, setOpen] = useState(initialOpen)
+  const [mid, setMid] = useState(initialMid && !initialOpen)
   const [drag, setDrag] = useState<number | null>(null) // px moved while dragging
   const menuRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -31,6 +36,17 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
   const [roomH, setRoomH] = useState(600)
 
   useEffect(() => { setOpen(initialOpen) }, [id, initialOpen])
+  useEffect(() => { setMid(initialMid && !initialOpen) }, [id, initialMid, initialOpen])
+  // mid folds up as soon as the person goes for the chat or the composer (outside this header)
+  useEffect(() => {
+    if (!mid) return
+    const screen = rootRef.current?.closest('.screen')
+    if (!screen) return
+    const fold = (e: Event) => { if (!rootRef.current?.contains(e.target as Node)) setMid(false) }
+    screen.addEventListener('pointerdown', fold)
+    screen.addEventListener('focusin', fold)
+    return () => { screen.removeEventListener('pointerdown', fold); screen.removeEventListener('focusin', fold) }
+  }, [mid])
   useEffect(() => {
     const ch = group(id)
     if (ch && !(ch.isPod && ch.closed && !ch.members.has(me()))) markSeen(id)
@@ -84,10 +100,10 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
   }
   const swallowClick = (e: React.MouseEvent) => { if (start.current?.moved) { e.stopPropagation(); e.preventDefault() } }
   const pull = { onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onUp, onClickCapture: swallowClick }
-  const toggle = () => setOpen((o) => !o)
+  const toggle = () => { setMid(false); setOpen((o) => !o) }
 
   return (
-    <div ref={rootRef} className={'chead lvl' + (open ? 1 : 0) + (drag !== null ? ' dragging' : '')}>
+    <div ref={rootRef} className={'chead lvl' + (open ? 1 : 0) + (mid && !open ? ' mid' : '') + (drag !== null ? ' dragging' : '')}>
       <div className="topbar chead-bar" {...pull}>
         {left}
         <h1 className="tap" onClick={toggle} aria-expanded={open}>
@@ -98,16 +114,42 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
         <SaveFailedIcon id={id} />
         {right}
       </div>
+      {mid && !open && g && <GroupMid g={g} onFold={() => setMid(false)} onMore={() => { setMid(false); setOpen(true) }} />}
       <SummaryLine id={id} open={open} onToggle={toggle} topic={topic} onTopic={onTopic} pull={pull} />
       <div className="chead-panel" style={{ height }} aria-hidden={height === 0}>
         <div className="chead-more-wrap" style={{ maxHeight: roomH }}>
           <div ref={menuRef} className="chead-peek"><ChannelMenu id={id} onPick={() => setOpen(false)} /></div>
         </div>
       </div>
-      <button className="chead-handle" {...pull} onClick={toggle} style={{ top: height ? `calc(100% + ${height - 22}px)` : 'calc(100% - 4px)' }}
+      {!(mid && !open) && <button className="chead-handle" {...pull} onClick={toggle} style={{ top: height ? `calc(100% + ${height - 22}px)` : 'calc(100% - 4px)' }}
         aria-label={open ? 'Close the channel menu' : 'Open the channel menu'}>
         <span />
-      </button>
+      </button>}
+    </div>
+  )
+}
+
+/** "Steward: Lou · 8 people" (a group) or "Started by Dev · 23 following" (a channel): one line. */
+export function midFacts(g: Group, mine = me()): string {
+  const keeper = [...g.admins][0]
+  const who = keeper ? (keeper === mine ? 'you' : displayName(keeper)) : ''
+  const n = g.isPod ? g.members.size : g.reading.size || g.members.size
+  const count = g.isPod ? (n === 1 ? '1 person' : `${n} people`) : `${n} following`
+  return [who && (g.isPod ? 'Steward: ' : 'Started by ') + who, count].filter(Boolean).join(' · ')
+}
+
+/** The mid part: two lines of description (More opens the whole menu), the facts, ⌃ folds, ⌄ opens. */
+function GroupMid({ g, onFold, onMore }: { g: Group; onFold: () => void; onMore: () => void }) {
+  return (
+    <div className="gmid">
+      {g.about && <Markdown className="gmid-about" text={g.about} />}
+      {g.about && <button className="link gmid-more" onClick={onMore}>More</button>}
+      <div className="gmid-facts">{midFacts(g)}</div>
+      <div className="gmid-handle">
+        <button className="icon-btn" aria-label="Fold up" onClick={onFold}><ChevronUpIcon /></button>
+        <span className="gmid-bar" aria-hidden="true" />
+        <button className="icon-btn" aria-label="Open more" onClick={onMore}><ChevronDownIcon /></button>
+      </div>
     </div>
   )
 }
