@@ -4,7 +4,7 @@
 // with a count of devices, never which (Xavier, 23 Nov). The header lock opens it.
 import { useEffect, useState } from 'react'
 import { BELFRY } from '../config'
-import { devicesOf, encDevice } from '../core/enc/runtime'
+import { answerFor, devicesOf, encDevice } from '../core/enc/runtime'
 import { displayName, realName } from '../core/model'
 import { mySessions, type SessionRow } from '../core/sealedrt'
 import { useVersion } from '../core/store'
@@ -124,5 +124,111 @@ export function RemoveSheet({ r, onClose, onDone }: { r: Removing; onClose: () =
         }}>Remove</Btn>
       </div>
     </Sheet>
+  )
+}
+
+/** Me › Devices in format 3 (encrypted/devices, device, devices-agent): every device on my list,
+ *  this one marked, when it was added and last active, New for one added in the last day; my agent
+ *  when it may read. A tap opens one device: Added, Last active, Earlier messages, Remove. */
+export function EncDevicesScreen() {
+  useVersion()
+  const [rows, setRows] = useState<SessionRow[] | null>(null)
+  const [open, setOpen] = useState<string | null>(null)
+  const [removing, setRemoving] = useState<Removing | null>(null)
+  const [done, setDone] = useState('')
+  useEffect(() => { void mySessions(0).then(setRows) }, [])
+  const mine = devicesOf(me())
+  const here = encDevice()
+  const byKey = new Map((rows ?? []).filter((r) => r.client_pubkey).map((r) => [r.client_pubkey!, r]))
+  const day = (v?: string | number | null) => { const t = typeof v === 'number' ? (v > 1e12 ? v : v * 1000) : v ? Date.parse(v) : NaN; return Number.isFinite(t) ? fmtDay(new Date(t)) : '' }
+  const list = (mine?.devices ?? []).slice().sort((a, b) => (a === here ? -1 : b === here ? 1 : (mine?.since?.get(b) ?? 0) - (mine?.since?.get(a) ?? 0)))
+  const now = Date.now() / 1000
+  if (open) {
+    const r = byKey.get(open), name = nameOf(r), at = mine?.since?.get(open), a = answerFor(open)
+    return (
+      <div className="screen seal-screen enc-devices">
+        <div className="topbar"><button className="icon-btn" aria-label="Back to my devices" onClick={() => setOpen(null)}>‹</button><h1>{name}</h1></div>
+        <div className="scroll pad">
+          <div className="home-card">
+            <div className="home-row"><span className="t"><b>Added</b></span><span className="seal-count">{at ? fmtDay(new Date(at * 1000)) : '—'}</span></div>
+            <div className="home-row"><span className="t"><b>Last active</b></span><span className="seal-count">{day(r?.last_activity) || '—'}</span></div>
+            {open !== here && <div className="home-row"><span className="t"><b>Earlier messages</b></span><span className="seal-count">{a?.answer === 'shared' ? 'Shared' : 'Not shared'}</span></div>}
+          </div>
+          {open !== here
+            ? <button className="link danger enc-remove" onClick={() => setRemoving({ kind: 'device', key: open, name, bunker: (r as { bunker_pubkey?: string } | undefined)?.bunker_pubkey })}>Remove this device</button>
+            : <p className="hint">This device. Signing out is in Settings.</p>}
+        </div>
+        {removing && <RemoveSheet r={removing} onClose={() => setRemoving(null)} onDone={(t) => { setRemoving(null); setOpen(null); setDone(t); void mySessions(0).then(setRows) }} />}
+      </div>
+    )
+  }
+  return (
+    <div className="screen seal-screen enc-devices">
+      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => up('me')}>‹</button><h1>Devices</h1></div>
+      <div className="scroll pad">
+        <p className="hint">These devices can read your encrypted messages.</p>
+        <div className="home-card">
+          {list.map((k) => {
+            const r = byKey.get(k), name = nameOf(r), at = mine?.since?.get(k)
+            return (
+              <div key={k} className="home-row seal-dev">
+                <button type="button" className="t row-btn" onClick={() => setOpen(k)}>
+                  <b>{name}{k === here && <> <span className="seal-here">This device</span></>}{k !== here && at && now - at < 86400 && <> <span className="seal-new">New</span></>}</b>
+                  <small>{[at ? `Added ${fmtDay(new Date(at * 1000))}` : '', day(r?.last_activity) ? `last active ${day(r?.last_activity)}` : ''].filter(Boolean).join(' · ')}</small>
+                </button>
+                {k !== here && <button type="button" className="icon-btn danger who-trash" aria-label={`Remove ${name}`} onClick={() => setRemoving({ kind: 'device', key: k, name, bunker: (r as { bunker_pubkey?: string } | undefined)?.bunker_pubkey })}><TrashIcon /></button>}
+              </div>
+            )
+          })}
+          {(mine?.readers ?? []).map((k) => (
+            <div key={k} className="home-row seal-dev">
+              <span className="t"><b>{displayName(k)}</b><small>Your agent{mine?.since?.get(k) ? ` · access given ${fmtDay(new Date(mine!.since!.get(k)! * 1000))}` : ''}</small></span>
+              <button type="button" className="icon-btn danger who-trash" aria-label={`Remove ${displayName(k)}’s access`} onClick={() => setRemoving({ kind: 'agent', key: k, name: displayName(k) })}><TrashIcon /></button>
+            </div>
+          ))}
+          {!mine && <div className="home-row"><span className="t"><small>This device isn’t set up for encrypted messages yet.</small></span></div>}
+        </div>
+        {done && <p className="hint" role="status">{done}</p>}
+      </div>
+      {removing && <RemoveSheet r={removing} onClose={() => setRemoving(null)} onDone={(t) => { setRemoving(null); setDone(t); void mySessions(0).then(setRows) }} />}
+    </div>
+  )
+}
+
+/** On my agent's profile (encrypted/agent-access, -confirm, -on): "Give access to my private messages
+ *  and private groups", off by default; turning it on asks first; off = the same as its trash icon. */
+export function AgentAccess({ agent }: { agent: string }) {
+  useVersion()
+  const on = !!devicesOf(me())?.readers.includes(agent)
+  const [asking, setAsking] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+  const name = displayName(agent)
+  return (
+    <div className="agent-access">
+      <label className="switch-row">
+        <span><b>Give access to my private messages and private groups</b><small>{on ? `${name} is now one of your devices: it reads them like one.` : pending ? 'Waiting for the belfry…' : 'Off: it doesn’t read them.'}</small></span>
+        <input type="checkbox" role="switch" checked={on || pending} onChange={(e) => { if (e.target.checked) setAsking(true); else setRemoving(true) }} />
+      </label>
+      {error && <p className="error" role="alert">{error}</p>}
+      {asking && (
+        <Sheet title={`Give ${name} access?`} onClose={() => setAsking(false)}>
+          <p>It will read your private messages and private groups from now on, like one of your devices. You can turn this off at any time.</p>
+          <div className="row-btns two">
+            <button type="button" className="btn ghost" onClick={() => setAsking(false)}>Cancel</button>
+            <Btn className="btn" onClick={async () => {
+              setError('')
+              try {
+                const r = await signedFetch(`${BELFRY.api}/agents`, 'POST', { pubkey: agent, reads: true })
+                if (!r.ok) throw new Error(r.status === 404 ? 'This belfry can’t do that yet.' : 'That did not work. Try again.')
+                setPending(true); setAsking(false)
+              } catch (e) { setError(e instanceof Error ? e.message : 'That did not work. Try again.'); setAsking(false) }
+            }}>Give access</Btn>
+          </div>
+        </Sheet>
+      )}
+      {removing && <RemoveSheet r={{ kind: 'agent', key: agent, name }} onClose={() => setRemoving(false)} onDone={() => { setRemoving(false); setPending(false) }} />}
+    </div>
   )
 }

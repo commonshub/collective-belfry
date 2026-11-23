@@ -78,6 +78,7 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   check("one 8572 per person, Sam's own copy silent, dated now (no backdating)", sent && msg.length === 2 && msg.some((e) => e.tags.some((t) => t[0] === "silent") && e.tags.some((t) => t[0] === "p" && t[1] === pkS)) && msg.every((e) => Math.abs(e.created_at - Date.now() / 1000) < 120), msg.map((e) => [e.tags, e.created_at]));
   check("nothing the old ways to Lina (no 1059)", !d.some((e) => e.kind === 1059), d.filter((e) => e.kind === 1059).length);
   check("the text is nowhere in clear on the relay", !JSON.stringify(d).includes("Bread on Saturday"));
+  check("part 9: each device said once that it reads format 3 (30078 d=belfry:device:reads, v 3, by the device)", [sS.device, sL.device].every((dev) => d.filter((e) => e.kind === 30078 && e.pubkey === dev && e.tags.some((t) => t[0] === "d" && t[1] === "belfry:device:reads") && e.tags.some((t) => t[0] === "v" && t[1] === "3")).length === 1), d.filter((e) => e.kind === 30078).map((e) => [e.pubkey.slice(0, 6), e.tags]));
   // Lina reads it
   await L.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkS)})`);
   check("Lina reads it", await until(() => has(L, "Bread on Saturday?"), 20000), await L.ev("document.body.innerText.slice(0, 300)"));
@@ -179,6 +180,14 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   check("S2 removed: 'This device was removed · Safari on Mac removed it …' · Sign in again", await until(() => has(S2, "This device was removed"), 15000) && await has(S2, "Safari on Mac removed it") && await has(S2, "Sign in again"), await S2.ev("document.body.innerText.slice(0, 300)"));
   check("…and this device's data is gone (no belfry keys in its localStorage but the device-wide ones)", await S2.ev("Object.keys(localStorage).filter((k) => /^belfry[-:]/.test(k) && !/^belfry-(accounts?|accounts-ls:|other-belfries|community-name|enc-format|enc-seen)/.test(k)).length === 0"), await S2.ev("JSON.stringify(Object.keys(localStorage))"));
   await S2.shot("removed");
+  // part 8: Me › Devices on Sam's first device (encrypted/devices, device)
+  await S.ev("location.hash = '#/me/devices'"); await sleep(2500);
+  w = await S.ev("document.body.innerText");
+  check("Me › Devices: the line, This device, and a trash icon on each other device", /These devices can read your encrypted messages/.test(w) && /This device/.test(w) && (await S.ev("document.querySelectorAll('.who-trash').length")) === 2, [w.slice(0, 300), await S.ev("document.querySelectorAll('.who-trash').length")]);
+  await S.shot("devices");
+  await S.ev("[...document.querySelectorAll('.enc-devices .row-btn')].at(-1).click()"); await sleep(800);
+  w = await S.ev("document.body.innerText");
+  check("one device: Added, Last active, Earlier messages Shared, Remove this device", /Added/.test(w) && /Last active/.test(w) && /Earlier messages/.test(w) && /Shared/.test(w) && /Remove this device/.test(w), w.slice(0, 300));
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
     const w = new WebSocket("ws://127.0.0.1:4481"); const out = [];

@@ -1,8 +1,8 @@
 // Sealed conversations, the screens (canvas "Messages · encryption", approved 20 Nov). Data:
 // core/sealed.ts (demo only until the lead's docs/sealed.md). Never a key, npub or id as text;
 // only my own devices are named.
-import { encConvHere, encOnlyDevice } from '../core/enc/runtime'
-import { WhoCanRead } from './WhoCanRead'
+import { devicesOf, encConvHere, encOn, encOnlyDevice } from '../core/enc/runtime'
+import { EncDevicesScreen, WhoCanRead } from './WhoCanRead'
 import { useEffect, useRef, useState } from 'react'
 import { convName, isMail, mailAddress, peers, type Conv } from '../core/dm'
 import { displayName, realName } from '../core/model'
@@ -353,7 +353,12 @@ export function ShareHistorySheet({ conv, l, onClose }: { conv: Conv; l: DeviceL
 
 /** Me → Devices (board messages/encryption-remove-device): my devices; Remove asks first, then
  *  the row shows progress and no other row can be removed. This device: Sign out instead. */
+/** Me › Devices: format 3's screen once this device has a list (encrypted/devices), else version 1's. */
 export function DevicesScreen() {
+  useVersion()
+  return encOn() || devicesOf(me()) ? <EncDevicesScreen /> : <DevicesScreenV1 />
+}
+function DevicesScreenV1() {
   useVersion()
   useEffect(() => { if (sealedOn()) void mySessions(0).then(() => touch()) }, [])
   const [asked, setAsked] = useState<MyDevice | null>(null)

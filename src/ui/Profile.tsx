@@ -2,6 +2,8 @@
 // Yours has Edit: name, about, picture, tags (suggested from every member's tags) and where you
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
 // or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
+import { AgentAccess } from './WhoCanRead'
+import { encOn } from '../core/enc/runtime'
 import { BELFRY, NAME, THEME } from '../config'
 import { useCommunityName } from './community'
 import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, removeFromGroup, setGroupRole, type GroupRole } from '../core/checkin'
@@ -154,6 +156,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
             {canDrop && <>
               <b>{owner === me() ? 'Your agent' : `${displayName(owner!)}'s agent`}</b>
               <p className="hint" style={{ margin: '4px 0 10px' }}>A member for as long as {owner === me() ? 'you are' : `${displayName(owner!)} is`} one. Removing it takes it out of the belfry and every channel.</p>
+              {owner === me() && encOn() && <AgentAccess agent={pk} />}
               {dropping
                 ? <div className="row" style={{ gap: 8 }}>
                     <Btn className="btn danger" onClick={async () => { setAgentError(''); try { await setMyAgent(pk, false); setDropping(false) } catch (e) { setAgentError(e instanceof Error ? e.message : String(e)) } }}>Remove {displayName(pk)}</Btn>

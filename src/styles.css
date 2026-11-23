@@ -2261,3 +2261,9 @@ form .create-where { margin-bottom: 14px; }
 .enc-card p { margin: 0; color: var(--muted); font-size: 14px; }
 .enc-card .link.danger { color: #b91c1c; align-self: center; background: none; border: 0; cursor: pointer; font-weight: 600; }
 .enc-card.done { color: var(--muted); font-size: 14px; }
+
+/* encrypted/devices, device, agent-access */
+.enc-devices .row-btn { background: none; border: 0; padding: 0; text-align: left; display: flex; flex-direction: column; flex: 1; cursor: pointer; color: inherit; }
+.seal-new { font-size: 11px; padding: 1px 6px; border-radius: 99px; background: #E8F3EA; color: #1E5B2E; margin-left: 4px; }
+.enc-remove { display: block; margin: 18px auto 0; color: #b91c1c; font-weight: 600; background: none; border: 0; cursor: pointer; }
+.agent-access { margin: 10px 0; }

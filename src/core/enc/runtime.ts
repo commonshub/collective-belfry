@@ -145,6 +145,14 @@ function filters(): Filter[] {
 
 // ---- start -----------------------------------------------------------------------------------
 
+let saidReads = false
+const KV_READS = 'enc-said-reads'
+async function sayReads() {
+  if (!device || (await kvGet<string>(KV_READS).catch(() => undefined)) === device.pub) return
+  const ev = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'belfry:device:reads'], ['v', '3']], content: '' }, device.secret)
+  await enqueueSigned('main', ev)
+  await kvSet(KV_READS, device.pub).catch(() => {})
+}
 let loading: Promise<void> | null = null
 /** Resolved once this device's keys and encrypted conversations are loaded (at once when the runtime doesn't run). */
 export const whenEncLoaded = () => loading ?? Promise.resolve()
@@ -237,6 +245,9 @@ async function takeEnvelopes() {
     const lists = E.peopleLists(r.tags.filter((t) => t[0] === 'list').map((t) => ({ account: t[1], id: t[2] })))
     if (holdKey({ K, k: r.content, conv: E.peopleId(people), people, mine, service: r.pubkey === belfry() || r.pubkey === belfryGroupsKey(), lists, at: r.created_at, rumor: r })) changed = true
   }
+  // §12 (part 9): once, this device says it reads format 3: a 30078 d=belfry:device:reads, ["v","3"],
+  // signed by the device (the console counts the live devices that haven't); sent once it is on my list
+  if (!saidReads) { const c = chainOnly(m); if (c && E.current(c).devices.includes(device.pub)) { saidReads = true; void sayReads() } }
   // §6.4: the first list of mine this device sees brings no card
   if (!firstN) { const c = chainOnly(m); if (c && E.current(c).devices.includes(device.pub)) { firstN = E.current(c).n; await kvSet(KV_FIRST, firstN).catch(() => {}) } }
   if (await takePacks()) changed = true
