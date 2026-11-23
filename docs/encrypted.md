@@ -76,6 +76,12 @@ content: ""
   a gap means "not loaded yet", ask again). Its event id is the **list id**.
 - Reading: `{kinds:[8570], authors:[belfry], "#p":[accounts…]}` on the community relay, kept on
   the live subscription.
+- Built (server, `devices.py`): a list is written after every session bound to a client key or
+  ended, in whatever part of the belfry it happens (the signer client is wrapped), and by a check
+  of every account every 10 minutes (sessions bound by their first `connect`, expiries, anything
+  missed); at most one list every 2 seconds. The counter and the latest list per account are kept
+  in `devices.sqlite` next to the register; before writing, the relay's latest list wins when it
+  is further on. Switch: `DEVICE_LISTS` (§12).
 - A device that does not find itself on its own account's current list within 60 s of signing
   in tells the person ("This device isn't set up for encrypted messages yet · Try again") and
   holds what it would send.
@@ -270,7 +276,11 @@ Messages list. An e-mail shows "By e-mail"; the header lock explains.
 
 - Nobody signs in again; nothing is re-encrypted.
 - `belfry.json` → `"encrypted": {"format": 1 | 3}`. Apps that know this document read both
-  formats always, and write the one the belfry names. Each such device says so once with a
+  formats always, and write the one the belfry names. **The switch** is the setting
+  `ENCRYPTED_FORMAT` (`1`, the default, or `3`; any other value stops the service at start).
+  The device lists (§3) have their own switch, `DEVICE_LISTS` (off by default): they are
+  turned on first, and format 3 only once every account has a list and the relay rule of §18.1
+  is live. Each such device says so once with a
   kind 30078 `d = belfry:device:reads` signed by the **device** key, tag `["v","3"]`; the
   console shows how many live devices have not said it, and whose.
 - Switched per belfry, belfry.sh first. One way: after the switch, devices added since are
@@ -343,7 +353,11 @@ Where this section and an earlier one differ, this one counts.
 6. **A removed device learns it** from `GET /api/v1/sessions/removed`, NIP-98 signed by the
    **device** key itself: `{removed: false}` or `{removed: true, at, by_name?}` (`by_name` = the
    removing device's name when the belfry knows it; `POST /me/sessions/revoke` takes an optional
-   `by` = the caller's device pubkey). Kept 30 days.
+   `by` = the caller's device pubkey). Kept 30 days. As built: `at` in Unix seconds; `by_name`
+   = the name the signer keeps for the caller's own session (as `/api/me/sessions` gives it,
+   with the device); a device that left its list without a revoke the belfry saw (an expiry)
+   is answered `removed: true` with no `by_name`; a key the belfry never saw as a session = 404.
+   Rate: 30 a minute per address.
 7. **Writing.** Device keys and one-time keys write 8571–8575 and the device-signed 30078 on an
    authenticated connection, as one-time 1059s do today.
 8. **Events, check-in, tickets in a private group** exist only inside the group, encrypted: no
@@ -501,3 +515,12 @@ is never adopted for sending (it carries no authenticated entry set).
   known ones) is skipped as an entry; the rest of the list counts. (An older app then neither
   encrypts for that entry nor accepts its seals.)
 - Vectors: sha256 c15479be…1f71 (135 checks) after this section.
+
+## 21. Dates around a listing (2026-11-23, Android)
+
+- A seal's signer is judged against **the list current at the outer event's `created_at`**
+  (this replaces §6's "on its current list, or on an earlier list when …"): a device on the
+  current list is refused for a message dated in a gap when it was off.
+- **Grace at the start of a listing**: a device also counts when the first list that has it is
+  dated no later than the outer date + 5 minutes (clocks may be off by the relay's 5 minutes).
+  The same for a group key's maker. Vector: listed at 2000, outer 1800 → ok; outer 1600 → no.
