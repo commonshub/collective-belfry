@@ -206,7 +206,9 @@ def test_sign_in_with_an_e_mail_code_from_the_drop_page(web, relay, services, mo
 
     monkeypatch.setattr(connect, "send_code", send)
     monkeypatch.setattr(
-        connect, "verify_code", lambda svc, f, code: f["pending"] if code == "123456" else None
+        connect,
+        "verify_code",
+        lambda svc, f, code, ip="": f["pending"] if code == "123456" else None,
     )
     r = web.post(f"/drop/{TOKEN}/signin", data={"email": "nope"})
     assert "No member of belfry.test" in r.text

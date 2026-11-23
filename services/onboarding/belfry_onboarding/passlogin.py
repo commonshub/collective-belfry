@@ -26,7 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import claim, connect, mypass, passkeys, setup, theme
+from . import claim, connect, mypass, passkeys, sales, setup, theme
 from .connect import ConnectError
 from .core import Services
 
@@ -119,7 +119,7 @@ def page(svc: Services, f: dict[str, Any]) -> str:
 
 <section data-step="code" hidden>
 <h1>Check your inbox</h1>
-<p class="muted">Type the 6-digit code we sent to <strong class="to">{to}</strong>.</p>
+<p class="muted">If <strong class="to">{to}</strong> is a member's address, we sent it a 6-digit code. Type it here.</p>
 <form novalidate><div class="otp">{boxes}</div><p class="err" role="alert"></p>
 <div class="actions"><button class="btn" type="submit">Verify</button>
 <button type="button" class="quiet" data-again>Send a new code</button></div></form>
@@ -179,7 +179,11 @@ def register(app: FastAPI) -> None:
         try:
             f, body = await body_of(request)
             email = str(body.get("email", ""))[:254]
-            return JSONResponse(await run_in_threadpool(connect.send_code, svc(request), f, email))
+            return JSONResponse(
+                await run_in_threadpool(
+                    connect.send_code, svc(request), f, email, sales.client_ip(request)
+                )
+            )
         except ConnectError as exc:
             return fail(exc)
 
@@ -218,7 +222,9 @@ def register(app: FastAPI) -> None:
         try:
             f, body = await body_of(request)
             code = "".join(c for c in str(body.get("code", "")) if c.isdigit())[:6]
-            member = await run_in_threadpool(connect.verify_code, services, f, code)
+            member = await run_in_threadpool(
+                connect.verify_code, services, f, code, sales.client_ip(request)
+            )
         except ConnectError as exc:
             return fail(exc)
         return signed_in(request, services, f, member)

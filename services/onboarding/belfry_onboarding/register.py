@@ -80,6 +80,9 @@ NEEDS_ODOO = "This needs the Odoo add-on (billing and shifts are not in the belf
 INVITE_DAYS = 14
 INVITES_PER_MEMBER = 3
 CODE_MINUTES, CODE_TRIES, CODES_PER_EMAIL, CODES_PER_KEY, CODE_WINDOW = 10, 5, 5, 10, 30
+# wrong codes typed for one address within WRONG_WINDOW_HOURS: its codes stop for the rest of the
+# window and its owner gets a warning (as the Odoo add-on's belfry_key_code.py)
+WRONG_PER_EMAIL, WRONG_WINDOW_HOURS = 10, 24
 WELCOME_HOURS = 24
 # the phone apps, as the welcome mail links them
 ANDROID_APP = "https://belfry.sh/android"
@@ -1922,6 +1925,8 @@ class Register(OdooApi):
         that only ``check_key_code`` with the same purpose takes; DATA rides on the code and
         comes back with the right one (what the person filled in before proving the address)."""
         email, pubkey = self._clean(email, pubkey)
+        if self._wrong_codes(email) >= WRONG_PER_EMAIL:
+            return {"state": "too_many", "retry_after": WRONG_WINDOW_HOURS * 3600}
         since = stamp(now() - dt.timedelta(minutes=CODE_WINDOW))
         codes = [c for c in self._all("belfry.key.code") if c.get("create_date", "") >= since]
         if (
@@ -2008,6 +2013,8 @@ class Register(OdooApi):
     def _check_code(
         self, email: str, pubkey: str, code: str, purpose: str | None = None
     ) -> dict[str, Any]:
+        if self._wrong_codes(email) >= WRONG_PER_EMAIL:
+            return {"state": "expired"}
         live = [
             c
             for c in self._all("belfry.key.code")
@@ -2024,30 +2031,60 @@ class Register(OdooApi):
         if not hmac.compare_digest(
             rec["code_hash"], self._hash(rec["id"], re.sub(r"\s", "", str(code or "")))
         ):
+            if self._wrong_codes(email) == WRONG_PER_EMAIL:  # this guess reached the limit
+                self._warn_wrong_codes(email)
             return {"state": "wrong_code", "tries_left": CODE_TRIES - tries}
         self._write("belfry.key.code", [rec["id"]], {"used_at": stamp()})
         return {"state": "ok", "rec": rec}
 
-    def _m_belfry_key_code_verify(self, model, email, pubkey, code, name=False, *_a, **_k):
-        email, pubkey = self._clean(email, pubkey)
-        live = [
+    def _wrong_codes(self, email: str) -> int:
+        """Wrong codes typed for EMAIL within WRONG_WINDOW_HOURS, whatever the key (an attacker
+        makes a new key for every code; a used code's last try was the right one)."""
+        since = stamp(now() - dt.timedelta(hours=WRONG_WINDOW_HOURS))
+        codes = [
             c
             for c in self._all("belfry.key.code")
-            if c["email"].lower() == email.lower()
-            and c["pubkey"] == pubkey
-            and not c.get("used_at")
+            if c["email"].lower() == email.lower() and c.get("create_date", "") >= since
         ]
-        rec = live[-1] if live else None
-        if rec is None or rec["expires_at"] <= stamp() or rec.get("tries", 0) >= CODE_TRIES:
-            return {"state": "expired"}
-        tries = rec.get("tries", 0) + 1
-        self._write("belfry.key.code", [rec["id"]], {"tries": tries})
-        if not hmac.compare_digest(
-            rec["code_hash"], self._hash(rec["id"], re.sub(r"\s", "", str(code or "")))
-        ):
-            return {"state": "wrong_code", "tries_left": CODE_TRIES - tries}
-        self._write("belfry.key.code", [rec["id"]], {"used_at": stamp()})
-        return self._bind(rec, email, pubkey, name)
+        return sum(c.get("tries", 0) for c in codes) - sum(1 for c in codes if c.get("used_at"))
+
+    def _warn_wrong_codes(self, email: str) -> None:
+        log.warning(
+            "register: %s wrong codes for an address: its codes stop for %s h",
+            WRONG_PER_EMAIL,
+            WRONG_WINDOW_HOURS,
+        )
+        name = self.mailer.name
+        self.mailer.send(
+            email,
+            f"Someone is trying to sign in to {name} as you",
+            [
+                f"Someone asked for sign-in codes for this e-mail address and typed "
+                f"{WRONG_PER_EMAIL} wrong ones today. Nobody got in: without the code from your "
+                f"mailbox nothing happens. To keep it that way, we send no more codes to this "
+                f"address for the next {WRONG_WINDOW_HOURS} hours.",
+                "If that was you, there's nothing to do. Otherwise, a few things keep your "
+                "account safe:",
+                f"Never pass a code on. Nobody from {name} asks you for one. Ignore codes you did "
+                "not ask for.",
+                'Add a passkey: in the chat, open your profile, then "E-mail code and '
+                'passkeys". You then sign in with your phone or computer, with no e-mail code, '
+                'even while codes are stopped. Your pass in your wallet works too ("Other ways to '
+                'sign in" on the sign-in page).',
+                "Protect your mailbox. Whoever reads your mail can sign in as you. Turn on "
+                "two-step verification at your e-mail provider.",
+                "Keep your sign-in address private. Attackers find addresses on websites and in "
+                "public code. Reply to this mail, and the stewards can move your account to an "
+                "address you don't publish.",
+                "If this happens again, or you see anything in your account you don't recognise, "
+                "reply to this mail.",
+            ],
+        )
+
+    def _m_belfry_key_code_verify(self, model, email, pubkey, code, name=False, *_a, **_k):
+        email, pubkey = self._clean(email, pubkey)
+        out = self._check_code(email, pubkey, code)
+        return self._bind(out["rec"], email, pubkey, name) if out["state"] == "ok" else out
 
     def _bind(self, rec: dict[str, Any], email: str, pubkey: str, name: Any) -> dict[str, Any]:
         key_npub = _npub(pubkey)

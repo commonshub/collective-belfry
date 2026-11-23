@@ -18,6 +18,8 @@ MAX_TRIES = 5  # wrong codes before the code ends
 SENDS_PER_EMAIL = 5  # codes mailed to one address ...
 SENDS_PER_KEY = 10  # ... or asked for by one key ...
 SEND_WINDOW_MINUTES = 30  # ... within this window
+WRONG_PER_EMAIL = 10  # wrong codes typed for one address within WRONG_WINDOW_HOURS: its codes stop
+WRONG_WINDOW_HOURS = 24  # for the rest of the window, and its owner gets a warning mail
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 
 
@@ -76,6 +78,8 @@ class BelfryKeyCode(models.Model):
         now = fields.Datetime.now()
         since = now - timedelta(minutes=SEND_WINDOW_MINUTES)
         codes = self.sudo()
+        if self._belfry_wrong(email) >= WRONG_PER_EMAIL:
+            return {'state': 'too_many', 'retry_after': WRONG_WINDOW_HOURS * 3600}
         if (codes.search_count([('email', '=ilike', email), ('create_date', '>=', since)]) >= SENDS_PER_EMAIL
                 or codes.search_count([('pubkey', '=', pubkey), ('create_date', '>=', since)]) >= SENDS_PER_KEY):
             return {'state': 'too_many', 'retry_after': SEND_WINDOW_MINUTES * 60}
@@ -111,6 +115,8 @@ class BelfryKeyCode(models.Model):
         _check_service_caller(self.env)
         email, pubkey = self._belfry_clean(email, pubkey)
         now = fields.Datetime.now()
+        if self._belfry_wrong(email) >= WRONG_PER_EMAIL:
+            return {'state': 'expired'}
         record = self.sudo().search([('email', '=ilike', email), ('pubkey', '=', pubkey),
                                      ('used_at', '=', False)], limit=1)
         if not record or record.expires_at <= now or record.tries >= MAX_TRIES:
@@ -118,9 +124,31 @@ class BelfryKeyCode(models.Model):
         record.tries += 1
         code = re.sub(r'\s', '', str(code or ''))
         if not hmac.compare_digest(record.code_hash, _hash(record.id, code)):
+            if self._belfry_wrong(email) == WRONG_PER_EMAIL:  # this guess reached the limit
+                record._belfry_warn()
             return {'state': 'wrong_code', 'tries_left': MAX_TRIES - record.tries}
         record.used_at = now
         return record._belfry_bind(name)
+
+    @api.model
+    def _belfry_wrong(self, email):
+        """Wrong codes typed for ``email`` within WRONG_WINDOW_HOURS, whatever the key (an
+        attacker makes a new key for every code; a used code's last try was the right one)."""
+        since = fields.Datetime.now() - timedelta(hours=WRONG_WINDOW_HOURS)
+        codes = self.sudo().search([('email', '=ilike', email), ('create_date', '>=', since)])
+        return sum(codes.mapped('tries')) - len(codes.filtered('used_at'))
+
+    def _belfry_warn(self):
+        """Tell the address's owner that its codes stopped, and what they can do."""
+        self.ensure_one()
+        _logger.warning("belfry: %s wrong codes for code %s's address: its codes stop for %s h",
+                        WRONG_PER_EMAIL, self.id, WRONG_WINDOW_HOURS)
+        template = self.env.ref('belfry_pass.mail_template_key_code_warning', raise_if_not_found=False)
+        if template:
+            template.sudo().send_mail(self.id, force_send=False)
+            cron = self.env.ref('mail.ir_cron_mail_scheduler_action', raise_if_not_found=False)
+            if cron:
+                cron.sudo()._trigger()
 
     def _belfry_bind(self, name=False):
         self.ensure_one()

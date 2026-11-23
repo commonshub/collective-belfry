@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     # The start page's address (https://<domain>): this service's landing page, also served on the
     # apex; PUBLIC_URL's own "/" forwards there. Empty: the landing page stays on PUBLIC_URL.
     site_url: str = Field(default="", alias="SITE_URL")
+    # The venue WiFi's public addresses (space-separated CIDRs), as the proxy's RATE_LIMIT_EXEMPT:
+    # never paused for wrong sign-in codes (connect.py), since everyone there shares them.
+    rate_limit_exempt: str = Field(default="", alias="RATE_LIMIT_EXEMPT")
     # The community's homepage on the apex (homepage.py): empty = the start page above; an
     # https:// URL = that website through a proxy; "nsite" = the site published with the homepage
     # key (homepage-publish); "nsite:<npub>[/<name>]" = another key's nsite (NIP-5A).
