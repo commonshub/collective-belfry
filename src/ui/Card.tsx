@@ -8,7 +8,7 @@ import qrcode from 'qrcode-generator'
 import { BELFRY, NAME } from '../config'
 import { setPendingInvite } from '../core/auth'
 import {
-  CardFailed, cardErrorText, cardInfo, claimSignedIn, claimStart, claimVerify, dropForm, hashtagSlug, hashtagState,
+  CardFailed, cardErrorText, cardInfo, claimSignedIn, claimStart, claimVerify, dropForm, hashtagSlug, hashtagState, nextHashtag,
   cardDone, cardUrl, setCardTopic, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
 } from '../core/cards'
 import type { SignedIn } from '../core/guestjoin'
@@ -118,7 +118,7 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
       if (asked.current !== slug) return
       if (s === 'taken' && !tagEdited) { // a suggestion that's taken: the next free one
         for (let n = 2; n <= 9; n++) {
-          const next = slug.slice(0, 30 - String(n).length - 1) + '-' + n
+          const next = nextHashtag(slug, n)
           const st = await hashtagState(next)
           if (asked.current !== slug) return
           if (st === 'free') { setF((o) => ({ ...o, hashtag: next })); return }

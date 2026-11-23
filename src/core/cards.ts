@@ -89,7 +89,9 @@ export const keepForm = (id: string, f: CardForm) => { try { localStorage.setIte
 export const dropForm = () => { try { localStorage.removeItem(FORM) } catch { /* private mode */ } }
 
 /** The hashtag as a channel id: lower case, letters, digits and dashes (2–30). */
-export const hashtagSlug = (s: string) => s.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30)
+export const hashtagSlug = (s: string) => s.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30).replace(/-+$/, '') // (trimmed again after the cut: no dash at the end, belfry-android)
+/** The Nth suggestion when SLUG is taken: "<slug>-N", cut to 30 with no dash before the number. */
+export const nextHashtag = (slug: string, n: number) => slug.slice(0, 30 - String(n).length - 1).replace(/-+$/, '') + '-' + n
 
 // ---- errors -----------------------------------------------------------------------------------
 export type CardError = 'claimed' | 'retired' | 'no_pass' | 'guest_not_saved' | 'unverified' | 'hashtag_taken' | 'own_key' | 'agent' | 'key_taken' | 'wrong_code' | 'expired' | 'invalid' | 'too_many' | 'signer' | 'unknown' | 'unsupported' | 'offline' | 'failed'
