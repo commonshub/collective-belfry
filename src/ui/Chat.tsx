@@ -929,7 +929,6 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           <button className="btn" onClick={() => (only === 'thread' ? setNewThread(true) : only === 'proposal' ? setNewProp(true) : setNewEvent(true))}>{only === 'thread' ? 'New thread' : only === 'proposal' ? 'New proposal' : 'New event'}</button>
         </div>
       )}
-      {!readOnly && !only && page?.posts === 'request' && <div className="purpose-line">Members can turn a request into a proposal.</div>}
       {!readOnly && <RecordingBar groupId={id} />}
       {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}
