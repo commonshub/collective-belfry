@@ -352,14 +352,17 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const E = await import(eout + '?' + Date.now())
     const B = ev.belfry, K = ev.keys, sec = (n) => Uint8Array.from(Buffer.from(ev.secrets[n], 'hex'))
     const chain = (events, a) => E.chainOf(events, B, a)
-    const chains = (events) => (a) => chain(events, a) ?? undefined
+    const chains = (events) => (a) => (a === B ? E.SERVICE : chain(events, a) ?? undefined) // §20: a chain, service, or undefined
+    const nul = (v) => (v === undefined ? null : v)
     const view = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork }
-    for (const [n, c] of Object.entries(ev.lists.valid)) check(`encrypted list valid: ${n}`, !!E.parseList(c.event, B) === c.valid, c.valid)
+    for (const [n, c] of Object.entries(ev.lists.valid)) { const l = E.parseList(c.event, B); check(`encrypted list valid: ${n}`, !!l === c.valid && (!l || (l.devices.length === c.devices && l.readers.length === c.readers)), c) }
     for (const c of ev.lists.chains) check(`encrypted chain: ${c.name}`, eq(view(chain(c.events, c.account)), c.expect), view(chain(c.events, c.account)))
     check('encrypted changes', eq(E.changes(chain(ev.changes.lists, K.sam)), ev.changes.expect), E.changes(chain(ev.changes.lists, K.sam)))
     { const c = chain(ev.listed_before.lists, K.sam); for (const x of ev.listed_before.cases) check(`encrypted listed before: ${x.older.slice(0, 6)} before ${x.device.slice(0, 6)}`, E.listedBefore(c, x.older, x.device) === x.expect, x) }
-    { const c = chain(ev.signs_at.lists, K.sam); for (const x of ev.signs_at.cases) check(`encrypted signs at: ${x.device.slice(0, 6)} @${x.at}`, E.signsAt(c, x.device, x.at) === x.expect, x) }
-    { const c = chain(ev.listed_at.lists, K.sam); for (const x of ev.listed_at.cases) check(`encrypted listed at: ${x.device.slice(0, 6)} @${x.at}`, E.listedAt(c, x.device, x.at) === x.expect, x) }
+    { const c = chain(ev.signs_at.lists, K.sam); for (const x of ev.signs_at.cases) check(`encrypted signs at: ${x.device.slice(0, 6)} @${x.at}`, nul(E.signsAt(c, x.device, x.at)) === x.expect, x) }
+    { const c = chain(ev.signs_at_gap.lists, K.sam); for (const x of ev.signs_at_gap.cases) check(`encrypted signs at, a list missing: ${x.device.slice(0, 6)} @${x.at}`, nul(E.signsAt(c, x.device, x.at)) === x.expect, x) }
+    { const c = chain(ev.listed_at_gap.lists, K.sam); for (const x of ev.listed_at_gap.cases) check(`encrypted listed at, a list missing: ${x.device.slice(0, 6)} @${x.at}`, nul(E.listedAt(c, x.device, x.at)) === x.expect, x) }
+    { const c = chain(ev.listed_at.lists, K.sam); for (const x of ev.listed_at.cases) check(`encrypted listed at: ${x.device.slice(0, 6)} @${x.at}`, nul(E.listedAt(c, x.device, x.at)) === x.expect, x) }
     for (const x of ev.alias) check('encrypted alias', E.alias(x.K, x.account) === x.expect, x)
     check('encrypted lists hash', E.listsHash(ev.lists_hash.lists) === ev.lists_hash.expect, ev.lists_hash)
     const pk = ev.people_key
@@ -388,7 +391,8 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     for (const x of pm.accept) {
       const o = E.openPeopleMessage(pm.k, x.message)
       const people = x.key_people ?? pm.key_people
-      const got = E.acceptPeopleMessage(x.message, o.seal, o.rumor, people, chains(ev.people_key.accept[0].lists)(o.rumor.pubkey))
+      const lists = x.lists_without_lina ? ev.signs_at.lists : ev.people_key.accept[0].lists
+      const got = E.acceptPeopleMessage(x.message, o.seal, o.rumor, people, chains(lists)(o.rumor.pubkey))
       check(`encrypted people message: ${x.name}`, got === x.expect, got)
     }
     const gm = ev.group_messages
@@ -403,6 +407,11 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     for (const x of ev.pick_key.cases) { const got = E.pickKey(ev.pick_key.held, x.conv ?? ev.pick_key.conv, x.lists ?? ev.pick_key.lists, x.now)?.K ?? null; check(`encrypted pick key: ${x.name}`, got === x.expect, got) }
     { const c = chain(ev.asks.lists, K.sam)
       for (const x of ev.asks.cases) { const got = x.event.kind === 8574 ? E.readAsk(x.event, K.sam, c) : E.readAnswer(x.event, K.sam, c, x.about); check(`encrypted ask/answer: ${x.name}`, eq(got, x.expect), got) } }
+    { const book = new Map(); for (const x of ev.declare) check(`encrypted declare once: ${x.K.slice(0, 6)} for ${x.conv.slice(0, 12)}`, E.declare(book, x.K, x.conv) === x.expect, x) }
+    for (const x of ev.people_of) check(`encrypted people of: ${x.name}`, E.peopleOf(x.rumor) === x.expect, E.peopleOf(x.rumor))
+    for (const x of ev.clear_after_key) check(`encrypted clear after the first key: ${x.first_key_at} / ${x.at}`, E.clearAfterKey(x.first_key_at ?? undefined, x.at) === x.expect, x)
+    for (const x of ev.limits.people) check(`encrypted people limit: ${x.devices} (${x.ever_encrypted ? 'was encrypted' : 'never'})`, E.peopleLimit(x.devices, x.ever_encrypted) === x.expect, x)
+    for (const x of ev.limits.group) check(`encrypted group limit: ${x.devices}`, E.groupLimit(x.devices) === x.expect, x)
     // the sha256 of the file, for the other apps to compare
     console.log('encrypted.json sha256 ' + createHash('sha256').update(readFileSync(ef)).digest('hex'))
   }

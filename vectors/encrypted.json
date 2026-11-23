@@ -1,5 +1,5 @@
 {
- "about": "docs/encrypted.md (collective-belfry, with §16, §17 and §18): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of \"belfry-vector:<name>\").",
+ "about": "docs/encrypted.md (collective-belfry, with §16–§20): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of \"belfry-vector:<name>\").",
  "keys": {
   "belfry": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
   "sam": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
@@ -47,7 +47,9 @@
      "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
      "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
     },
-    "valid": true
+    "valid": true,
+    "devices": 1,
+    "readers": 0
    },
    "L2": {
     "event": {
@@ -80,7 +82,9 @@
      "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
      "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
     },
-    "valid": true
+    "valid": true,
+    "devices": 2,
+    "readers": 0
    },
    "L3": {
     "event": {
@@ -114,7 +118,9 @@
      "id": "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b",
      "sig": "2a742c89831707e8514bf79bb25bdf96ba6d4ea82d1ae0ffbb1f15370f7b9129759500195e090e8a949ebb9e60f8c838dd27815956ad921987774bfdf0142d8d"
     },
-    "valid": true
+    "valid": true,
+    "devices": 1,
+    "readers": 1
    },
    "L4": {
     "event": {
@@ -152,7 +158,9 @@
      "id": "de3c46ee369711d78706d4ddf4ec301a88ce13ae4128c4448cc074f8e4c2ee95",
      "sig": "779073ca995a80ce308395b4f1cf9f7b086ba1a9f0e122ab94f3320813206de1262615d11d758a52b7ca36ece1c0fd70253f878ae00cb350f42b76773ce4c337"
     },
-    "valid": true
+    "valid": true,
+    "devices": 2,
+    "readers": 1
    },
    "L5": {
     "event": {
@@ -194,7 +202,9 @@
      "id": "398fdf9acb6b4bcb80665d003d9e76a5267a9a6ac24e2e0f2543cdedaa2843ce",
      "sig": "8c527707e01652ef84be7e18f458450688034d169eac269edda833524bd53a91d283165b1603f948fb48e0cfdd720bdd1052d0ed1f4b7956b0e7dd8d54d1d66b"
     },
-    "valid": true
+    "valid": true,
+    "devices": 3,
+    "readers": 1
    },
    "LC1": {
     "event": {
@@ -219,7 +229,9 @@
      "id": "3c745a01216656280f15c0e99be2e4123a2418c7fe294b673f5bfcb4d7eb5de3",
      "sig": "7c117f01737afe8bd55a506b798ecc2dff0b35bc152640243361ebfed67b5ef18d2d97a4d5c6bb7886125c7d0f0d352340af92f7a8a2dcf44a46f6760712e520"
     },
-    "valid": true
+    "valid": true,
+    "devices": 1,
+    "readers": 0
    },
    "LA1": {
     "event": {
@@ -245,7 +257,9 @@
      "id": "78528d540f8943388cabcc0fdf3ca18f254ae120f2eb0cecd59169cee699c389",
      "sig": "d1ecaaa8c3e6c0441ae1633537b06bb9a0cf49182414f0a7a8d15ac24233a97685fc1daeb31cccc29cf64ddcfa6d4426db048074cf20966700f9a4bae595ec05"
     },
-    "valid": true
+    "valid": true,
+    "devices": 1,
+    "readers": 0
    },
    "other_signer": {
     "event": {
@@ -303,7 +317,9 @@
      "id": "c66524c15668009c566688ea776342ce8a0ee981da6acc39d05b20670c82f4e8",
      "sig": "96c7faf8c8a852d692678804ff98eb8afcb3b37613bf56bd78e2f36320b79a6bb840c3413b62b9605731075bb5fcef7d16212a8ea3c06d8f7a090b0645c700b3"
     },
-    "valid": true
+    "valid": true,
+    "devices": 1,
+    "readers": 0
    },
    "duplicate_device": {
     "event": {
@@ -475,7 +491,9 @@
      "id": "9c779a7a71a7a4ecd2225afa3d582fea09d80c3f28e28d48282e83caa774a694",
      "sig": "1eb3df5ac61502655a4c74b4f1383900d9ed5067a0bee7fa56f582177107bbf46ee80092f36cf469ab74990fcf84b57b740cdad9a155e977de70299333e68256"
     },
-    "valid": false
+    "valid": true,
+    "devices": 0,
+    "readers": 0
    },
    "n1_with_prev": {
     "event": {
@@ -564,6 +582,159 @@
      "sig": "7bfb5bdfca0cc2eca04a4e1d9c1239806c0549ad84eded348326ebcb647525b762599f7da8ea43b3a1c1437d8314e43e6ff79fcacc601de0c3cf011615b9eee7"
     },
     "valid": false
+   },
+   "twenty_and_two_readers": {
+    "event": {
+     "kind": 8570,
+     "created_at": 2800,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "n",
+       "2"
+      ],
+      [
+       "prev",
+       "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+      ],
+      [
+       "device",
+       "0db3ef85d53f10acc4d72b877474425e0eb1e25f7b0380ef22a8ee6587c2ab17"
+      ],
+      [
+       "device",
+       "1279fde885f718009a9c7c02ac66d86a4c892bfab4a3284f74b2ae718c1b2146"
+      ],
+      [
+       "device",
+       "24f5bcee2b1bfc4e565777a1ca64d90f5d1777c9a43ced57f7ab5b8c67dd78c6"
+      ],
+      [
+       "device",
+       "4f002bdf1bb3a06d5f1f7e04b472e7ef415f4bb7405aa5c64475707946f68378"
+      ],
+      [
+       "device",
+       "51616973d7d2a3458a9875ef331a00591d0edb1b43ff045ee1c33817de08a178"
+      ],
+      [
+       "device",
+       "5fc1162f3df50502f5f77bbf413f89ab92e58afc05623c635482c3b1552a544e"
+      ],
+      [
+       "device",
+       "7a46a0f1d104e78b2d1438baf6d16ab0c71629b37af8db5ea77cd0bf60b460d0"
+      ],
+      [
+       "device",
+       "871bb488bd29dd75f09ce145aa24f6cd8d4f1f7bd9a56480dc8cc73e5243fbd6"
+      ],
+      [
+       "device",
+       "a3ca558e404ac5363ca39eee97583d2e6ad0058dbb4cf50925864a45b567821b"
+      ],
+      [
+       "device",
+       "b4b5324991bce858071ad6131577cc9bb01c2b424e87873174261a69cc30280c"
+      ],
+      [
+       "device",
+       "bc8a6654b77fd2588b0d99a1fcad320f5d75b643c8140f391d6638ea54d312ea"
+      ],
+      [
+       "device",
+       "c3d70c2d910f4369ccc3e8b90c4b24d9ffd8cda2f7c9046b92faf3959f2a197f"
+      ],
+      [
+       "device",
+       "c90fe0220a9e23682e1f94dd71c2fbd43c07b2b20a43cda96dd10b5a3dcc5549"
+      ],
+      [
+       "device",
+       "ce176b345c263f730f3c9f32e46f15247345cf5ba21200d12a48a968311f9b52"
+      ],
+      [
+       "device",
+       "cf07849dab7e823cc3cc4e4808f968bfd7928981eea282c912672da816e2d423"
+      ],
+      [
+       "device",
+       "d27aa0a0341afbd3dda76cdf9b2de471074243f9362514aa0313874bf64a646b"
+      ],
+      [
+       "device",
+       "d70703f37c855c58912d8e5891d2ccd67d8c8eed38abe68826abf84f70472efe"
+      ],
+      [
+       "device",
+       "d720adeb9d23824c6d5e48b0e71d3246cf61932321e8b98a3f98a39f9d77aa79"
+      ],
+      [
+       "device",
+       "e0ea074e4a604bf8216e2cf73740e6dd4eab659723ceafe301b66b187aa31965"
+      ],
+      [
+       "device",
+       "f67abacc60bd9cf115387f456c69c3fddcdfca9ec997121d5c835ff0c3a262b2"
+      ],
+      [
+       "device",
+       "b6bc58a0f5d65b58ef87481a8b7f252729a80a73f7fb1fc85254fd2ddaec95ba",
+       "reader"
+      ],
+      [
+       "device",
+       "d07a521b29c7a92adbd28f46cfbabe4e41e43678ffc8ef0f9c6b10612c9aee86",
+       "reader"
+      ]
+     ],
+     "content": "",
+     "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+     "id": "9a17f358b79a3d8f71b59c51646105058b48e25995fe8d1977da724ee86b24d8",
+     "sig": "9c400be3d39fc3a998b61bfd396732fec0536b4ebf6759b75db1a185184e1541404f40285c262d3e45ab0ed4ca96610a92290520c85cff044957eb67d6ee5ab8"
+    },
+    "valid": true,
+    "devices": 20,
+    "readers": 2
+   },
+   "unknown_marker_skipped": {
+    "event": {
+     "kind": 8570,
+     "created_at": 2900,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "n",
+       "2"
+      ],
+      [
+       "prev",
+       "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+      ],
+      [
+       "device",
+       "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+      ],
+      [
+       "device",
+       "7053358eab3c60d292986bd7c6dd241243f124ad53bdd0d8636caf4ada497f95",
+       "later-marker"
+      ]
+     ],
+     "content": "",
+     "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+     "id": "59959e54c6055e9bcf55ec52a9f17bce2da87de75ca919a9578d1c8fce4a660e",
+     "sig": "f76af2c53efd34b650de07c6faf966ba305ea62ffa000ec0ea3ceb734eae478f9c1aeb0d981bf85e251fe8a46c8737ebdc9f610e29ad415ca061fe804761c15f"
+    },
+    "valid": true,
+    "devices": 1,
+    "readers": 0
    },
    "self_not_the_account": {
     "event": {
@@ -1690,6 +1861,11 @@
    {
     "older": "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
     "device": "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2",
+    "expect": false
+   },
+   {
+    "older": "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633",
+    "device": "ac0421e810100fe7601ecdc05cd587c40fff1640cf9142ccaf943c4a230ebc94",
     "expect": false
    }
   ]
@@ -2903,6 +3079,173 @@
     ],
     "now": 5000,
     "expect": "wait"
+   },
+   {
+    "name": "the agent (own key, listed as self) makes a key for itself and Sam: ok (§20)",
+    "receiver": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "rumor": {
+     "kind": 8571,
+     "pubkey": "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+     "created_at": 3150,
+     "content": "fbef6c89c91f4198c1292ad1094e88cec209657f7752290f19f6c55ef4d89172",
+     "tags": [
+      [
+       "K",
+       "fa87a4e36dc874360f2c3b4f83884ce7ab78d72af859728ec21438cb33812ea1"
+      ],
+      [
+       "p",
+       "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
+      ],
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "list",
+       "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+       "78528d540f8943388cabcc0fdf3ca18f254ae120f2eb0cecd59169cee699c389"
+      ],
+      [
+       "list",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+       "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b"
+      ]
+     ],
+     "id": "bea0c5456b5119ae1d47df8f9c4a111df37051733ffa42ae7a36fd77240390a8"
+    },
+    "lists": [
+     {
+      "kind": 8570,
+      "created_at": 1000,
+      "tags": [
+       [
+        "p",
+        "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+       ],
+       [
+        "n",
+        "1"
+       ],
+       [
+        "device",
+        "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+       ]
+      ],
+      "content": "",
+      "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+      "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+      "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
+     },
+     {
+      "kind": 8570,
+      "created_at": 2000,
+      "tags": [
+       [
+        "p",
+        "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+       ],
+       [
+        "n",
+        "2"
+       ],
+       [
+        "prev",
+        "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+       ],
+       [
+        "device",
+        "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+       ],
+       [
+        "device",
+        "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+       ]
+      ],
+      "content": "",
+      "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+      "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+      "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
+     },
+     {
+      "kind": 8570,
+      "created_at": 3000,
+      "tags": [
+       [
+        "p",
+        "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+       ],
+       [
+        "n",
+        "3"
+       ],
+       [
+        "prev",
+        "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af"
+       ],
+       [
+        "device",
+        "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+       ],
+       [
+        "device",
+        "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+        "reader"
+       ]
+      ],
+      "content": "",
+      "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+      "id": "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b",
+      "sig": "2a742c89831707e8514bf79bb25bdf96ba6d4ea82d1ae0ffbb1f15370f7b9129759500195e090e8a949ebb9e60f8c838dd27815956ad921987774bfdf0142d8d"
+     },
+     {
+      "kind": 8570,
+      "created_at": 1500,
+      "tags": [
+       [
+        "p",
+        "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2"
+       ],
+       [
+        "n",
+        "1"
+       ],
+       [
+        "device",
+        "7075039ac9d3bfd2445a5fd933fb16fd4411b21a2d606bcacd4209a47193f559"
+       ]
+      ],
+      "content": "",
+      "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+      "id": "3c745a01216656280f15c0e99be2e4123a2418c7fe294b673f5bfcb4d7eb5de3",
+      "sig": "7c117f01737afe8bd55a506b798ecc2dff0b35bc152640243361ebfed67b5ef18d2d97a4d5c6bb7886125c7d0f0d352340af92f7a8a2dcf44a46f6760712e520"
+     },
+     {
+      "kind": 8570,
+      "created_at": 1200,
+      "tags": [
+       [
+        "p",
+        "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
+       ],
+       [
+        "n",
+        "1"
+       ],
+       [
+        "device",
+        "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+        "self"
+       ]
+      ],
+      "content": "",
+      "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+      "id": "78528d540f8943388cabcc0fdf3ca18f254ae120f2eb0cecd59169cee699c389",
+      "sig": "d1ecaaa8c3e6c0441ae1633537b06bb9a0cf49182414f0a7a8d15ac24233a97685fc1daeb31cccc29cf64ddcfa6d4426db048074cf20966700f9a4bae595ec05"
+     }
+    ],
+    "now": 5000,
+    "expect": "ok"
    },
    {
     "name": "dated more than 15 minutes after now (5000): refused",
@@ -4137,6 +4480,76 @@
     "key_people": "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
    },
    {
+    "name": "Lina has no list known; her account key signs the seal: never accepted, kept (wait) (§20)",
+    "message": {
+     "kind": 8572,
+     "created_at": 3300,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "d",
+       "e43d322fb12e3ec79c3c32888193602792b2c02abca6a656443c548f52b1fc1f"
+      ]
+     ],
+     "content": "Arkaj+d77OB/efF22lXcXjrFHh4B7h3Ngkw2JuMzZAwK+FEhu96HvL5k5/wjhN1U3PM4Ab66DdwyOaBd//hAxU8AC4z8AIuCMvXbMVVQqmZGGSML8Is4dNayUzgND/0jDHcGy9iMBfmTJCsD3KerZtu3GZ1Y91c0p1zubUCxzjvD85L+3SKZ8XlIB5qnV+NfoTWRYSmzFKnSIEFEy4WVzCPc2kz/+Kq+c5mBU409EygFeOnxCtxoE859VpA542ThK/lGGoOnNhY3Oy3uFIwKYkWXYNS0u5XkNE3rCXWY1JrR4V9GL5cNUZq5b32zGNF+cRkODBSprCv7bwodlRzvM3+FLMsrRA5Ip13h8Z1YfMxfiDsinSuvDQD5Ox4SjzXxuosiwDmq2SuzjFxiL+qTrbNnHxDJQ0U8/EqVmjfd3y2BVH3z73qYYPSiuSPMGJWBUIDdhX7hXstBRNmew+vaRdkBhgvjj/rqYp0hLvb9IGjnTlcaNMdMlNBN2Nwj7SasYlx0gZ4fnIW6amSki1lXcCrswQPH4Q9Q0GYZWVBfI9S25/iLDchRbrnYSD4xcNNxhmQoGKteFHtA4QZv50xM2QoNPy9ZOxZUqBnU+xFnhdpmrFzFybLxJC4mFjysoTCSXAKBZptUm5PNPM1kre4kJiZEZPDvuY55+HGJ1DQFNKRmdlwuDi57APz5y8qVOiuwAVqjzPQ9/k526S/qCC1u1GzSuVUlNarVbXHTI4+6uCewyHu3jL3Cc9syPDev3PTfsouuGiHMqa7U2VGnTeDaB3X9YsBgw5fGJDaaYzTykNPJG4H4z23AvTgeHEZxESdvr99z5SoqhSrme2Uf3FAfkeHTzQ0pQwJ3RaCmlxevrqQ7JUtNaK56ohwBv9dihxYAfxgG59NdUR/0gtHaBTq6Q36xtfpKMcqHh6y+hb6IRW3qBgeMe70GhMVYQ9ENjAtYeG44bKshIISxMQqyYsJUD2Y7ir0R4FJz+h9e6IEQnRdzOvJS/64zLUPCU3UMqz05brlktZMTw2erskFHRhrvWRiH1QzPKkDSs3DWKhBXovujcE/gbzZIEm6Ck1QofPsPiu7HetePT6QQo3qDbjNpm2JZ2j8MBHwlWWtjkt0fHAFpBZhESqOZPtkVjC5RpXuMWPkuhDz8K3JR6EhY2Dw/I5GJNxcUXFdBXxYgP7sXYzjCEnkg+gCu5qvXttIg8IxSGuIn5lR6rQ74Ux7AzDldWZ9AL4YLMv8yIsudWnKwU3hKTwAuOWprNDxBiHlOdI4kT6fJ",
+     "pubkey": "54d94b04d972683785e2db4ba8deab6135be0dc56948ef8df9d7aaed4d69b71a",
+     "id": "c3270db4e54aba2e46dbf70f47fd8d5eaa6d848f7a168a3c73937f0a96307ca4",
+     "sig": "edb77a60d5bcf368af07536ff0e72e0e8a112bc7f2cd411041de5083fdcf3a546605b19687175d4485253c8eb4db600639b6258e2d34818ab9605076ad935734"
+    },
+    "key_people": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "lists_without_lina": true,
+    "expect": "wait"
+   },
+   {
+    "name": "the same once Lina’s list is here (her key is not on it): no",
+    "message": {
+     "kind": 8572,
+     "created_at": 3300,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "d",
+       "e43d322fb12e3ec79c3c32888193602792b2c02abca6a656443c548f52b1fc1f"
+      ]
+     ],
+     "content": "Arkaj+d77OB/efF22lXcXjrFHh4B7h3Ngkw2JuMzZAwK+FEhu96HvL5k5/wjhN1U3PM4Ab66DdwyOaBd//hAxU8AC4z8AIuCMvXbMVVQqmZGGSML8Is4dNayUzgND/0jDHcGy9iMBfmTJCsD3KerZtu3GZ1Y91c0p1zubUCxzjvD85L+3SKZ8XlIB5qnV+NfoTWRYSmzFKnSIEFEy4WVzCPc2kz/+Kq+c5mBU409EygFeOnxCtxoE859VpA542ThK/lGGoOnNhY3Oy3uFIwKYkWXYNS0u5XkNE3rCXWY1JrR4V9GL5cNUZq5b32zGNF+cRkODBSprCv7bwodlRzvM3+FLMsrRA5Ip13h8Z1YfMxfiDsinSuvDQD5Ox4SjzXxuosiwDmq2SuzjFxiL+qTrbNnHxDJQ0U8/EqVmjfd3y2BVH3z73qYYPSiuSPMGJWBUIDdhX7hXstBRNmew+vaRdkBhgvjj/rqYp0hLvb9IGjnTlcaNMdMlNBN2Nwj7SasYlx0gZ4fnIW6amSki1lXcCrswQPH4Q9Q0GYZWVBfI9S25/iLDchRbrnYSD4xcNNxhmQoGKteFHtA4QZv50xM2QoNPy9ZOxZUqBnU+xFnhdpmrFzFybLxJC4mFjysoTCSXAKBZptUm5PNPM1kre4kJiZEZPDvuY55+HGJ1DQFNKRmdlwuDi57APz5y8qVOiuwAVqjzPQ9/k526S/qCC1u1GzSuVUlNarVbXHTI4+6uCewyHu3jL3Cc9syPDev3PTfsouuGiHMqa7U2VGnTeDaB3X9YsBgw5fGJDaaYzTykNPJG4H4z23AvTgeHEZxESdvr99z5SoqhSrme2Uf3FAfkeHTzQ0pQwJ3RaCmlxevrqQ7JUtNaK56ohwBv9dihxYAfxgG59NdUR/0gtHaBTq6Q36xtfpKMcqHh6y+hb6IRW3qBgeMe70GhMVYQ9ENjAtYeG44bKshIISxMQqyYsJUD2Y7ir0R4FJz+h9e6IEQnRdzOvJS/64zLUPCU3UMqz05brlktZMTw2erskFHRhrvWRiH1QzPKkDSs3DWKhBXovujcE/gbzZIEm6Ck1QofPsPiu7HetePT6QQo3qDbjNpm2JZ2j8MBHwlWWtjkt0fHAFpBZhESqOZPtkVjC5RpXuMWPkuhDz8K3JR6EhY2Dw/I5GJNxcUXFdBXxYgP7sXYzjCEnkg+gCu5qvXttIg8IxSGuIn5lR6rQ74Ux7AzDldWZ9AL4YLMv8yIsudWnKwU3hKTwAuOWprNDxBiHlOdI4kT6fJ",
+     "pubkey": "54d94b04d972683785e2db4ba8deab6135be0dc56948ef8df9d7aaed4d69b71a",
+     "id": "c3270db4e54aba2e46dbf70f47fd8d5eaa6d848f7a168a3c73937f0a96307ca4",
+     "sig": "edb77a60d5bcf368af07536ff0e72e0e8a112bc7f2cd411041de5083fdcf3a546605b19687175d4485253c8eb4db600639b6258e2d34818ab9605076ad935734"
+    },
+    "key_people": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "expect": "no"
+   },
+   {
+    "name": "the belfry key (a service key, its own device) signs as itself: ok",
+    "message": {
+     "kind": 8572,
+     "created_at": 3300,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "d",
+       "e43d322fb12e3ec79c3c32888193602792b2c02abca6a656443c548f52b1fc1f"
+      ]
+     ],
+     "content": "AnBkGiyWIEF1lTIhEMpHwbmJRD/rD1B6HZJzqLUI6G6Uw0prY0SjsFmTlzeviqy2qbrdnGlXF08q9V+C/F5wsPddLuLHRAnoV+gZyGg3h/ccanfPtb5cLqbPdRbwXOcWbUeyDckl+S3l/TF0gQS82rBwdDBzarQJLkzv0ySJ7HkGkpecZ4NnHLQU72Dab+ij6y40uKefNIIM9F3d7tW7khHqkPypkywmaI3U08M9fRormvjHpglJmlsZyodUzCjskajvt+JP/gepz+XtL2IRe2lU8vjSXKb03rc6pycCLurzgapgY9SUl3MHk+MyiFSlw6VQvWrPxJoT4FTknXZME48/eRVzg2t8ZXa8wgLUO5BKs4pa00QWax/RuAK/S/PTiCclF3N4KKV0Fl/W8QMkys4s+cSCZWCYpqESIOsrS6/sRSuhKBqtb9ZtGDplCLlChGGpa8JCq0VZK/HKg/y9Xl0t2x3AFW4qE9EMz1HF2Z4mOUktw264aWaT0XxiJqJDWzKvsXIi48xqXBJeDqT8KQd7+tRRhcQei6nkmLNOY240wfGsWiP807syqqmLirQzNg6vNK8BTSy+7d6LK+qFlUAo/VZAz/W+fsk5lUi8OdQ4kSX9j+mi09l0xItq1g3TaCBDwjJEGFqyUDcoaYxl4MM2vIZ0xOY2kIAHpvtgAMZPmhAUj7Y8xgq8gnIDuSmzurdnhfmNqBKJsT1wZ/OACLO89Bx7PtSWCP1k6I/oBY3c5ZanDPnX55sYU3m2PQ2g0MExmgXrRtTyMxh4zsV5UWb+dZ5xP6Xp4Bve0gyc/Js8WbCq+UuP+XVobK8o6vlFO48ENVGDhsHNgsGXmVXCuH0Uxxk5GN34IGY90i7hsa/NfBTWKQk5HoNHTkCNHSP5muNVWZDNjVsOe7sN8kCKLdwnE4u4Z1VmgYhV5fJBLCj8djAb8xmMct3dHgEsAVA9Fks32kFY4HDp65Q1PzkgOtixRz2RkOHcI8CFeBHWubZo3XYRodIlqJ3Oyg5HDru7ZluRXXyOHbWI2p4NmOZ6ZjAN7B9XIF/1ZeNjKELPKrpcc6dzm710lLgHIhvyk1niEt+uigkeryzsKRMlUvKtDUz3BDNYhycTJYicLE6cUE1/Xq6C7eyNeq7UuaV8g/y+6qGb7QndBAga5rIJgwaToobzI7qouYqVLP9bebOLCT52hdEt/rSPuQbErU15J9ZfS9KgRuwCHN5C791IpKuV7LURx677LqNA9IOuJcf/NOWE0IHsZ1pdyS1bz8zvS0WlC4jG",
+     "pubkey": "793236215f26f0620ed866791b727218b17b5106c4b49a693b84884fe7af63ce",
+     "id": "3c90b4926c875641e0d41009c3c0ba7cb8952ea3b30aae61f1b3aee46919d29c",
+     "sig": "c343988791bb4a3120e7192e5cdcdf93a349f313eac16d5e1167bd68042843f9cafe01186f67780a9b379da33eac4b7816a4b6d362f58d91caaa8ab45b775fd4"
+    },
+    "key_people": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "expect": "ok"
+   },
+   {
     "name": "an author with no list known: wait (Held, never the account key)",
     "message": {
      "kind": 8572,
@@ -4565,6 +4978,398 @@
    "expect_total_keys": 400
   }
  },
+ "declare": [
+  {
+   "K": "4652196ea54e93483c30112afe2c1da4ae2a393d85de6c16923076b0f14dee01",
+   "conv": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+   "expect": true
+  },
+  {
+   "K": "4652196ea54e93483c30112afe2c1da4ae2a393d85de6c16923076b0f14dee01",
+   "conv": "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+   "expect": false
+  },
+  {
+   "K": "01c3124ed93c2c9e0e06779b738020f786f2db78d3b30f47bb8225e65feee87c",
+   "conv": "g:pod-garden-7f3a",
+   "expect": true
+  }
+ ],
+ "people_of": [
+  {
+   "name": "a message",
+   "rumor": {
+    "kind": 14,
+    "pubkey": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "created_at": 3300,
+    "tags": [
+     [
+      "p",
+      "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2"
+     ]
+    ],
+    "content": "Bread on Saturday?",
+    "id": "d495fe74ce7cb22e3c5c88be24d24da320a5a8d2154829c68ca1c40bef3a4409"
+   },
+   "expect": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+  },
+  {
+   "name": "a reaction in it (p of the people, e of the message)",
+   "rumor": {
+    "kind": 7,
+    "pubkey": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2",
+    "created_at": 3500,
+    "tags": [
+     [
+      "e",
+      "d495fe74ce7cb22e3c5c88be24d24da320a5a8d2154829c68ca1c40bef3a4409"
+     ],
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "k",
+      "14"
+     ]
+    ],
+    "content": "👍",
+    "id": "0362eeb3c3557bb0f0b18b9581a75401bdc7d17375476bd48d058a2e8ce62adb"
+   },
+   "expect": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+  },
+  {
+   "name": "a deletion of my message",
+   "rumor": {
+    "kind": 5,
+    "pubkey": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "created_at": 3600,
+    "tags": [
+     [
+      "e",
+      "d495fe74ce7cb22e3c5c88be24d24da320a5a8d2154829c68ca1c40bef3a4409"
+     ],
+     [
+      "p",
+      "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2"
+     ]
+    ],
+    "content": "",
+    "id": "9e3bcdadae2a5c365e51b8f5120e52423e4170bba3892f783718c410574d72ed"
+   },
+   "expect": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+  },
+  {
+   "name": "Notes to myself",
+   "rumor": {
+    "kind": 14,
+    "pubkey": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "created_at": 3600,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ]
+    ],
+    "content": "note",
+    "id": "853acb13193496c70efab39c7cc17cd3ee769109fa684a40d9511422a33b489b"
+   },
+   "expect": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+  },
+  {
+   "name": "an e-mail out: the belfry key is one more person of that message",
+   "rumor": {
+    "kind": 1301,
+    "pubkey": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+    "created_at": 3600,
+    "tags": [
+     [
+      "p",
+      "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44"
+     ],
+     [
+      "subject",
+      "Hi"
+     ]
+    ],
+    "content": "raw mail",
+    "id": "892d26235a1eb172eb115dbe1080e6b5cabc74ac302f1fda48715b773fb18af4"
+   },
+   "expect": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+  }
+ ],
+ "clear_after_key": [
+  {
+   "first_key_at": null,
+   "at": 3000,
+   "expect": false
+  },
+  {
+   "first_key_at": 3000,
+   "at": 2999,
+   "expect": false
+  },
+  {
+   "first_key_at": 3000,
+   "at": 3000,
+   "expect": false
+  },
+  {
+   "first_key_at": 3000,
+   "at": 3001,
+   "expect": true
+  }
+ ],
+ "limits": {
+  "people": [
+   {
+    "devices": 100,
+    "ever_encrypted": false,
+    "expect": "encrypt"
+   },
+   {
+    "devices": 101,
+    "ever_encrypted": false,
+    "expect": "clear"
+   },
+   {
+    "devices": 101,
+    "ever_encrypted": true,
+    "expect": "held"
+   },
+   {
+    "devices": 3,
+    "ever_encrypted": true,
+    "expect": "encrypt"
+   }
+  ],
+  "group": [
+   {
+    "devices": 1000,
+    "expect": "encrypt"
+   },
+   {
+    "devices": 1001,
+    "expect": "refuse"
+   }
+  ]
+ },
+ "signs_at_gap": {
+  "lists": [
+   {
+    "kind": 8570,
+    "created_at": 1000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "1"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+    "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
+   },
+   {
+    "kind": 8570,
+    "created_at": 2000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "2"
+     ],
+     [
+      "prev",
+      "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+    "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
+   },
+   {
+    "kind": 8570,
+    "created_at": 4000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "4"
+     ],
+     [
+      "prev",
+      "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2"
+     ],
+     [
+      "device",
+      "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+      "reader"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "de3c46ee369711d78706d4ddf4ec301a88ce13ae4128c4448cc074f8e4c2ee95",
+    "sig": "779073ca995a80ce308395b4f1cf9f7b086ba1a9f0e122ab94f3320813206de1262615d11d758a52b7ca36ece1c0fd70253f878ae00cb350f42b76773ce4c337"
+   }
+  ],
+  "cases": [
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 3500,
+    "expect": null
+   },
+   {
+    "device": "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633",
+    "at": 3500,
+    "expect": true
+   },
+   {
+    "device": "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2",
+    "at": 4500,
+    "expect": true
+   }
+  ]
+ },
+ "listed_at_gap": {
+  "lists": [
+   {
+    "kind": 8570,
+    "created_at": 1000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "1"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+    "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
+   },
+   {
+    "kind": 8570,
+    "created_at": 2000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "2"
+     ],
+     [
+      "prev",
+      "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+    "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
+   },
+   {
+    "kind": 8570,
+    "created_at": 4000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "4"
+     ],
+     [
+      "prev",
+      "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2"
+     ],
+     [
+      "device",
+      "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+      "reader"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "de3c46ee369711d78706d4ddf4ec301a88ce13ae4128c4448cc074f8e4c2ee95",
+    "sig": "779073ca995a80ce308395b4f1cf9f7b086ba1a9f0e122ab94f3320813206de1262615d11d758a52b7ca36ece1c0fd70253f878ae00cb350f42b76773ce4c337"
+   }
+  ],
+  "cases": [
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 3500,
+    "expect": null
+   },
+   {
+    "device": "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633",
+    "at": 2500,
+    "expect": null
+   },
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 2500,
+    "expect": null
+   }
+  ]
+ },
  "pick_key": {
   "held": [
    {
@@ -4976,6 +5781,58 @@
      "pubkey": "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
      "id": "7f6b36958935ac96e4c6bfbb39acc82a166ae7c3df415ebc2448731daaf6fe44",
      "sig": "ef181ab1749f6c137abd42ea0c5deccb07906a0a85b20ed6e32d5600fd931a515c31fe740c8cee94f6baab5afc37562ae439c1062c86d9ae0212040bab9d883a"
+    },
+    "expect": null
+   },
+   {
+    "name": "d1, older but since removed, answers: ignored (§20)",
+    "event": {
+     "kind": 8575,
+     "created_at": 4200,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "device",
+       "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2"
+      ],
+      [
+       "answer",
+       "shared"
+      ]
+     ],
+     "content": "",
+     "pubkey": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+     "id": "48d54f26703520890bb27477ff0dd649bce6a14c56ff7b3b845b7b61e109b754",
+     "sig": "e2c3b20407b1af231dcf0b22dc9921ac6332680bfb2679ca0c26e920a61541ac6264ac03a7926b835763e6982c3a351b4b4ab7ac64b9e88e55eb4ad3b133981e"
+    },
+    "expect": null
+   },
+   {
+    "name": "an answer to an ask without knowing the asking device: ignored",
+    "event": {
+     "kind": 8575,
+     "created_at": 4200,
+     "tags": [
+      [
+       "p",
+       "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+      ],
+      [
+       "e",
+       "bcf6285fa1cdd78aa12072b65f0bdd73ab605f1008712c57a080691d186e25ac"
+      ],
+      [
+       "answer",
+       "shared"
+      ]
+     ],
+     "content": "",
+     "pubkey": "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633",
+     "id": "285c218ec37e81653ad777fd1ce5f6465a23d7e96a682a6cb6d1c1dbd8c3ba63",
+     "sig": "b623c1ad95cbd3e7bc24b378c28bb9944d3267792c6c02118227826b45a6791cb4ab3f215159a093a0727412e43135a2288ff4694e5475b677cae4f2e2bcfcbf"
     },
     "expect": null
    }

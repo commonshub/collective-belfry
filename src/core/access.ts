@@ -37,14 +37,17 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
   if (!handlerKeys.length) handlerKeys = (await kvGet<string[]>('belfry-handler-keys')) ?? []
   nostrKey ||= (await kvGet<string>('belfry-nostr-key')) ?? ''
   groupsPub ||= (await kvGet<string>('belfry-groups-key')) ?? ''
+  format3 ||= (await kvGet<boolean>('belfry-enc-format3')) ?? false
   try {
     const res = await fetch(DISCOVERY, { cache: 'no-store' })
-    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string>; branding?: unknown; nostr?: { pubkey?: string }; groups_key?: { pubkey?: string } }
+    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string>; branding?: unknown; nostr?: { pubkey?: string }; groups_key?: { pubkey?: string }; encrypted?: { format?: unknown } }
     // the keys that answer presses on belfry: buttons (buttons.ts, docs/actions.md §3)
     const keys = [doc.nostr?.pubkey, doc.groups_key?.pubkey].filter((k): k is string => typeof k === 'string' && /^[0-9a-f]{64}$/.test(k))
     if (keys.length) { handlerKeys = keys; await kvSet('belfry-handler-keys', keys) }
     if (typeof doc.nostr?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.nostr.pubkey)) { nostrKey = doc.nostr.pubkey; await kvSet('belfry-nostr-key', nostrKey) }
     if (typeof doc.groups_key?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.groups_key.pubkey)) { groupsPub = doc.groups_key.pubkey; await kvSet('belfry-groups-key', groupsPub) }
+    // encrypted conversations (docs/encrypted.md §12, §17.13): format 3 once seen is kept for good
+    if (doc.encrypted?.format === 3 && !format3) { format3 = true; await kvSet('belfry-enc-format3', true) }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
@@ -70,6 +73,12 @@ export const belfryHandlerKeys = () => handlerKeys
  *  mail (sealed.md §4), never a name looked up at the time. */
 let nostrKey = ''
 export const belfryNostrKey = () => nostrKey
+/** belfry.json "encrypted": {"format": 3} (docs/encrypted.md §12): this device writes format 3 there,
+ *  for good once seen (§17.13). Format 1 (the default): the version-1 ways. */
+let format3 = false
+export const encryptedFormat = (): 1 | 3 => (format3 ? 3 : 1)
+/** Tests only (a local relay): as if belfry.json said format 3. */
+export const testFormat3 = () => { format3 = true }
 /** The belfry's groups key (belfry.json "groups_key"): it signs the relay's group events. */
 let groupsPub = ''
 export const belfryGroupsKey = () => groupsPub

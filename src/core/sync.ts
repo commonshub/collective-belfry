@@ -674,17 +674,20 @@ function moveMark(t: Target) {
 
 // sealed conversations (sealedrt.ts): its own filters on the community relay (rosters, anchors,
 // device requests, wraps to this device's key), set once it knows the device
-let extraMain: () => Filter[] = () => []
-export function setExtraMainFilters(f: () => Filter[]) { extraMain = f; resubscribe('main') }
+const extraMainBy = new Map<string, () => Filter[]>()
+const extraMain = () => [...extraMainBy.values()].flatMap((f) => f())
+/** NAME's own live filters on the community relay (sealedrt.ts 'sealed', enc/runtime.ts 'enc'). */
+export function setExtraMainFilters(f: () => Filter[], name = 'sealed') { extraMainBy.set(name, f); resubscribe('main') }
 /** Read the gift wraps again from the start once (a device that just received keys, §4). */
 export function replayWraps() { setFromZero(true); void pageMain() }
 const ZERO = 'belfry-wraps-from-zero' // per account (accounts.ts keeps one copy per account)
 const fromZero = () => { try { return localStorage.getItem(ZERO) === '1' } catch { return false } }
 const setFromZero = (on: boolean) => { try { if (on) localStorage.setItem(ZERO, '1'); else localStorage.removeItem(ZERO) } catch { /* private mode */ } }
 let lastWrapsSince = 0
-let extraPaged: () => Filter[] = () => []
-/** sealedrt.ts: its filters that must be read whole (rosters, anchors, wraps to this device). */
-export function setPagedMainFilters(f: () => Filter[]) { extraPaged = f }
+const extraPagedBy = new Map<string, () => Filter[]>()
+const extraPaged = () => [...extraPagedBy.values()].flatMap((f) => f())
+/** NAME's filters that must be read whole (sealedrt.ts: rosters, anchors, wraps; enc: lists, keys, messages). */
+export function setPagedMainFilters(f: () => Filter[], name = 'sealed') { extraPagedBy.set(name, f) }
 /** After an EOSE on the community relay: the gift wraps since the catch-up mark (or from 0 after
  *  replayWraps) and the sealed filters, read page by page (a REQ gives at most PAGE per filter). */
 let paging = false, pageAgain = false

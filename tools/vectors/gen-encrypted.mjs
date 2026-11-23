@@ -48,13 +48,15 @@ const bad = {
   n1_with_prev: signed(B, { kind: 8570, created_at: 900, tags: [['p', keys.sam], ['n', '1'], ['prev', keys.other], ['device', keys.d3]], content: '' }),
   content_not_empty: signed(B, { kind: 8570, created_at: 2600, tags: [['p', keys.sam], ['n', '2'], ['prev', L1.id]], content: 'x' }),
   self_with_another_device: signed(B, { kind: 8570, created_at: 1250, tags: [['p', keys.agent], ['n', '2'], ['prev', keys.other], ['device', keys.agent, 'self'], ['device', keys.d3]], content: '' }),
+  twenty_and_two_readers: list('x20', keys.sam, 2, L1.id, Array.from({ length: 20 }, (_, i) => pub('twenty' + i)), 2800, [pub('r1'), pub('r2')]),
+  unknown_marker_skipped: signed(B, { kind: 8570, created_at: 2900, tags: [['p', keys.sam], ['n', '2'], ['prev', L1.id], ['device', keys.d1], ['device', keys.d3, 'later-marker']], content: '' }),
   self_not_the_account: signed(B, { kind: 8570, created_at: 2700, tags: [['p', keys.sam], ['n', '2'], ['prev', L1.id], ['device', keys.d1, 'self']], content: '' }),
 }
 const L6gap = list('L6', keys.sam, 6, keys.other, [keys.d2], 6000)
 const chainEvents = [L3, bad.other_signer, L1, bad.wrong_prev_fork, L2, LC1]
 const chainView = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork }
 const listCases = {
-  valid: Object.fromEntries(Object.entries({ L1, L2, L3, L4, L5, LC1, LA1, ...bad }).map(([k, e]) => [k, { event: e, valid: !!E.parseList(e, keys.belfry) }])),
+  valid: Object.fromEntries(Object.entries({ L1, L2, L3, L4, L5, LC1, LA1, ...bad }).map(([k, e]) => { const l = E.parseList(e, keys.belfry); return [k, { event: e, valid: !!l, ...(l ? { devices: l.devices.length, readers: l.readers.length } : {}) }] })),
   chains: [
     { name: 'sam: three lists; another signer ignored; a list 2 whose prev names no list is a fork (warn), the lower id kept', account: keys.sam, events: chainEvents, expect: chainView(E.chainOf(chainEvents, keys.belfry, keys.sam)) },
     { name: 'sam: the three lists alone: no fork, no gap', account: keys.sam, events: [L3, L1, L2], expect: chainView(E.chainOf([L3, L1, L2], keys.belfry, keys.sam)) },
@@ -68,9 +70,13 @@ const listCases = {
 const c3 = E.chainOf([L1, L2, L3], keys.belfry, keys.sam)
 const c5 = E.chainOf([L1, L2, L3, L4, L5], keys.belfry, keys.sam)
 const changeCases = { lists: [L1, L2, L3, L4, L5], expect: E.changes(c5) }
-const before = [[keys.d1, keys.d2], [keys.d2, keys.d4], [keys.d4, keys.d2], [keys.d3, keys.d4], [keys.d2, keys.d2], [keys.agent, keys.d4]].map(([a, b]) => ({ older: a, device: b, expect: E.listedBefore(c5, a, b) }))
-const signsAt = [[keys.d1, 2500], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 999999], [keys.agent, 3500], [keys.d3, 2500]].map(([d, at]) => ({ device: d, at, expect: E.signsAt(c3, d, at) }))
-const listedAt = [[keys.d1, 1500], [keys.d1, 3000], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 1999], [keys.d2, 2000], [keys.d2, 900]].map(([d, at]) => ({ device: d, at, expect: E.listedAt(c3, d, at) }))
+const before = [[keys.d1, keys.d2], [keys.d2, keys.d4], [keys.d4, keys.d2], [keys.d3, keys.d4], [keys.d2, keys.d2], [keys.agent, keys.d4], [keys.d2, keys.other]].map(([a, b]) => ({ older: a, device: b, expect: E.listedBefore(c5, a, b) }))
+const nul = (v) => (v === undefined ? null : v)
+const signsAt = [[keys.d1, 2500], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 999999], [keys.agent, 3500], [keys.d3, 2500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))
+const cGap = E.chainOf([L1, L2, L4], keys.belfry, keys.sam) // list 3 missing: what dropped d1 isn't known
+const signsAtGap = [[keys.d1, 3500], [keys.d2, 3500], [keys.d4, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cGap, d, at)) }))
+const listedAtGap = [[keys.d1, 3500], [keys.d2, 2500], [keys.d1, 2500]].map(([d, at]) => ({ device: d, at, expect: nul(E.listedAt(cGap, d, at)) }))
+const listedAt = [[keys.d1, 1500], [keys.d1, 3000], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 1999], [keys.d2, 2000], [keys.d2, 900]].map(([d, at]) => ({ device: d, at, expect: nul(E.listedAt(c3, d, at)) }))
 
 // ---- names -------------------------------------------------------------------------------------
 const kp = E.newKey(sk('conv-key-1'))
@@ -82,7 +88,8 @@ const kr = E.keyRumor(keys.d2, kp.k, [{ account: keys.sam, list: L3.id }, { acco
 const envs = E.peopleEnvelopes(sk('d2'), kr, [{ account: keys.sam, devices: E.receivers(E.current(c3)) }, { account: keys.lina, devices: [keys.c1] }], fixed('env1', 3100))
 const allLists = [L1, L2, L3, LC1, LA1]
 const NOW = 5000
-const chainsOf = (events) => (a) => E.chainOf(events, keys.belfry, a) ?? undefined
+// §20: three answers: a chain, 'service' (the belfry key), or undefined (no list: Held)
+const chainsOf = (events) => (a) => (a === keys.belfry ? E.SERVICE : E.chainOf(events, keys.belfry, a) ?? undefined)
 const openAs = (dev, env) => { try { const o = E.openPeopleEnvelope(sk(dev), env); return o ? { rumor_id: o.rumor.id, K: o.rumor.tags.find((t) => t[0] === 'K')[1] } : null } catch (e) { return { error: true } } }
 const variant = (fn) => { const r = JSON.parse(JSON.stringify(kr)); fn(r); return E.withId(r) }
 const peopleKey = {
@@ -94,6 +101,7 @@ const peopleKey = {
     { name: 'the receiver is not one of its people', receiver: keys.agent, rumor: kr },
     { name: 'maker d1 is not on the list named for Sam (L3)', receiver: keys.lina, rumor: variant((r) => { r.pubkey = keys.d1 }) },
     { name: 'the named list is not loaded yet: wait', receiver: keys.lina, rumor: variant((r) => { r.tags = r.tags.map((t) => (t[0] === 'list' && t[1] === keys.sam ? ['list', keys.sam, keys.other] : t)) }) },
+    { name: 'the agent (own key, listed as self) makes a key for itself and Sam: ok (§20)', receiver: keys.sam, rumor: E.keyRumor(keys.agent, E.newKey(sk('agent-key')).k, [{ account: keys.agent, list: LA1.id }, { account: keys.sam, list: L3.id }], 3150) },
     { name: 'dated more than 15 minutes after now (5000): refused', receiver: keys.lina, rumor: variant((r) => { r.created_at = NOW + 901 }) },
     { name: 'dated exactly 15 minutes after now: taken', receiver: keys.lina, rumor: variant((r) => { r.created_at = NOW + 900 }) },
   ].map((c) => ({ ...c, lists: allLists, now: NOW, expect: E.acceptKeyRumor(c.rumor, c.receiver, chainsOf(allLists), NOW) })),
@@ -140,6 +148,12 @@ const peopleMsgs = {
     { name: 'a rumor for other people than the key’s: no', ...judge('d2', rumor(keys.sam, 3300, [['p', keys.agent]], 'elsewhere'), 'a5') },
     { name: 'the agent (own key, listed as self) writes as itself: ok', message: E.peopleMessage(sk('agent'), rumor(keys.agent, 3300, [['p', keys.sam]], 'hi'), kp.K, [keys.sam], keys.agent, fixed('a6', 3300))[0],
       expect: (() => { const m = E.peopleMessage(sk('agent'), rumor(keys.agent, 3300, [['p', keys.sam]], 'hi'), kp.K, [keys.sam], keys.agent, fixed('a6', 3300))[0]; const o = E.openPeopleMessage(kp.k, m); return E.acceptPeopleMessage(m, o.seal, o.rumor, E.peopleId([keys.agent, keys.sam]), chainsOf(allLists)(keys.agent)) })(), key_people: E.peopleId([keys.agent, keys.sam]) },
+    { name: 'Lina has no list known; her account key signs the seal: never accepted, kept (wait) (§20)', message: (() => E.peopleMessage(sk('lina'), rumor(keys.lina, 3300, [['p', keys.sam]], 'as my identity'), kp.K, [keys.sam], keys.lina, fixed('a11', 3300))[0])(), key_people: keyPeople, lists_without_lina: true,
+      expect: (() => { const m = E.peopleMessage(sk('lina'), rumor(keys.lina, 3300, [['p', keys.sam]], 'as my identity'), kp.K, [keys.sam], keys.lina, fixed('a11', 3300))[0]; const o = E.openPeopleMessage(kp.k, m); return E.acceptPeopleMessage(m, o.seal, o.rumor, keyPeople, chainsOf([L1, L2, L3])(keys.lina)) })() },
+    { name: 'the same once Lina’s list is here (her key is not on it): no', message: (() => E.peopleMessage(sk('lina'), rumor(keys.lina, 3300, [['p', keys.sam]], 'as my identity'), kp.K, [keys.sam], keys.lina, fixed('a11', 3300))[0])(), key_people: keyPeople,
+      expect: (() => { const m = E.peopleMessage(sk('lina'), rumor(keys.lina, 3300, [['p', keys.sam]], 'as my identity'), kp.K, [keys.sam], keys.lina, fixed('a11', 3300))[0]; const o = E.openPeopleMessage(kp.k, m); return E.acceptPeopleMessage(m, o.seal, o.rumor, keyPeople, chainsOf(allLists)(keys.lina)) })() },
+    { name: 'the belfry key (a service key, its own device) signs as itself: ok', message: (() => E.peopleMessage(sk(B), rumor(keys.belfry, 3300, [['p', keys.sam]], 'mail'), kp.K, [keys.sam], keys.belfry, fixed('a12', 3300))[0])(), key_people: E.peopleId([keys.belfry, keys.sam]),
+      expect: (() => { const m = E.peopleMessage(sk(B), rumor(keys.belfry, 3300, [['p', keys.sam]], 'mail'), kp.K, [keys.sam], keys.belfry, fixed('a12', 3300))[0]; const o = E.openPeopleMessage(kp.k, m); return E.acceptPeopleMessage(m, o.seal, o.rumor, E.peopleId([keys.belfry, keys.sam]), chainsOf(allLists)(keys.belfry)) })() },
     { name: 'an author with no list known: wait (Held, never the account key)', message: E.peopleMessage(sk('other'), rumor(keys.other, 3300, [['p', keys.sam]], 'hi'), kp.K, [keys.sam], keys.other, fixed('a7', 3300))[0],
       expect: (() => { const m = E.peopleMessage(sk('other'), rumor(keys.other, 3300, [['p', keys.sam]], 'hi'), kp.K, [keys.sam], keys.other, fixed('a7', 3300))[0]; const o = E.openPeopleMessage(kp.k, m); return E.acceptPeopleMessage(m, o.seal, o.rumor, E.peopleId([keys.other, keys.sam]), chainsOf(allLists)(keys.other)) })(), key_people: E.peopleId([keys.other, keys.sam]) },
   ],
@@ -203,6 +217,8 @@ const askC = E.ask(sk('c1'), keys.sam, 4050, aux)
 const ans1 = E.answer(sk('d2'), keys.sam, { ask: ask4.id }, 'shared', 4200, aux)
 const ans2 = E.answer(sk('d2'), keys.sam, { device: keys.d4 }, 'removed', 4200, aux)
 const ans3 = E.answer(sk('d4'), keys.sam, { device: keys.d2 }, 'removed', 4200, aux)
+const ans5 = E.answer(sk('d1'), keys.sam, { device: keys.d4 }, 'shared', 4200, aux) // d1 was removed by list 3
+const ans6 = E.answer(sk('d2'), keys.sam, { ask: ask4.id }, 'shared', 4200, aux)
 const ans4 = E.answer(sk('agent'), keys.sam, { device: keys.d4 }, 'shared', 4200, aux)
 const asks = { lists: [L1, L2, L3, L4, L5], cases: [
   { name: 'd4 asks', event: ask4, expect: E.readAsk(ask4, keys.sam, c4) },
@@ -211,15 +227,31 @@ const asks = { lists: [L1, L2, L3, L4, L5], cases: [
   { name: 'd2 answers the card of a device that never asked: removed', event: ans2, expect: E.readAnswer(ans2, keys.sam, c4) },
   { name: 'd4 answers about d2, an older device (§17.6): ignored', event: ans3, expect: E.readAnswer(ans3, keys.sam, c4) },
   { name: 'the agent, a reader, answers: ignored', event: ans4, expect: E.readAnswer(ans4, keys.sam, c4) },
+  { name: 'd1, older but since removed, answers: ignored (§20)', event: ans5, expect: E.readAnswer(ans5, keys.sam, c4) },
+  { name: 'an answer to an ask without knowing the asking device: ignored', event: ans6, expect: E.readAnswer(ans6, keys.sam, c4) },
 ] }
 
+// §17.12, §17.2, §13, and which people a rumor belongs to
+const book = new Map()
+const decl = [[kp.K, E.peopleId([keys.sam, keys.lina])], [kp.K, E.peopleId([keys.sam, keys.agent])], [gk.K, 'g:pod-garden-7f3a']].map(([K, conv]) => ({ K, conv, expect: E.declare(book, K, conv) }))
+const peopleCases = [
+  { name: 'a message', rumor: r1 },
+  { name: 'a reaction in it (p of the people, e of the message)', rumor: rumor(keys.lina, 3500, [['e', r1.id], ['p', keys.sam], ['k', '14']], '👍', 7) },
+  { name: 'a deletion of my message', rumor: rumor(keys.sam, 3600, [['e', r1.id], ['p', keys.lina]], '', 5) },
+  { name: 'Notes to myself', rumor: rumor(keys.sam, 3600, [['p', keys.sam]], 'note') },
+  { name: 'an e-mail out: the belfry key is one more person of that message', rumor: rumor(keys.sam, 3600, [['p', keys.belfry], ['subject', 'Hi']], 'raw mail', 1301) },
+].map((c) => ({ ...c, expect: E.peopleOf(c.rumor) }))
+const clear = [[undefined, 3000], [3000, 2999], [3000, 3000], [3000, 3001]].map(([first, at]) => ({ first_key_at: first ?? null, at, expect: E.clearAfterKey(first, at) }))
+const limits = { people: [[100, false], [101, false], [101, true], [3, true]].map(([n, ever]) => ({ devices: n, ever_encrypted: ever, expect: E.peopleLimit(n, ever) })), group: [1000, 1001].map((n) => ({ devices: n, expect: E.groupLimit(n) })) }
+
 const doc = {
-  about: 'docs/encrypted.md (collective-belfry, with §16, §17 and §18): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of "belfry-vector:<name>").',
+  about: 'docs/encrypted.md (collective-belfry, with §16–§20): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of "belfry-vector:<name>").',
   keys, secrets, belfry: keys.belfry,
   lists: listCases, changes: changeCases, listed_before: { lists: [L1, L2, L3, L4, L5], cases: before }, signs_at: { lists: [L1, L2, L3], cases: signsAt }, listed_at: { lists: [L1, L2, L3], cases: listedAt },
   alias: aliases, lists_hash: lh,
   people_key: peopleKey, group_key: groupKey, people_messages: peopleMsgs, group_messages: groupMsgs,
-  packs: packCases, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
+  packs: packCases, declare: decl, people_of: peopleCases, clear_after_key: clear, limits,
+  signs_at_gap: { lists: [L1, L2, L4], cases: signsAtGap }, listed_at_gap: { lists: [L1, L2, L4], cases: listedAtGap }, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
 }
 writeFileSync(path.join(root, 'vectors/encrypted.json'), JSON.stringify(doc, null, 1) + '\n')
 console.log('vectors/encrypted.json', createHash('sha256').update(JSON.stringify(doc, null, 1) + '\n').digest('hex'))

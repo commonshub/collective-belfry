@@ -37,10 +37,15 @@ const nonceOf = (f: Fixed | undefined, i: number) => f?.nonce?.(i)
 
 // ---- §3 device lists ---------------------------------------------------------------------------
 
+/** §20 "three answers, never two": an account's devices are its list (a Chain), SERVICE (exactly the
+ *  belfry key or the groups key: its own device), or undefined (no list: Held). Never null. */
+export const SERVICE = 'service' as const
+export type Devices = Chain | typeof SERVICE | undefined
+
 export interface DeviceList { id: string; account: string; n: number; prev?: string; devices: string[]; readers: string[]; created_at: number }
 
 /** E as a device list of the belfry BELFRY, or null. Devices: 0 to 20 keys, each once; readers
- *  (["device", key, "reader"]) apart; §17.1 the account's own key as ["device", account, "self"]
+ *  (["device", key, "reader"]) apart, not counted in the 20; an unknown marker skips that entry; §17.1 the account's own key as ["device", account, "self"]
  *  (an agent, an own-key member) is one of its devices. */
 export function parseList(e: unknown, belfry: string): DeviceList | null {
   if (!validEvent(e) || e.kind !== LIST || e.pubkey !== belfry || e.content !== '') return null
@@ -51,7 +56,8 @@ export function parseList(e: unknown, belfry: string): DeviceList | null {
   const devices: string[] = [], readers: string[] = []
   for (const t of e.tags) {
     if (t[0] !== 'device') continue
-    if (!isKey(t[1]) || t.length > 3 || (t.length === 3 && t[2] !== 'reader' && t[2] !== 'self') || (t[2] === 'self' && t[1] !== account)) return null
+    if (!isKey(t[1]) || t.length > 3 || (t[2] === 'self' && t[1] !== account)) return null
+    if (t.length === 3 && t[2] !== 'reader' && t[2] !== 'self') continue // a marker this app doesn't know: that entry is skipped, the list stays
     const into = t[2] === 'reader' ? readers : devices
     if (devices.includes(t[1]) || readers.includes(t[1])) return null
     into.push(t[1])
@@ -106,7 +112,10 @@ export function changes(c: Chain): { list: string; n: number; added: string[]; r
 export function listedBefore(c: Chain, older: string, device: string): boolean {
   const first = (d: string) => c.lists.findIndex((l) => l.devices.includes(d))
   const a = first(older), b = first(device)
-  return a >= 0 && (b < 0 || a < b)
+  return a >= 0 && b >= 0 && a < b // §20: each device's first list ever; a device never listed has no "before"
+}
+/** The list right after index I is the next n (no list missing in between). */
+const nextKnown = (c: Chain, i: number) => { const nx = c.lists[i + 1]; return nx && nx.n === c.lists[i].n + 1 ? nx : undefined
 }
 
 export const current = (c: Chain) => c.lists[c.lists.length - 1]
@@ -115,25 +124,32 @@ export const listById = (c: Chain, id: string) => c.lists.find((l) => l.id === i
 export const receivers = (l: DeviceList) => [...l.devices, ...l.readers]
 
 /** §6: DEVICE may sign for the account at AT: on the current list, or on an earlier one when AT is
- *  not later than GRACE after the list that dropped it. Readers never sign as the account. */
-export function signsAt(c: Chain, device: string, at: number): boolean {
+ *  not later than GRACE after the list that dropped it. Readers never sign as the account.
+ *  Undefined: can't tell yet (the list right after its last one is missing, or the current list
+ *  may be behind a gap). */
+export function signsAt(c: Chain, device: string, at: number): boolean | undefined {
   if (current(c).devices.includes(device)) return true
   let last = -1
   c.lists.forEach((l, i) => { if (l.devices.includes(device)) last = i })
-  if (last < 0) return false
-  const dropped = c.lists[last + 1]
-  return !!dropped && at <= dropped.created_at + GRACE
+  if (last < 0) return c.gaps ? undefined : false
+  if (last === c.lists.length - 1) return true
+  const dropped = nextKnown(c, last)
+  if (!dropped) return undefined // V5: the list that dropped it isn't here: wait
+  return at <= dropped.created_at + GRACE
 }
 
-/** §16.2 for a group: DEVICE was on the account's list that was current at AT (with the grace). */
-export function listedAt(c: Chain, device: string, at: number): boolean {
+/** §16.2 for a group: DEVICE was on the account's list that was current at AT (with the grace).
+ *  Undefined: the list current at AT may be missing. */
+export function listedAt(c: Chain, device: string, at: number): boolean | undefined {
   let i = -1
   c.lists.forEach((l, j) => { if (l.created_at <= at) i = j })
-  if (i < 0) return false
+  if (i < 0) return c.lists[0].n === 1 ? false : undefined
+  const after = c.lists[i + 1]
+  if (after && after.n !== c.lists[i].n + 1) return undefined // a list between i and the next may be the one current at AT
   if (c.lists[i].devices.includes(device)) return true
-  // dropped by the list current at AT, within the grace
   const prev = c.lists[i - 1]
-  return !!prev && prev.devices.includes(device) && at <= c.lists[i].created_at + GRACE
+  if (!prev || prev.n !== c.lists[i].n - 1) return c.lists[i].n === 1 ? false : undefined
+  return prev.devices.includes(device) && at <= c.lists[i].created_at + GRACE
 }
 
 // ---- §5 names --------------------------------------------------------------------------------
@@ -163,10 +179,9 @@ export function keyRumor(maker: string, k: string, people: { account: string; li
 
 export type Verdict = 'ok' | 'wait' | 'no'
 
-/** §5 + §16.2 + §17: may RECEIVER (an account) take this people key rumor? CHAINS: the chain of an
- *  account (null only for the belfry key and the groups key: their own device without a list;
- *  undefined: not loaded, so Held). */
-export function acceptKeyRumor(r: Rumor, receiver: string, chains: (account: string) => Chain | null | undefined, now = now0()): Verdict {
+/** §5 + §16.2 + §17 + §20: may RECEIVER (an account) take this people key rumor? DEVICES: what an
+ *  account's devices are (a chain, SERVICE, or undefined: no list, so wait). */
+export function acceptKeyRumor(r: Rumor, receiver: string, devices: (account: string) => Devices, now = now0()): Verdict {
   if (r.kind !== KEY || !isKey(r.content) || r.created_at > now + FUTURE) return 'no'
   const K = oneTag(r, 'K')
   let pub: string
@@ -176,14 +191,14 @@ export function acceptKeyRumor(r: Rumor, receiver: string, chains: (account: str
   if (!people.includes(receiver) || people.some((p) => !isKey(p))) return 'no'
   let wait = false
   for (const a of people) {
-    if (r.pubkey === a) { const c = chains(a); if (c === null) return 'ok'; if (c === undefined) wait = true; continue } // an account with no list is its own device
+    const c = devices(a)
+    if (c === SERVICE) { if (r.pubkey === a) return 'ok'; continue } // the belfry or the groups key: its own device
     const named = r.tags.find((t) => t[0] === 'list' && t[1] === a)?.[2]
     if (!named) continue
-    const c = chains(a)
     if (c === undefined) { wait = true; continue }
-    const l = c && listById(c, named)
-    if (!l) { wait = true; continue } // the named list isn't loaded (or not chained) yet
-    if (l.devices.includes(r.pubkey)) return 'ok'
+    const l = listById(c, named)
+    if (!l) { wait = true; continue } // the named list isn't loaded yet
+    if (l.devices.includes(r.pubkey)) return 'ok' // a self account's key is on its own list (§20)
   }
   return wait ? 'wait' : 'no'
 }
@@ -274,12 +289,12 @@ export function openGroupEnvelope(device: Uint8Array, env: unknown, group: strin
   return { k: x.k, K: d, group, maker, account: env.pubkey, at: env.created_at, set: x.set }
 }
 /** §16.2: the maker was a device of the envelope's account at its date. */
-export function acceptGroupKey(key: GroupKey, chain: Chain | null | undefined, now = now0()): Verdict {
-  if (chain === undefined) return 'wait'
-  if (chain === null) return key.maker === key.account ? 'ok' : 'no'
+export function acceptGroupKey(key: GroupKey, devices: Devices, now = now0()): Verdict {
   if (key.at > now + FUTURE) return 'no'
-  if (listedAt(chain, key.maker, key.at)) return 'ok'
-  return chain.gaps ? 'wait' : 'no'
+  if (devices === SERVICE) return key.maker === key.account ? 'ok' : 'no'
+  if (devices === undefined) return 'wait'
+  const v = listedAt(devices, key.maker, key.at)
+  return v === undefined ? 'wait' : v ? 'ok' : 'no'
 }
 
 // ---- §6 messages -----------------------------------------------------------------------------
@@ -333,21 +348,21 @@ export function openGroupMessage(k: string, msg: unknown): { seal: NostrEvent; r
 /** §6 + §18.2 accept, people: the seal's signer signs for rumor.pubkey at the OUTER event's date
  *  (the relay vouches for it), the rumor is not newer than the outer + 5 minutes, and the rumor's
  *  people are the key's. */
-export function acceptPeopleMessage(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, keyPeople: string, chain: Chain | null | undefined): Verdict {
+export function acceptPeopleMessage(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, keyPeople: string, chain: Devices): Verdict {
   if (peopleOf(rumor) !== keyPeople) return 'no'
   return signer(outer, seal, rumor, chain)
 }
 /** §6 accept, group: the outer event is the rumor's author, the rumor's h is the key's group, the signer signs for the author. */
-export function acceptGroupMessage(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, group: string, chain: Chain | null | undefined): Verdict {
+export function acceptGroupMessage(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, group: string, chain: Devices): Verdict {
   if (outer.pubkey !== rumor.pubkey || oneTag(rumor, 'h') !== group || oneTag(outer, 'h') !== group) return 'no'
   return signer(outer, seal, rumor, chain)
 }
-function signer(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, chain: Chain | null | undefined): Verdict {
+function signer(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, chain: Devices): Verdict {
   if (rumor.created_at > outer.created_at + SKEW) return 'no'
-  if (chain === undefined) return 'wait'
-  if (chain === null) return seal.pubkey === rumor.pubkey ? 'ok' : 'no'
-  if (signsAt(chain, seal.pubkey, outer.created_at)) return 'ok'
-  return chain.gaps ? 'wait' : 'no'
+  if (chain === SERVICE) return seal.pubkey === rumor.pubkey ? 'ok' : 'no'
+  if (chain === undefined) return 'wait' // no list: kept and judged again, never the account key (§20)
+  const v = signsAt(chain, seal.pubkey, outer.created_at)
+  return v === undefined ? 'wait' : v ? 'ok' : 'no'
 }
 
 // ---- §5 picking the key to send with ---------------------------------------------------------
@@ -399,7 +414,7 @@ export function packs(sharer: Uint8Array, account: string, to: string, keys: Pac
 
 /** §16.3 + §17.6: the keys of a pack to this DEVICE of ACCOUNT, when its seal is signed by another device on
  *  the account's current list that was listed before this one. Keys that don't check out are left out; none when the pack doesn't. */
-export function openPack(device: Uint8Array, account: string, pack: unknown, chain: Chain | null | undefined): { from: string; keys: PackKey[] } | null {
+export function openPack(device: Uint8Array, account: string, pack: unknown, chain: Chain | undefined): { from: string; keys: PackKey[] } | null {
   if (!validEvent(pack) || pack.kind !== PACK) return null
   const me = getPublicKey(device)
   if (oneTag(pack, 'd') !== me || oneTag(pack, 'p') !== account) return null
@@ -436,17 +451,34 @@ export const answer = (device: Uint8Array, account: string, to: { ask: string } 
   signWith(device, { kind: ANSWER, created_at: at, tags: [['p', account], 'ask' in to ? ['e', to.ask] : ['device', to.device], ['answer', what]], content: '' }, aux)
 
 /** An ask or answer of ACCOUNT signed by a device on its current list: who asked / what was answered for whom. */
-export function readAsk(e: unknown, account: string, chain: Chain | null | undefined): { device: string; id: string; at: number } | null {
+export function readAsk(e: unknown, account: string, chain: Chain | undefined): { device: string; id: string; at: number } | null {
   if (!validEvent(e) || e.kind !== ASK || oneTag(e, 'p') !== account || !chain || !current(chain).devices.includes(e.pubkey)) return null
   return { device: e.pubkey, id: e.id, at: e.created_at }
 }
 /** ABOUT: the device the answer is for (an e answer: the asking device; runtime resolves it). §17.6: only
  *  a device listed before it counts. */
-export function readAnswer(e: unknown, account: string, chain: Chain | null | undefined, about?: string): { by: string; ask?: string; device?: string; answer: 'shared' | 'removed'; at: number } | null {
-  if (!validEvent(e) || e.kind !== ANSWER || oneTag(e, 'p') !== account || !chain || !chain.lists.some((l) => l.devices.includes(e.pubkey))) return null
+export function readAnswer(e: unknown, account: string, chain: Chain | undefined, about?: string): { by: string; ask?: string; device?: string; answer: 'shared' | 'removed'; at: number } | null {
+  // §20: only from a device on the current list (a since-removed device doesn't count)
+  if (!validEvent(e) || e.kind !== ANSWER || oneTag(e, 'p') !== account || !chain || !current(chain).devices.includes(e.pubkey)) return null
   const dev = oneTag(e, 'device') ?? about
-  if (dev && (chain.gaps || !listedBefore(chain, e.pubkey, dev))) return null
+  if (!dev || chain.gaps || !listedBefore(chain, e.pubkey, dev)) return null // an e answer needs its asking device
   const a = oneTag(e, 'answer'), ask = oneTag(e, 'e'), device = oneTag(e, 'device')
   if ((a !== 'shared' && a !== 'removed') || (!ask === !device) || (ask && !isKey(ask)) || (device && !isKey(device))) return null
   return { by: e.pubkey, ...(ask ? { ask } : {}), ...(device ? { device } : {}), answer: a, at: e.created_at }
 }
+
+// ---- §17.2, §17.12, §13 small rules --------------------------------------------------------
+
+/** §17.12: KEYS (K → the conversation it was first declared for) with a declaration added: the first stays. */
+export function declare(book: Map<string, string>, K: string, conv: string): boolean {
+  if (book.has(K)) return false
+  book.set(K, conv)
+  return true
+}
+/** §17.2: an unencrypted event in a conversation whose first key is dated FIRST_KEY_AT: shown
+ *  marked "Not encrypted" and never acting when dated after it (before: old history). */
+export const clearAfterKey = (firstKeyAt: number | undefined, at: number) => firstKeyAt !== undefined && at > firstKeyAt
+/** §4 + §17.2: a people conversation of N devices: encrypted (≤ 100), or over: not encrypted when it
+ *  never was, held when it was. A private group: refused over 1000. */
+export const peopleLimit = (n: number, everEncrypted: boolean): 'encrypt' | 'clear' | 'held' => (n <= MAX_PEOPLE_DEVICES ? 'encrypt' : everEncrypted ? 'held' : 'clear')
+export const groupLimit = (n: number): 'encrypt' | 'refuse' => (n <= MAX_GROUP_DEVICES ? 'encrypt' : 'refuse')
