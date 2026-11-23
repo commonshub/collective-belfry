@@ -20,7 +20,7 @@ import { guestInfo } from '../core/auth'
 import { useBranding } from '../core/branding'
 import { charter, charterExists, loadRemoteCharter, remoteAgreements, toAgree, isStale } from '../core/charter'
 import { threads, unreadTotal, convName } from '../core/dm'
-import { isPastEvent, myState, publicEvents } from '../core/events'
+import { allDaySpan, allDayWord, isPastEvent, myState, publicEvents } from '../core/events'
 import { askToJoin, reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
 import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, isWorking, workingSince, type CalEvent, type Group, type Task , hiddenFromMe } from '../core/model'
@@ -269,7 +269,7 @@ function EventLine({ e }: { e: CalEvent }) {
   return (
     <button className="home-row" onClick={() => go(eventPath(e))}>
       <DayChip d={e.start} />
-      <span className="t"><b>{e.title}</b><small>{[e.allDay ? 'All day' : hm(e.start), what, s].filter(Boolean).join(' · ')}</small></span>
+      <span className="t"><b>{e.title}</b><small>{[e.allDay ? allDayWord(e) : hm(e.start), what, s].filter(Boolean).join(' · ')}</small></span>
       <ChevronRightIcon />
     </button>
   )
@@ -514,7 +514,7 @@ function CalRow({ e }: { e: CalEvent }) {
   const where = e.meeting && e.links.length && !e.location ? 'Online meeting' : e.location
   return (
     <button className="cal-row" onClick={() => go(eventPath(e))}>
-      <span className="cal-time"><b>{e.allDay ? 'All day' : hm(e.start)}</b>{!e.allDay && e.end && <small>{hm(e.end)}</small>}</span>
+      <span className="cal-time">{e.allDay && allDaySpan(e) ? <><b>{allDaySpan(e)![0]}</b><small>→ {allDaySpan(e)![1]}</small></> : <><b>{e.allDay ? 'All day' : hm(e.start)}</b>{!e.allDay && e.end && <small>{hm(e.end)}</small>}</>}</span>
       <span className="cal-bar" style={{ background: `hsl(${hue(e.channels[0] ?? e.groupId)} 55% 45%)` }} />
       <span className="t"><b>{e.status === 'cancelled' && <span className="badge cancel">Cancelled</span>} {e.title}</b><small>{[where, ch, s ?? (e.visibility === 'public' ? 'open to all' : '')].filter(Boolean).join(' · ')}</small></span>
       <ChevronRightIcon />

@@ -329,6 +329,14 @@ export function utcToZoned(date: Date, tz: string): string {
 // day) in its time zone, the viewer's when it has none. Going on now = still upcoming.
 export const DEFAULT_LENGTH = 3600e3
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+/** SPEC 19.65: a whole-day event over several days shows its days ("Thu 12 Nov → Sat 14 Nov"),
+ *  never "All day"; one whole day still says "All day". The end date is the last day. */
+export const shortDay = (d: Date) => d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).replace(',', '')
+export function allDaySpan(e: Pick<CalEvent, 'allDay' | 'start' | 'end'>): [string, string] | null {
+  if (!e.allDay || !e.end || ymd(e.end) <= ymd(e.start)) return null
+  return [shortDay(e.start), shortDay(e.end)]
+}
+export const allDayWord = (e: Pick<CalEvent, 'allDay' | 'start' | 'end'>) => { const s = allDaySpan(e); return s ? `${s[0]} → ${s[1]}` : 'All day' }
 /** When E is over (ms). */
 export function eventEnd(e: Pick<CalEvent, 'allDay' | 'start' | 'end' | 'tz'>): number {
   if (e.allDay) {

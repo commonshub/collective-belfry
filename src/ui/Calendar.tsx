@@ -7,7 +7,7 @@ import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, typ
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import PlaceInput from './PlaceInput'
-import { claimSlug, isPastEvent, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
+import { allDayWord, claimSlug, isPastEvent, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
 import { back, fmtDay, go, Sheet, Btn, Form, up, useFormDraft } from './common'
 import { Tabs } from './ChannelInfo'
 import { CalendarIcon, ImageIcon } from './icons'
@@ -31,7 +31,7 @@ export function tzNote(e: CalEvent): string {
 }
 
 export const when = (e: CalEvent) => {
-  if (e.allDay) return 'All day'
+  if (e.allDay) return allDayWord(e) // several days: their days (SPEC 19.65)
   const tz = tzNote(e) ? e.tz : undefined
   const note = tzNote(e)
   return (e.end ? `${timeIn(e.start, tz)} – ${timeIn(e.end, tz)}` : timeIn(e.start, tz)) + (note ? ' ' + note : '')
