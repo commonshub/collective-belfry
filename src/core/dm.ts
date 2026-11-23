@@ -755,11 +755,11 @@ export function fileUrl(d: Dm): Promise<string> {
 export const previewOf = (d: Dm) => (d.kind === 15 ? (d.file ? d.file.name : 'File') : d.text)
 
 /** Send TEXT in CONV: a NIP-17 message, or an e-mail through the belfry. */
-export async function sendDm(conv: Conv, text: string, subject?: string) {
+export async function sendDm(conv: Conv, text: string, subject?: string, extra: string[][] = []) {
   await load()
   if (!isMail(conv)) {
     const to = peers(conv)
-    const rumor = rumorOf(14, to.filter((p) => p !== me()).map((p) => ['p', p]), text)
+    const rumor = rumorOf(14, [...to.filter((p) => p !== me()).map((p) => ['p', p]), ...extra], text) // (extra: ["preview","none"])
     items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 14, text, tags: rumor.tags, pending: true })
     save()
     try {

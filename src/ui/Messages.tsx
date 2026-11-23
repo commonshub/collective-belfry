@@ -1,3 +1,5 @@
+import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
+import { ComposerPreview, OgCard } from './LinkPreview'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { openProfile } from './Profile'
@@ -288,6 +290,7 @@ function FilesItem({ files, caption }: { files: Dm[]; caption?: Dm }) {
 function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttributes<HTMLDivElement> }) {
   const r = d.mine ? report(d.emailId) : undefined
   const end = d.kind === 1301 ? undefined : endRef(d.text) // a reference at the end: its preview box
+  const og = d.kind === 14 || d.kind === 4 ? outsideLink(d.text, d.tags) : undefined // an outside page: its preview (channels/og-dm)
   return (
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')} {...hold}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
@@ -296,6 +299,7 @@ function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttrib
         : end ? <>{end.rest && <RefText text={end.rest} className="dm-text" />}<RefPreview r={end.ref} /></>
         : d.text ? <RefText text={d.text} className="dm-text" /> : <div className="dm-text">(empty)</div>}
       {d.attachments && d.attachments.length > 0 && <Attachments d={d} />}
+      {og && <OgCard url={og} />}
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>
         {notSealed(d.conv, d) && <NotSealedMark />}
@@ -418,6 +422,9 @@ const kb = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(
 
 function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean }) {
   const [text, setText] = useState('')
+  // the first outside link: its preview above the field, ✕ = sent without one (channels/og-composer)
+  const dmLink = isMail(conv) ? undefined : outsideLink(text)
+  const [droppedLink, setDroppedLink] = useState('')
   const [subject, setSubject] = useState('')
   const [error, setError] = useState('')
   const [files, setFiles] = useState<File[]>([])
@@ -452,6 +459,8 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
   }
   const send = async () => {
     const t = text.trim()
+    const np = !!dmLink && droppedLink === dmLink
+    setDroppedLink('')
     if (busy || (!t && !files.length)) return
     setError('')
     if (tplace) messageSent(tplace)
@@ -466,7 +475,7 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
     setText('')
     if (needsSubject && !subject.trim()) { setText(t); setError('Give it a subject: it names the thread.'); return }
     try {
-      const target = await sendDm(conv, t, needsSubject ? subject : undefined)
+      const target = await sendDm(conv, t, needsSubject ? subject : undefined, np ? [NO_PREVIEW] : [])
       setSubject('')
       if (target && target !== conv) go('dm/' + enc(target)) // a new e-mail: its thread
     } catch (e) {
@@ -490,6 +499,7 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
           ))}
         </div>
       )}
+      {dmLink && droppedLink !== dmLink && <ComposerPreview url={dmLink} onDrop={() => setDroppedLink(dmLink)} />}
       <div className="bar">
         {canFiles && <button type="button" className="plus" aria-label="Add a picture, a file or a recording" onClick={() => setMenu(true)}>＋</button>}
         <textarea ref={ta} rows={1} placeholder={isMail(conv) ? (needsSubject ? 'Write an e-mail' : 'Reply by e-mail') : files.length ? 'Add a caption' : isNotes(conv) ? 'Note to myself' : 'Message'} value={text}

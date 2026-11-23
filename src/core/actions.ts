@@ -143,11 +143,11 @@ export const postGuestMessage = (groupId: string, text: string, files: File[]) =
   enqueue('groups', { kind: 9, content: text, tags: [['h', groupId]] }, files)
 
 /** A reply in the thread of message ROOT (NIP-22 comment, kept in the group by its `h` tag). */
-export const postThreadReply = (groupId: string, root: { id: string; pubkey: string; kind: number }, text: string, files: File[]) =>
+export const postThreadReply = (groupId: string, root: { id: string; pubkey: string; kind: number }, text: string, files: File[], extra: string[][] = []) =>
   enqueue('groups', {
     kind: 1111, content: text,
     tags: [['h', groupId], ['E', root.id, '', root.pubkey], ['K', String(root.kind)], ['P', root.pubkey],
-      ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey], ...hashtags(text).map((t) => ['t', t]), ...mentionTags(text, [root.pubkey])],
+      ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey], ...hashtags(text).map((t) => ['t', t]), ...mentionTags(text, [root.pubkey]), ...extra],
   }, files)
 
 /** Turn a channel's shared inbox on or off (admins: the bridge ignores anyone else's setting). */

@@ -216,6 +216,7 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
             <input className="input" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required placeholder="you@example.org" value={f.email} onChange={set('email')} /></label>
           <p className="hint small">We’ll send a 6-digit code to confirm it. Already have an account on {community}? Use its e-mail address.</p>
         </>}
+        {kind === 'topic' && <SummaryChoice value={f.summary ?? 'weekly'} onChange={(v) => setF((o) => ({ ...o, summary: v }))} />}
         {error && <div className="error" role="alert">{error}</div>}
         <button className="btn" disabled={!ready}>Start the {word}</button>
       </Form>
@@ -257,6 +258,20 @@ export function CardSettings({ group: gid, word }: { group: string; word: string
         </div>
       ) : <button type="button" className="link danger" onClick={() => setAsking(true)}>Retire this card</button>}
       <small className="hint">Only the {word}’s stewards and the belfry’s admins see this.</small>
+    </div>
+  )
+}
+
+/** "Summary by e-mail": Weekly (the default) or Monthly (cards v45: claim-channel, follow-channel-form). */
+export function SummaryChoice({ value, onChange }: { value: 'weekly' | 'monthly'; onChange: (v: 'weekly' | 'monthly') => void }) {
+  const opts: ['weekly' | 'monthly', string][] = [['weekly', 'Weekly'], ['monthly', 'Monthly']]
+  return (
+    <div className="field">
+      <span id="sum-l">Summary by e-mail</span>
+      <div className="seg2" role="radiogroup" aria-labelledby="sum-l">
+        {opts.map(([v, label]) => <button key={v} type="button" role="radio" aria-checked={value === v} className={value === v ? 'on' : ''} onClick={() => onChange(v)}>{label}</button>)}
+      </div>
+      <small className="hint">What was said, once a {value === 'weekly' ? 'week' : 'month'}. Change it any time.</small>
     </div>
   )
 }

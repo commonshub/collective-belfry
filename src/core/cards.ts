@@ -75,14 +75,14 @@ export function takeMid(group: string): Welcome | null {
 }
 
 // ---- what was typed, kept between the code's two steps and a closed tab ------------------------
-export interface CardForm { title: string; about: string; hashtag: string; name: string; email: string }
+export interface CardForm { title: string; about: string; hashtag: string; name: string; email: string; /** a topic: the e-mail summary (cards v45; the server's default: weekly) */ summary?: 'weekly' | 'monthly' }
 const FORM = 'belfry-card-form'
 export function keptForm(id: string): CardForm | null {
   try {
     const v = JSON.parse(localStorage.getItem(FORM) ?? 'null') as (CardForm & { id: string }) | null
     if (!v || v.id !== id) return null
     const s = (x: unknown, n: number) => (typeof x === 'string' ? x.slice(0, n) : '')
-    return { title: s(v.title, 80), about: s(v.about, 500), hashtag: s(v.hashtag, 30), name: s(v.name, 100), email: s(v.email, 200) }
+    return { title: s(v.title, 80), about: s(v.about, 500), hashtag: s(v.hashtag, 30), name: s(v.name, 100), email: s(v.email, 200), summary: v.summary === 'monthly' ? 'monthly' : 'weekly' }
   } catch { return null }
 }
 export const keepForm = (id: string, f: CardForm) => { try { localStorage.setItem(FORM, JSON.stringify({ id, ...f })) } catch { /* private mode */ } }
@@ -176,7 +176,7 @@ export async function hashtagState(hashtag: string): Promise<'free' | 'taken' | 
   } catch { return 'unknown' }
 }
 
-const claimBody = (kind: CardKind, f: CardForm) => ({ title: plainLabel(f.title).slice(0, 80), about: f.about.trim().slice(0, 500), ...(kind === 'topic' ? { hashtag: hashtagSlug(f.hashtag) } : {}) })
+const claimBody = (kind: CardKind, f: CardForm) => ({ title: plainLabel(f.title).slice(0, 80), about: f.about.trim().slice(0, 500), ...(kind === 'topic' ? { hashtag: hashtagSlug(f.hashtag), summary: f.summary === 'monthly' ? 'monthly' : 'weekly' } : {}) })
 
 /** Signed in: start the group or topic now. SEND is sync.signedFetch (signed as the account). */
 export async function claimSignedIn(id: string, kind: CardKind, f: CardForm, send: (url: string, method: string, body: unknown) => Promise<Response>): Promise<string> {
