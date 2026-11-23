@@ -13,8 +13,8 @@ import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOn
 import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
-import { Held as EncHeld, encCaughtUp, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
-import { encryptedFormat, formatReady } from './access'
+import { Held as EncHeld, repairKey, encCaughtUp, encDevice, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
+import { encryptedFormat, formatReady, freshFormat } from './access'
 import { KEY as ENC_KEY, MSG as ENC_MSG } from './enc/core'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
@@ -129,8 +129,7 @@ const channelSends = new Set<string>() // email-ids sent as a shared inbox, stil
  *  Resolves with the email-id; `report(id)` then follows its delivery. */
 export async function sendAsChannel(m: { channel: string; /** the channel's address before the @: its plain alias when it has one (model.mailLocal), else its id */ local: string; channelName: string; to: string; subject: string; text: string; inReplyTo?: string; /** the thread's Message-IDs before In-Reply-To, oldest first */ references?: string; cardId: string }): Promise<string> {
   // format 3: e-mail out waits for the mail server's format-3 build (the review's P1.5)
-  if (!isLocalOnly()) await formatReady()
-  if (writesFormat3()) throw new Error(heldText(new EncHeld('mail'), displayName))
+  if (!isLocalOnly() && (await freshFormat()) !== 1) throw new Error(heldText(new EncHeld('mail'), displayName)) // format 3, unknown or a stale 1: not the version-1 way
   const b = await bridge()
   if (!b) throw new Error('This belfry does not send e-mail yet.')
   // envelope (mail-from) and From header alike: the bridge checks they match (mail.outgoing)
@@ -301,6 +300,7 @@ async function unwrap(wrap: NostrEvent): Promise<NostrEvent | null> {
 }
 
 let busy = false
+let oldWaitSince: number | null = null
 async function process() {
   if (busy) return
   busy = true
@@ -309,8 +309,12 @@ async function process() {
     await whenEncLoaded() // the re-read's P1-4: keys and encrypted conversations first
     // on format 3 (or while unknown), old-style wraps wait for a complete read of my envelopes and
     // messages on this connection: a clear event must know whether its conversation is encrypted
-    const oldWait = !isLocalOnly() && encryptedFormat() !== 1 && !encCaughtUp()
-    if (oldWait) ensureEncCaughtUp()
+    // (only with a device key and a known format 3; after a minute the old messages show, their
+    // reactions and take-backs wait until caught up: the third read)
+    const waitOn = !isLocalOnly() && !!encDevice() && encryptedFormat() === 3 && !encCaughtUp()
+    if (waitOn) { ensureEncCaughtUp(); oldWaitSince ??= Date.now() } else oldWaitSince = null
+    const oldWait = waitOn && Date.now() - (oldWaitSince ?? Date.now()) < 60_000
+    const actsWait = waitOn
     const self = me()
     const todo = all(self).filter((e) => !e.pending && !wasSeen(e) && (
       ((e.kind === 1059 || e.kind === ENC_MSG) && e.tags.some((t) => t[0] === 'p' && t[1] === self)) || e.kind === 4))
@@ -338,6 +342,7 @@ async function process() {
         } else if (e.kind === 1059) {
           if (oldWait) continue // not marked seen: read once caught up
           const rumor = await unwrap(e)
+          if (rumor && actsWait && (rumor.kind === 7 || rumor.kind === 5)) continue // acts only once caught up (not marked seen)
           if (rumor) {
             rumor.id = getEventHash(rumor) // computed by the opener on the old path too (§6)
             // in a sealed conversation, after this device first saw it sealed: an old-style
@@ -381,7 +386,7 @@ export function startDms() {
   onOutbox((item, ev) => { if (item.dm) setTimeout(() => outSent(item.dm!), 0); if (item.dm) encSent(item.dm, ev.id) },
     // format 3: a copy or envelope refused for good (its date too old for the relay, §18.1): the
     // message is held again and rebuilt with fresh dates (P2-4)
-    (item) => { if (item.dm && (item.kind === ENC_MSG || item.kind === ENC_KEY)) void rebuildEnc(item.dm) })
+    (item) => { if (item.kind === ENC_KEY && item.signed && !(item.dm && encOut.has(item.dm))) void dropOutbox(item.localId).then(() => repairEnvelopes(item.signed!.id)); else if (item.dm && (item.kind === ENC_MSG || item.kind === ENC_KEY)) void rebuildEnc(item.dm) })
   // letterbox keys arrived: wraps naming them that were marked seen are read again
   onKeysArrived((lbs) => {
     const set = new Set(lbs)
@@ -486,11 +491,14 @@ async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv
   // format 3 (docs/encrypted.md): a people conversation is encrypted with its conversation key;
   // held with its text when it can't be. On a format-3 belfry an n: or m: conversation never takes
   // the version-1 or NIP-17 way (the review's P1.1, P1.2): the format is awaited first.
-  if (!isLocalOnly()) await formatReady() // (demo: always format 1)
-  // the format still unknown (no successful belfry.json read yet): held, never the old way (P1-2)
-  if (!isLocalOnly() && encryptedFormat() === undefined && conv && (conv.startsWith('n:') || conv.startsWith('m:'))) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('format'), displayName), upload })
-  if (writesFormat3() && conv && conv.startsWith('m:')) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('mail'), displayName), upload })
-  if (writesFormat3() && conv && conv.startsWith('n:')) {
+  // the format (demo: always 1): known, and a 1 read in the last 5 minutes (the third read's P1);
+  // a conversation this device has seen encrypted stays encrypted whatever the cache says (§17.2)
+  let f: 1 | 3 | undefined = 1
+  if (!isLocalOnly()) { await formatReady(); f = await freshFormat() }
+  const encConv = !!conv && conv.startsWith('n:') && isEncConv([...to, me()])
+  if (f === undefined && !encConv && conv && (conv.startsWith('n:') || conv.startsWith('m:'))) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('format'), displayName), upload })
+  if (f === 3 && conv && conv.startsWith('m:')) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('mail'), displayName), upload })
+  if ((f === 3 || encConv) && conv && conv.startsWith('n:')) {
     dmStep.set(rumor.id, 'encrypting')
     try { if (!(await sendEnc(rumor as unknown as Rumor, to, self, conv, upload))) return }
     catch (e) {
@@ -552,12 +560,22 @@ function encSent(rid: string, id: string) {
   const left = o.left.filter((x) => x !== id)
   if (!left.length) dropEncOut(rid); else keepEncOut(rid, { ...o, left })
 }
+/** N1: a key's envelope refused or dropped: the key's envelopes rebuilt now and queued alone. */
+async function repairEnvelopes(envId: string) {
+  for (const env of await repairKey(envId)) await enqueueSigned('main', env)
+}
 /** format 3: a copy or envelope of RID refused for good (or Retry): its other queued events go, and
  *  the message is held again and rebuilt with fresh dates. */
 async function rebuildEnc(rid: string) {
   const o = encOut.get(rid)
   if (!o) return false
-  for (const x of outboxItems().filter((q) => q.dm === rid)) await dropOutbox(x.localId)
+  // its own copies go; a key's envelopes still queued stay (other messages may need them); refused
+  // ones are replaced at once on their own (N1)
+  for (const x of outboxItems().filter((q) => q.dm === rid)) {
+    if (x.kind === ENC_KEY && x.status !== 'failed') continue
+    await dropOutbox(x.localId)
+    if (x.kind === ENC_KEY && x.signed) await repairEnvelopes(x.signed.id)
+  }
   dropEncOut(rid)
   const { left: _left, ...h } = o
   hold(h)
@@ -600,7 +618,7 @@ async function sendHeld(refresh = false) {
       sendAgain = false
       for (const h of [...held.values()]) {
         if (h.failed) continue // failed for good: stays held (Cancel gives the text back)
-        if (h.enc || ((writesFormat3() || (!isLocalOnly() && encryptedFormat() === undefined)) && (h.conv.startsWith('n:') || h.conv.startsWith('m:')))) { await sendHeldEnc(h); continue } // never the version-1 way (P1.2)
+        if (h.enc || ((writesFormat3() || (!isLocalOnly() && encryptedFormat() !== 1)) && (h.conv.startsWith('n:') || h.conv.startsWith('m:'))) || (h.conv.startsWith('n:') && isEncConv([...h.to, me()]))) { await sendHeldEnc(h); continue } // never the version-1 way (P1.2)
         if ((await sendMode(h.conv, fresh)) === 'undecided') continue
         await withHeldLock(async () => {
           // another tab of this device may have sent or cancelled it meanwhile
@@ -631,9 +649,11 @@ async function sendHeld(refresh = false) {
 }
 /** format 3: a held message encrypted again (lists refreshed); still not possible: its reason updated. */
 async function sendHeldEnc(h: Held) {
-  if (h.conv.startsWith('m:') && writesFormat3()) return // e-mail on format 3 waits for its build
-  if (encryptedFormat() === undefined) return // the format still unknown: waits for it
-  if (encryptedFormat() === 1 && h.enc) { // held only for the format, and it is 1: the version-1 way, as any message there
+  const f = isLocalOnly() ? 1 : await freshFormat()
+  const encConv = h.conv.startsWith('n:') && isEncConv([...h.to, me()])
+  if (h.conv.startsWith('m:') && f === 3) return // e-mail on format 3 waits for its build
+  if (f === undefined && !encConv) return // the format unknown (or a stale 1): waits for a fresh read
+  if (f === 1 && !encConv && h.enc) { // held only for the format, and it is 1: the version-1 way, as any message there
     held.delete(h.rumor.id); await kvDel(KV_HELD + h.rumor.id).catch(() => {})
     await deliver(h.rumor as unknown as NostrEvent, h.to, h.self, h.conv, h.upload)
     return
@@ -702,7 +722,8 @@ export function queueState(d: Dm): { waiting: boolean; error?: string; since: nu
 /** Put a refused message back in the outbox. */
 export async function retryDm(d: Dm) {
   // format 3: never the stale events again: rebuilt with fresh dates (P2-4)
-  if (await rebuildEnc(d.rid)) { const it = items.get(d.rid); if (it) { it.failed = undefined; it.pending = true }; save(); return }
+  // (only when one of its items was refused: while they are merely queued, Retry pushes them as before)
+  if (outboxItems().some((x) => x.dm === d.rid && x.status === 'failed') && await rebuildEnc(d.rid)) { const it = items.get(d.rid); if (it) { it.failed = undefined; it.pending = true }; save(); return }
   const queued = outboxItems().filter((x) => x.dm === d.rid)
   if (!queued.length) return
   for (const o of queued) await putOutbox({ ...o, status: 'queued', error: undefined })

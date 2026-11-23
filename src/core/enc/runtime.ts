@@ -148,16 +148,18 @@ let loading: Promise<void> | null = null
 /** Resolved once this device's keys and encrypted conversations are loaded (at once when the runtime doesn't run). */
 export const whenEncLoaded = () => loading ?? Promise.resolve()
 // the re-read's P1-4: old-style wraps wait until a complete read of my envelopes and messages on this connection
-let caughtUpOn = -2, catchingUp = false
+let caughtUpOn = -2, catchingUp = false, lastTry = 0
 export const encCaughtUp = () => caughtUpOn === connectionOf('main')
-/** Start that read once per connection; dm.ts processes again when it completed (onEncKeys). */
+/** Start that read once per connection (a failed one again after 10 s); dm.ts processes again
+ *  when it completed (onEncKeys). */
 export function ensureEncCaughtUp() {
-  if (!device || catchingUp || encCaughtUp()) return
+  if (!device || catchingUp || encCaughtUp() || Date.now() - lastTry < 10_000) return
   catchingUp = true
+  lastTry = Date.now()
   const conn = connectionOf('main')
-  void queryPaged('main', [{ kinds: [E.KEY, E.MSG], '#p': [me()] }], 8000, 100, 20000).then(async (got) => {
+  void queryPaged('main', [{ kinds: [E.KEY, E.MSG], '#p': [me()] }], 8000, 1000, 60000).then(async (got) => {
     catchingUp = false
-    if (!got) return
+    if (!got) { setTimeout(() => keyListeners.forEach((l) => l()), 10_500); return } // tried again at the next process
     addEvents(got)
     await takeEnvelopes()
     caughtUpOn = conn
@@ -369,6 +371,21 @@ export async function encryptFor(rumor: E.Rumor, people: string[]): Promise<{ ev
   out.push(...E.peopleMessage(device.secret, rumor, key.K, to, m))
   noteConv(conv, key.at)
   return { events: out, missing }
+}
+
+/** The third read's N1: one of my key's envelopes (ENV_ID) was refused or dropped: that key's
+ *  envelopes rebuilt now with fresh dates (same K, from `made`), to be queued on their own, so the
+ *  messages already sent under it stay readable whether or not anyone writes again. */
+export async function repairKey(envId: string): Promise<NostrEvent[]> {
+  if (!device) return []
+  for (const k of keys.values()) {
+    if (!k.unconfirmed?.some((x) => x.id === envId) || !k.made) continue
+    const fresh = E.peopleEnvelopes(device.secret, k.made.rumor, k.made.per)
+    k.unconfirmed = fresh
+    await saveKeys()
+    return fresh
+  }
+  return []
 }
 
 // tests against a local relay (TEST_RELAYS): public facts only, never a secret

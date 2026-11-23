@@ -47,8 +47,15 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
     if (typeof doc.nostr?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.nostr.pubkey)) { nostrKey = doc.nostr.pubkey; await kvSet('belfry-nostr-key', nostrKey) }
     if (typeof doc.groups_key?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.groups_key.pubkey)) { groupsPub = doc.groups_key.pubkey; await kvSet('belfry-groups-key', groupsPub) }
     // encrypted conversations (docs/encrypted.md §12, §17.13): format 3 once seen is kept for good
-    // a successful read decides the format (absent = 1); a failed one decides nothing
-    if (res.ok) setFormat(doc.encrypted?.format === 3 ? 3 : 1)
+    // a successful read decides the format: an explicit "encrypted" object, or none at all from a belfry
+    // this device never saw one from (an older server: 1). Once seen, its absence decides nothing (the ruling)
+    if (res.ok) {
+      const enc = doc.encrypted
+      if (enc && typeof enc === 'object') {
+        try { localStorage.setItem('belfry-enc-seen', '1') } catch { /* private mode */ }
+        if (enc.format === 3 || enc.format === 1) { setFormat(enc.format as 1 | 3); lastRead = Date.now() }
+      } else if ((() => { try { return localStorage.getItem('belfry-enc-seen') !== '1' } catch { return true } })()) { setFormat(1); lastRead = Date.now() }
+    }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
@@ -90,6 +97,18 @@ function setFormat(f: 1 | 3) {
   formatWaiters.forEach((w) => w()); formatWaiters = []
 }
 export const encryptedFormat = (): 1 | 3 | undefined => format
+// the third read: a format read more than 5 minutes ago may be stale (the belfry may have switched)
+let lastRead = 0 // ms of the last successful belfry.json read in this page
+/** The format to write now: 3 (kept for good), or 1 from a read in the last 5 minutes (read again
+ *  first when older, at most MS); undefined: unknown or a stale 1 (the caller holds). */
+export async function freshFormat(ms = 3000): Promise<1 | 3 | undefined> {
+  if (format === 3) return 3
+  if (Date.now() - lastRead < 5 * 60e3) return format
+  await Promise.race([loadAccessInfo(), new Promise((r) => setTimeout(r, ms))])
+  const now = format as 1 | 3 | undefined // (loadAccessInfo may have changed it)
+  return now === 3 ? 3 : Date.now() - lastRead < 5 * 60e3 ? now : undefined
+}
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && format !== 3 && Date.now() - lastRead > 5 * 60e3) void loadAccessInfo() })
 /** Resolved once the format is known (a successful belfry.json read now or before), or after MS
  *  (then still unknown: the caller holds). */
 export const formatReady = (ms = 5000) => format !== undefined ? Promise.resolve() : new Promise<void>((r) => { formatWaiters.push(r); setTimeout(r, ms) })
