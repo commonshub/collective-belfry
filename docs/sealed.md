@@ -441,6 +441,17 @@ whatever above says otherwise).
   waiting state is for a device OUTSIDE the head only. The waiting line cannot be per
   message (a wrap does not say its conversation): it is a count on top of Messages and one
   line above the composer of sealed conversations while any wrap waits.
+- *The server's guard for mail.* Before sealing a mail to a head that holds an unendorsed
+  joiner, the belfry checks that joiner against the account's live chat sessions; not one of
+  them, or the list cannot be read: 451, the sender tries again (the signer anchors what a
+  session asks, so a join could name a key nobody honest holds; the person's own devices
+  remove it when they next look).
+- *Known limits, accepted.* Until the joiner's hand-over lands, my other devices cannot read
+  what is sealed after its join; if it dies before handing the secret on, that lasts until it
+  is back or removed. People I write with see nothing of a join: the notice on my own devices
+  is the only alarm, and needs one of them opened. A join that races an older device's roster
+  can look like a switch. Joins never prune: at 20 devices a new one asks. A joiner with a
+  slow clock dates its roster at its prev's time.
 - *More readings* (Android's vectors, 2026-11-23). A stored pin whose path holds a join past
   its anchored head is cut back to before that join and followed from there (`moved`).
   "Fewer than 3 let in within 24 h", for a joiner's older keys: three OTHER devices, the

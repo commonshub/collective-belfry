@@ -737,6 +737,20 @@ def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender:
         raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
     rumor = mail_rumor(svc, raw, msg, sender, auth, pubkey)
     if chain is not None and chain.ready:
+        # §5.7: a device that added itself and that nobody confirmed yet must be a live chat
+        # session of this account, or the head letterbox may be one nobody honest holds (the
+        # signer anchors what a session asks). Not so, or not known: the sender tries again;
+        # the member's own devices remove such a joiner when they next look.
+        waiting = sealed._unendorsed(list(chain.rosters))
+        if waiting:
+            try:
+                live = sealed.live_devices(svc, pubkey)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("mail: the sessions of %s… could not be read: %r", pubkey[:8], exc)
+                raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
+            if not waiting <= live:
+                log.warning("mail: %s… has a self-added device without a session", pubkey[:8])
+                raise MailError(451, "4.3.0 Delivery failed here; try again later.")
         wrap = sealed.seal_to_letterbox(secret, rumor, pubkey, chain.lb)
     else:
         wrap = gift_wrap(secret, rumor, pubkey)

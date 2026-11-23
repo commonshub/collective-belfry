@@ -1008,3 +1008,26 @@ def test_a_device_that_added_itself_is_limited_until_an_older_device_signs():
     back = t.roster(L, A, 4, r3, "alice_lb3", [P, L], 1300)
     c = sealed.chain(t.anchor(A, r1, 1301, head=back), [r1, r2, r3, back])
     assert back["id"] not in ids(c) and c.devices == (t.PUB[P],)
+
+
+def test_mail_waits_while_a_device_that_added_itself_is_no_live_session(m, monkeypatch):
+    now = int(time.time())
+    root = sealed.sign(PHONE.secret, {"kind": sealed.ROSTER, "created_at": now - 100, "content": "",
+        "tags": [["p", ANA_PUB], ["n", "1"], ["lb", pub(LB)], ["device", pub(PHONE)], ["ready"]]})
+    new_lb = PrivateKey(b"\x15" * 32)
+    join = sealed.sign(STRANGER.secret, {"kind": sealed.ROSTER, "created_at": now - 50, "content": "",
+        "tags": [["p", ANA_PUB], ["n", "2"], ["prev", root["id"]], ["lb", pub(new_lb)],
+                 ["device", pub(PHONE)], ["device", pub(STRANGER)]]})
+    anchor = sealed.sign(ANA.secret, {"kind": sealed.ANCHOR, "created_at": now - 40, "content": "",
+        "tags": [["d", sealed.ANCHOR_D], ["root", root["id"]], ["head", join["id"]]]})
+    m.relay.events += [anchor, root, join]
+    sealed._cache.clear()
+    assert sealed.chain_for(m, ANA_PUB).lb == pub(new_lb)
+
+    monkeypatch.setattr(sealed, "live_devices", lambda svc, account: {pub(PHONE)})
+    assert deliver(m)[0] == 451  # the joiner is no session of hers: nothing is sealed to it
+    assert not [e for e in m.relay.events if e["kind"] == 1059]
+
+    monkeypatch.setattr(sealed, "live_devices", lambda svc, account: {pub(PHONE), pub(STRANGER)})
+    assert deliver(m)[0] == 250
+    assert ["lb", pub(new_lb)] in the_wrap(m)["tags"]
