@@ -27,6 +27,7 @@ import { GroupRequest } from './Requests'
 import { groupRequestsFor } from '../core/requests'
 import { ArchiveIcon, ChevronRightIcon, GearIcon, PeopleIcon, ThreadIcon, TrashIcon } from './icons'
 import { ArchivedBar } from './GroupPage'
+import { CardSettings } from './Card'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
 
@@ -246,6 +247,7 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+            <CardSettings group={g.id} word={g.isPod ? 'group' : 'topic'} />
             <div className="field who-reads"><span className="sec-title">{g.isPod ? 'Who can join' : 'Who can read it'}</span>
               <div className="act-group vis-rows" role="radiogroup" aria-label={g.isPod ? 'Who can join' : 'Who can read it'}>
                 {(g.isPod ? POD_VIS : VIS.filter(([v]) => v !== 'closed' || g.id !== 'general')).map(([v, Icon, title, line]) => (

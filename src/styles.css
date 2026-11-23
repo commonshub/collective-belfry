@@ -546,6 +546,20 @@ a.chip { text-decoration: none; color: inherit; }
 .gmid-about > * + *::before { content: ' '; }
 .gmid-more { font-size: 15px; font-weight: 600; padding: 0; background: none; border: 0; cursor: pointer; }
 .gmid-facts { font-size: 15px; color: var(--muted); padding: 6px 0 0; }
+.gmid-welcome { margin: 10px 0 0; padding: 10px 12px; border-radius: 14px; background: #E8F3EA; color: #1E5B2E; font-size: 15px; line-height: 20px; }
+.gmid-welcome b { display: block; }
+@media (prefers-color-scheme: dark) { .gmid-welcome { background: #16301D; color: #A8D5B0; } .card-tag.free { color: #6fcf8a; } .card-tag.taken, .card-tag.invalid { color: #f87171; } }
+.card-settings { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+.card-settings p { margin: 0; }
+.card-qr { display: flex; flex-direction: column; gap: 10px; align-items: center; align-self: stretch; }
+.card-qr img { background: #fff; border-radius: 8px; }
+.card-page .card-who { margin: -8px 0 16px; }
+.card-hash { display: flex; align-items: center; gap: 6px; }
+.card-hash b { font-size: 20px; color: var(--muted); }
+.card-hash .input { flex: 1; }
+.card-tag { min-height: 18px; font-size: 13px; color: var(--muted); }
+.card-tag.free { color: #1E7B3A; }
+.card-tag.taken, .card-tag.invalid { color: #b91c1c; }
 .gmid-handle { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 2px; }
 .gmid-bar { width: 40px; height: 5px; border-radius: 3px; background: var(--line); }
 

@@ -19,7 +19,8 @@ import { accessState, demoSetAgents, isAdmin, loadAccessInfo, myGrant, onAccessI
 import { wipe } from '../core/db'
 import { accounts, activeId, allAccounts, discardActiveFor, dropActive, forgetAll, noteAccount, readOf } from '../core/accounts'
 import { roleBadge } from '../core/roles'
-import { replyRoot, archivedGroups, deletedGroup, group, groups, profiles, nameOf } from '../core/model'
+import { replyRoot, archivedGroups, deletedGroup, displayName, group, groups, profiles, nameOf } from '../core/model'
+import { createChannel, createPod } from '../core/actions'
 import { addEvents, hasEvent, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
@@ -58,7 +59,12 @@ import { openProfile, ProfileView } from './Profile'
 import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
 import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBar, TodosScreen, demoApplyStatus, placeOf, placesOn, townPath } from './Places'
+import { CardScreen } from './Card'
+import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
+
+// demo: a card's claim makes its group or topic here, as the belfry's groups key would
+if (getBackend() === 'demo') setDemoMake(async (kind, f) => kind === 'topic' ? createChannel(f.title.trim(), f.about.trim(), hashtagSlug(f.hashtag)) : createPod(f.title.trim(), f.about.trim(), 'general', { closed: false, prompt: '' }))
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
@@ -66,9 +72,11 @@ export function App() {
   const [phase, setPhase] = useState<Phase>({ p: 'loading' })
   const backend = getBackend()
   const [signInFirst, setSignInFirst] = useState(false)
+  const [, setCardTick] = useState(0)
 
   useEffect(() => {
     void (async () => {
+      takeCardFromUrl() // a printed card (#/g/<id>): kept until it is dealt with
       takeInviteFromUrl() // a guest link (#/join/<token>): kept until it is used
       takeLinkSecret() // Link a phone (sealed.md §5.2): #l=<secret>, kept until this device has asked
       // back from the village sign-in page?
@@ -151,6 +159,10 @@ export function App() {
   const op = openingNow()
   const veil = op ? <OpeningScreen name={op.name} /> : null
   if (phase.p === 'loading') return veil
+  // a printed card opened by someone who isn't signed in: start its group, or its guest link
+  if (phase.p === 'out' && cardNow() && !signInFirst && !phase.error)
+    return <CardScreen id={cardNow()} onIn={directIn} onStarted={() => {}} onClose={() => setCardTick((n) => n + 1)}
+      onInvite={() => { setOpening({}); setCardTick((n) => n + 1) }} />
   if (phase.p === 'out' && pendingInvite() && !signInFirst && !phase.error)
     return <>{veil}<OpenInvite token={pendingInvite()} backend={backend} onSignIn={() => setSignInFirst(true)}
       onJoined={async (s) => { await wipe(); await enter(s) }} /></>
@@ -239,6 +251,9 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   }, [opening, ready, status.access])
 
   const route = useRoute()
+  const [card, setCard] = useState(cardNow)
+  // a card's address opened while the app runs (a link in a message, the address bar)
+  useEffect(() => { if (route[0] === 'g' && route[1]) { const c = takeCardFromUrl(); if (c) setCard(c) } }, [route[0], route[1]])
   const wide = useWide()
   const three = useWide(WIDE3)
   const drawer = useDrawer()
@@ -316,11 +331,13 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   if (route[0] === 'login') { replaceHash('#/home'); return null }
   // a member link just used: their name and username first (board onboarding/member-link-name)
   if (places && askName && !reading()) return <MemberNameScreen email={askName.email} onDone={() => nameTick((x) => x + 1)} />
-  if (places && welcomeDue() && route[0] !== 'welcome') { replaceHash('#/welcome'); return null }
+  if (places && welcomeDue() && route[0] !== 'welcome' && !card) { replaceHash('#/welcome'); return null }
   const [section = places ? 'home' : 'c', a, b, c, d] = route
   let view
   let pane // a large screen: an open thread in a third column, its channel stays in the middle
-  if (places && section === 'home') view = <HomeScreen />
+  if (card) view = <CardScreen id={card} signedIn={profiles().get(me())?.name || session.email || displayName(me())} onIn={() => {}}
+    onInvite={(g) => { setCard(''); go('c/' + encodeURIComponent(g)) }} onStarted={(g) => { setCard(''); go('c/' + encodeURIComponent(g)) }} onClose={() => setCard('')} />
+  else if (places && section === 'home') view = <HomeScreen />
   else if (places && section === 'calendar') view = <CalendarPlace />
   else if (places && section === 'groups') view = <GroupsScreen />
   else if (places && section === 'todos') view = <TodosScreen />

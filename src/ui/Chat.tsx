@@ -40,6 +40,7 @@ const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
 import { ArchiveIcon, AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon, PlusIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
+import { takeMid } from '../core/cards'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
 import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, reading, useGuestMode } from '../core/guestmode'
@@ -490,6 +491,8 @@ function NewChannel({ onClose, category }: { onClose: () => void; /** made from 
 // ---- a channel's messages ------------------------------------------------------
 
 export function ChannelView({ id, topic, focus, activeThread, menu = false, mid = false }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string; /** an old link to its info: the header's menu open */ menu?: boolean; /** half pulled down (a card's first open) */ mid?: boolean }) {
+  // the first open after a printed card: half pulled down, with a welcome (core/cards.ts)
+  const [welcome] = useState(() => takeMid(id))
   const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
   const g = group(id)
@@ -510,7 +513,7 @@ export function ChannelView({ id, topic, focus, activeThread, menu = false, mid 
   return (
     <div className="screen">
       {/* ☰ · the name and its subtitle · search; notifications and settings are rows of its menu (2026-11-17) */}
-      <ChannelHeader id={id} topic={topic} onTopic={openTopic} initialOpen={menu} initialMid={mid}
+      <ChannelHeader id={id} topic={topic} onTopic={openTopic} initialOpen={menu} initialMid={mid || !!welcome} welcome={welcome ?? undefined}
         left={<LeftButton id={id} />}
         right={<button className="icon-btn" aria-label={`Search ${groupName(id)}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>} />
       {g?.isProposal && <SiteBar groupId={id} />}

@@ -17,13 +17,15 @@ import { ChannelMenu, ChannelSubtitle } from './ChannelMenu'
 import { Markdown } from './markdown'
 import { ChevronDownIcon, ChevronUpIcon, PodShape } from './icons'
 
-export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = false, initialMid = false }: {
+export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = false, initialMid = false, welcome }: {
   id: string; left: ReactNode; right: ReactNode; topic?: string; onTopic: (t?: string) => void
   /** an old link to the channel's info: open the menu */
   initialOpen?: boolean
   /** half pulled down (cards canvas, claim-done / join-visitor): the description, who looks after
    *  it and how many, ⌃ ⌄; the chat stays under it. Touching the chat or the composer folds it. */
   initialMid?: boolean
+  /** the first open after a printed card: who is welcomed (cards canvas claim-done) */
+  welcome?: 'started' | 'joined'
 }) {
   useVersion()
   const g = group(id)
@@ -114,7 +116,7 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
         <SaveFailedIcon id={id} />
         {right}
       </div>
-      {mid && !open && g && <GroupMid g={g} onFold={() => setMid(false)} onMore={() => { setMid(false); setOpen(true) }} />}
+      {mid && !open && g && <GroupMid g={g} welcome={welcome} onFold={() => setMid(false)} onMore={() => { setMid(false); setOpen(true) }} />}
       <SummaryLine id={id} open={open} onToggle={toggle} topic={topic} onTopic={onTopic} pull={pull} />
       <div className="chead-panel" style={{ height }} aria-hidden={height === 0}>
         <div className="chead-more-wrap" style={{ maxHeight: roomH }}>
@@ -139,12 +141,15 @@ export function midFacts(g: Group, mine = me()): string {
 }
 
 /** The mid part: two lines of description (More opens the whole menu), the facts, ⌃ folds, ⌄ opens. */
-function GroupMid({ g, onFold, onMore }: { g: Group; onFold: () => void; onMore: () => void }) {
+function GroupMid({ g, welcome, onFold, onMore }: { g: Group; welcome?: 'started' | 'joined'; onFold: () => void; onMore: () => void }) {
   return (
     <div className="gmid">
       {g.about && <Markdown className="gmid-about" text={g.about} />}
       {g.about && <button className="link gmid-more" onClick={onMore}>More</button>}
       <div className="gmid-facts">{midFacts(g)}</div>
+      {welcome && <div className="gmid-welcome" role="status"><b>Welcome to {g.isPod ? g.name : '# ' + g.name}!</b> {g.isPod
+        ? (welcome === 'started' ? 'You started it. Say hi and share something to get it going: a photo, a tip, a question.' : 'Say hi and share something: a photo, a tip, a question.')
+        : (welcome === 'started' ? 'You started it. Share something to get it going: a link, a photo, a question.' : 'No introductions needed: share what you know.')}</div>}
       <div className="gmid-handle">
         <button className="icon-btn" aria-label="Fold up" onClick={onFold}><ChevronUpIcon /></button>
         <span className="gmid-bar" aria-hidden="true" />
