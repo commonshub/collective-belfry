@@ -180,7 +180,7 @@
 # this host's paths under /console; sign-in goes through pass.<domain>/me.
 belfry.{$BELFRY_DOMAIN} {
 	import security
-	import limit console-forms 60 1m /members/* /website/* /agents/*
+	import limit console-forms 60 1m /members/* /website/* /agents/* /cards/*
 	# sign-in with a passkey (passkeys.py): options and verify, per address
 	import limit console-passkey 30 1m /connect/passkey/* /me/login/passkey/*
 	import limit setup-code 10 1m /setup/code
@@ -447,7 +447,10 @@ chat.{$BELFRY_DOMAIN} {
 		# a ticket's QR (checkin.py): the event, with the check-in card for those who check in
 		@ticket path_regexp ticket ^/events/([A-Za-z0-9_-]{1,80})/t/([a-z2-7]{16})/?$
 		redir @ticket /#/events/{re.ticket.1}/t/{re.ticket.2} 302
-		@fresh path / /index.html /sw.js /login/*
+		# a printed card (chat.<domain>/g/<id>, cards.py: six letters and digits, either case):
+		# the page itself answers there too, with no redirect, and reads the id from the path
+		# (the page rule below serves it; this only keeps it out of caches)
+		@fresh path / /index.html /sw.js /login/* /g/*
 		header @fresh Cache-Control "no-cache"
 		root * /srv/apps/chat
 		# a build's files have their hash in the name: they never change, and one that is gone
