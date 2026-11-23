@@ -1175,6 +1175,15 @@ class Limiter:
             q.append(t)
             return True
 
+    def full(self, key: str) -> bool:
+        """Whether KEY is at its limit now, without counting this look as an event."""
+        t = time.monotonic()
+        with self._lock:
+            q = self._seen.get(key)
+            while q and t - q[0] > self.seconds:
+                q.popleft()
+            return bool(q) and len(q) >= self.events
+
     def reset(self) -> None:
         with self._lock:
             self._seen.clear()

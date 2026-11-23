@@ -711,6 +711,8 @@ services:
       BRIDGE_CLIENT_ID: belfry-authentik
       EVENT_START: ${EVENT_START:-2027-01-25}
       SITE_URL: ${SITE_URL:-}
+      # the venue WiFi, never paused for wrong sign-in codes (connect.py); the proxy's list too
+      RATE_LIMIT_EXEMPT: ${RATE_LIMIT_EXEMPT:-}
       # the apex homepage: empty (start page), https://… (proxy), nsite, nsite:<npub>[/<name>]
       HOMEPAGE: ${HOMEPAGE:-}
       THEME: ${THEME:-}

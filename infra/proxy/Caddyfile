@@ -60,6 +60,32 @@
 	}
 	encode zstd gzip
 	import errors
+	import access_log
+}
+
+# Who asked for what (remote IP, host, method, path, status, user agent), for finding abuse:
+# docker compose exec proxy tail -f /data/access.log (all hosts in one file, JSON lines). Kept
+# 14 days at most, as the privacy notice's server logs; the data volume isn't backed up. Long
+# tokens in paths and query strings (sign-in links, OAuth codes) are cut, and the Referer and
+# response headers left out, so the log holds nothing that signs anyone in.
+(access_log) {
+	log {
+		output file /data/access.log {
+			roll_size 50MiB
+			roll_keep 10
+			roll_keep_for 336h
+		}
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "[A-Za-z0-9_.~%-]{20,}" "…"
+				request>headers>Referer delete
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+				resp_headers delete
+			}
+		}
+	}
 }
 
 # Browsers (Accept: text/html) get errors/error.html with the status code; API clients, wallets

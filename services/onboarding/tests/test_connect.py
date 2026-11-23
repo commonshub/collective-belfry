@@ -86,7 +86,9 @@ def test_a_member_asks_the_admins(web, odoo, relay):
     assert "Your Bank" not in page and "chat.example.org/app" in page
     assert "isn't approved yet" in page and "Other ways to sign in" in page
     f = flow_of(page)
-    assert web.post("/connect/send", json={**f, "email": "nobody@example.org"}).status_code == 404
+    # an address that is nobody's is answered like a member's: the page doesn't tell who is one
+    nobody = web.post("/connect/send", json={**f, "email": "nobody@example.org"})
+    assert nobody.status_code == 200 and nobody.json() == {"to": "nobody@example.org"}
     web.post("/connect/send", json={**f, "email": "bob@example.org"})
     wrong = web.post("/connect/verify", json={**f, "code": "000000"})
     assert wrong.status_code == 422 and "not right" in wrong.json()["message"]

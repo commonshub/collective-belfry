@@ -102,6 +102,26 @@ class TestKeyCode(BelfryCase):
         self.assertEqual(self.Code.belfry_key_code_verify('hal@example.org', KEY, self._code('hal@example.org'))['state'],
                          'expired')
 
+    def test_ten_wrong_codes_stop_the_address_for_a_day(self):
+        """A script asked for codes with a new key each time and guessed (test belfry, 2026-11-23)."""
+        warnings = lambda: self.env['mail.mail'].sudo().search(  # noqa: E731
+            [('model', '=', 'belfry.key.code'), ('subject', 'ilike', 'trying to sign in')])
+        for key in (KEY, OTHER):
+            self.Code.belfry_key_code_send('ivy@example.org', key)
+            code = self._code('ivy@example.org')
+            wrong = '000000' if code != '000000' else '000001'
+            for _ in range(5):
+                self.assertEqual(self.Code.belfry_key_code_verify('ivy@example.org', key, wrong)['state'], 'wrong_code')
+        self.assertEqual(len(warnings()), 1, "the owner hears of it once")
+        self.assertIn('two-step verification', warnings().body_html)
+        third = 'c' * 64
+        self.assertEqual(self.Code.belfry_key_code_send('ivy@example.org', third),
+                         {'state': 'too_many', 'retry_after': 24 * 3600})
+        self.assertEqual(self.Code.belfry_key_code_verify('ivy@example.org', third, '123456'), {'state': 'expired'})
+        self.assertEqual(len(warnings()), 1)
+        self.assertEqual(self.Code.belfry_key_code_send('jo@example.org', third)['state'], 'sent',
+                         "other addresses go on")
+
     def test_input_and_access(self):
         with self.assertRaises(UserError):
             self.Code.belfry_key_code_send('not-an-address', KEY)

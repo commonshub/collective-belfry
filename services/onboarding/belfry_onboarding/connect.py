@@ -26,6 +26,7 @@ import base64
 import hashlib
 import hmac
 import html
+import ipaddress
 import logging
 import secrets
 import threading
@@ -38,7 +39,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, claim, community, console, device, mypass, nostr, passkeys, setup, theme
+from . import (
+    apps,
+    claim,
+    community,
+    console,
+    device,
+    mypass,
+    nostr,
+    passkeys,
+    sales,
+    setup,
+    theme,
+)
 from .clients.keycast import ClientKeyTaken
 from .clients.odoo import OdooError
 from .core import Services
@@ -143,19 +156,58 @@ def outcome(svc: Services, f: dict[str, Any], member: dict[str, Any]) -> dict[st
     return {"next": "pending", "others": others}
 
 
-def send_code(svc: Services, f: dict[str, Any], email: str) -> dict[str, Any]:
+CODE_TRIES = 5  # wrong codes before a code ends (the register's)
+SENDS_PER_EMAIL = 5  # codes for one address in half an hour (the register's)
+# Wrong codes from one network (an IPv6 /64) within an hour: then it waits the hour out. The
+# venue's WiFi (RATE_LIMIT_EXEMPT) never waits, since everyone there shares its address; the
+# register's limit per address (10 wrong a day) holds there too.
+WRONG_PER_NETWORK = 10
+_wrong_networks = sales.Limiter(WRONG_PER_NETWORK, 3600)
+_nobody_sends = sales.Limiter(SENDS_PER_EMAIL, 1800)  # "codes" for addresses of nobody
+
+
+def _network(svc: Services, ip: str) -> str:
+    """The key IP counts under for WRONG_PER_NETWORK, or "" when it is never paused."""
+    if not ip:
+        return ""
+    try:
+        addr = ipaddress.ip_address(ip)
+        exempt = svc.settings.rate_limit_exempt.split()
+        if any(addr in ipaddress.ip_network(n, strict=False) for n in exempt):
+            return ""
+    except ValueError:
+        pass
+    return sales.ip_tag(svc, ip)
+
+
+def _check_network(net: str) -> None:
+    if net and _wrong_networks.full(net):
+        raise ConnectError(429, "Too many wrong codes from your network. Try again in an hour.")
+
+
+def _not_right(left: int) -> ConnectError:
+    return ConnectError(
+        422, f"That code is not right ({left} {'try' if left == 1 else 'tries'} left)."
+    )
+
+
+def send_code(svc: Services, f: dict[str, Any], email: str, ip: str = "") -> dict[str, Any]:
+    """Mail a code to EMAIL when it is a member's. Answers the same when it is nobody's, so the
+    page doesn't tell who is a member: no mail goes out, and every code is wrong."""
+    _check_network(_network(svc, ip))
+    email = email.strip()
+    if "@" not in email[1:-1]:
+        raise ConnectError(422, "Type your e-mail address.")
     member = apps.signin_member(svc, email)
     if member is None:
         # a buyer whose address is not proven yet: this sign-in is its proof (sales.py)
-        from . import sales
-
         member = sales.pending_member(svc, email)
     if member is None:
-        raise ConnectError(
-            404,
-            f"No member of {svc.settings.nip05_domain} has this address. Check it, or ask "
-            "to join first.",
-        )
+        email = email.lower()
+        if not _nobody_sends.allow(email):
+            raise ConnectError(429, TOO_MANY_CODES)
+        f["pending"] = {"email": email, "nobody": True, "tries": 0}
+        return {"to": email}
     try:
         row = svc.odoo.call(
             "belfry.key.code", "belfry_key_code_send", [member["email"], f["session"], False]
@@ -163,15 +215,37 @@ def send_code(svc: Services, f: dict[str, Any], email: str) -> dict[str, Any]:
     except OdooError as exc:
         raise ConnectError(502, "The code could not be sent. Try again in a moment.") from exc
     if row.get("state") == "too_many":
-        raise ConnectError(429, "Too many codes for this address. Try again in half an hour.")
+        raise ConnectError(429, TOO_MANY_CODES)
     f["pending"] = member
     return {"to": member["email"]}
 
 
-def verify_code(svc: Services, f: dict[str, Any], code: str) -> dict[str, Any]:
+# the same for a member's address and anyone else's, and for the register's half-hour and day
+TOO_MANY_CODES = (
+    "Too many codes for this address. Try again later, or sign in with a passkey or your pass."
+)
+
+
+def verify_code(svc: Services, f: dict[str, Any], code: str, ip: str = "") -> dict[str, Any]:
+    net = _network(svc, ip)
+    _check_network(net)
+    try:
+        return _verify(svc, f, code)
+    except ConnectError as exc:
+        if exc.status == 422 and net:
+            _wrong_networks.allow(net)  # counts this wrong code
+        raise
+
+
+def _verify(svc: Services, f: dict[str, Any], code: str) -> dict[str, Any]:
     member = f.get("pending")
     if not member:
         raise ConnectError(409, "Type your e-mail address first.")
+    if member.get("nobody"):
+        if member["tries"] >= CODE_TRIES:
+            raise ConnectError(410, "That code expired. Send a new one.")
+        member["tries"] += 1
+        raise _not_right(CODE_TRIES - member["tries"])
     if member.get("unverified"):
         return _verify_unproven(svc, f, member, code)
     try:
@@ -184,10 +258,7 @@ def verify_code(svc: Services, f: dict[str, Any], code: str) -> dict[str, Any]:
         raise ConnectError(502, "The code could not be checked. Try again.") from exc
     state = row.get("state")
     if state == "wrong_code":
-        left = int(row.get("tries_left") or 0)
-        raise ConnectError(
-            422, f"That code is not right ({left} {'try' if left == 1 else 'tries'} left)."
-        )
+        raise _not_right(int(row.get("tries_left") or 0))
     if state == "expired":
         raise ConnectError(410, "That code expired. Send a new one.")
     # the right code for an address whose member has their own key: Odoo answers other_key
@@ -210,10 +281,7 @@ def _verify_unproven(
         raise ConnectError(502, "The code could not be checked. Try again.") from exc
     state = row.get("state")
     if state == "wrong_code":
-        left = int(row.get("tries_left") or 0)
-        raise ConnectError(
-            422, f"That code is not right ({left} {'try' if left == 1 else 'tries'} left)."
-        )
+        raise _not_right(int(row.get("tries_left") or 0))
     if state != "ok":
         raise ConnectError(410, "That code expired. Send a new one.")
     # the code went to this address: it proves this address, for this contact only
@@ -481,7 +549,7 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
 
 <section data-step="code" hidden>
 <h1>Check your inbox</h1>
-<p class="muted">Type the 6-digit code we sent to <strong class="to"></strong>.</p>
+<p class="muted">If <strong class="to"></strong> is a member's address, we sent it a 6-digit code. Type it here.</p>
 <form novalidate><div class="otp">{boxes}</div><p class="err" role="alert"></p>
 <div class="actions"><button class="btn" type="submit">Verify</button>
 <button type="button" class="quiet" data-again>Send a new code</button></div></form>
@@ -608,7 +676,11 @@ def register(app: FastAPI) -> None:
             f, body = await body_of(request)
             return JSONResponse(
                 await run_in_threadpool(
-                    send_code, svc(request), f, str(body.get("email", ""))[:254]
+                    send_code,
+                    svc(request),
+                    f,
+                    str(body.get("email", ""))[:254],
+                    sales.client_ip(request),
                 )
             )
         except ConnectError as exc:
@@ -620,7 +692,9 @@ def register(app: FastAPI) -> None:
         try:
             f, body = await body_of(request)
             code = "".join(c for c in str(body.get("code", "")) if c.isdigit())[:6]
-            member = await run_in_threadpool(verify_code, services, f, code)
+            member = await run_in_threadpool(
+                verify_code, services, f, code, sales.client_ip(request)
+            )
             result = await run_in_threadpool(outcome, services, f, member)
         except ConnectError as exc:
             return fail(exc)

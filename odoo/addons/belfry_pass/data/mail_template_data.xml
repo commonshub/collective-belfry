@@ -142,4 +142,47 @@
 </div>
         </field>
     </record>
+
+    <!-- Sent once when WRONG_PER_EMAIL wrong codes were typed for an address within a day
+         (belfry_key_code.py _belfry_warn): its codes stop for the rest of that day. -->
+    <record id="mail_template_key_code_warning" model="mail.template">
+        <field name="name">Open Source Village: someone is trying to sign in as you</field>
+        <field name="model_id" ref="belfry_pass.model_belfry_key_code"/>
+        <field name="subject">Someone is trying to sign in to Open Source Village as you</field>
+        <field name="email_from">{{ object.env.company.email_formatted or user.email_formatted }}</field>
+        <field name="use_default_to" eval="False"/>
+        <field name="email_to">{{ object.email }}</field>
+        <field name="auto_delete" eval="False"/>
+        <field name="body_html" type="html">
+<t t-set="public_url" t-value="(object.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')"/>
+<t t-set="brand_url" t-value="public_url + '/brand'"/>
+<div style="margin: 0; padding: 32px 12px; background-color: #2b3a31; font-family: Geist, -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 15px; line-height: 1.5; color: #ffffff;">
+  <div style="max-width: 560px; margin: 0 auto; background-color: #1a231d; border: 1px solid #44534a; border-radius: 12px; padding: 28px;">
+    <p style="margin: 0 0 20px;"><img t-att-src="brand_url + '/osv-logo-horizontal-dark.png'" alt="Open Source Village" width="240" style="display: block; width: 240px; max-width: 100%; height: auto; border: 0;"/></p>
+    <p style="margin: 0 0 12px;">Hello,</p>
+    <p style="margin: 0 0 12px;">
+        Someone asked for sign-in codes for this e-mail address and typed 10 wrong ones today.
+        Nobody got in: without the code from your mailbox nothing happens. To keep it that way,
+        we send no more codes to this address for the next 24 hours.
+    </p>
+    <p style="margin: 0 0 12px;">If that was you, there's nothing to do. Otherwise, a few things keep your account safe:</p>
+    <ul style="margin: 0 0 12px; padding-left: 20px;">
+      <li style="margin: 0 0 10px;"><strong>Never pass a code on.</strong> Nobody from Open Source Village asks you for one. Ignore codes you did not ask for.</li>
+      <li style="margin: 0 0 10px;"><strong>Sign in with your pass.</strong> On the sign-in page, choose "Other ways to sign in" and show the pass in your wallet. It needs no e-mail code and works while codes are stopped.</li>
+      <li style="margin: 0 0 10px;"><strong>Protect your mailbox.</strong> Whoever reads your mail can sign in as you. Turn on two-step verification at your e-mail provider.</li>
+      <li style="margin: 0 0 10px;"><strong>Keep your sign-in address private.</strong> Attackers find addresses on websites and in public code. Reply to this mail, and the stewards can move your account to an address you don't publish.</li>
+    </ul>
+    <p style="margin: 0 0 20px; color: #c9d1cb;">
+        If this happens again, or you see anything in your account you don't recognise, reply to this mail.
+    </p>
+    <p style="margin: 24px 0 0;">See you at the village,<br/>Open Source Village, run by Belfry</p>
+  </div>
+  <p style="margin: 16px 0 0; text-align: center; font-size: 12px; color: #8e9a91;">
+    Open Source Village, run by Belfry ·
+    <a t-att-href="public_url + '/help'" style="color: #8e9a91;">Help</a> ·
+    <a t-att-href="public_url + '/privacy'" style="color: #8e9a91;">Privacy</a>
+  </p>
+</div>
+        </field>
+    </record>
 </odoo>
