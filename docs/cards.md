@@ -297,7 +297,7 @@ group, still asks for an e-mail address and a code (§2.3).
 ## 6. The proxy
 
 `chat.<domain>/g/<id>` is answered by the chat's page itself (the page rule that serves the
-app's routes), not cached. No universal-link / App Link entry: the phone apps do not know cards
+app's routes), not cached. The phone apps open it too: `/g/*` is in apple-app-site-association; assetlinks.json covers the whole chat host already (Android)
 yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the limit of
 `/api/*` (60 a minute per address) on top of §2's own.
 
@@ -307,4 +307,4 @@ yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the l
 - Posting from a card without an e-mail address.
 - A preview of the group's recent messages before joining.
 - Deleting unused cards, moving a card to another group.
-- The phone apps (no `/g/*` in apple-app-site-association or assetlinks).
+

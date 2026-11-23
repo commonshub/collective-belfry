@@ -418,7 +418,7 @@ chat.{$BELFRY_DOMAIN} {
 	handle /.well-known/apple-app-site-association {
 		header Content-Type application/json
 		header Cache-Control "public, max-age=3600"
-		respond `{"applinks":{"details":[{"appIDs":["4MS4Y34UMJ.sh.belfry.app"],"components":[{"/":"/join/*","comment":"guest links"},{"/":"/events/*","comment":"event addresses"},{"/":"/login/*","comment":"link your phone"}]}]}}` 200
+		respond `{"applinks":{"details":[{"appIDs":["4MS4Y34UMJ.sh.belfry.app"],"components":[{"/":"/join/*","comment":"guest links"},{"/":"/events/*","comment":"event addresses"},{"/":"/login/*","comment":"link your phone"},{"/":"/g/*","comment":"printed cards"}]}]}}` 200
 	}
 	handle /.well-known/assetlinks.json {
 		header Content-Type application/json
