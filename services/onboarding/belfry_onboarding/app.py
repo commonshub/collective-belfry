@@ -65,6 +65,7 @@ from . import (
     holder_invites,
     homepage,
     invite,
+    linkpreview,
     mail,
     mailalias,
     mailfaces,
@@ -352,6 +353,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     mailforward.register(app)  # /api/mail-forward, /mail-forward/<token> (mailforward.py)
     mailalias.register(app)  # /api/mail-alias: a channel's address, by an admin (mailalias.py)
     mailfaces.register(app)  # /api/avatar/<hash>: e-mail correspondents' faces (mailfaces.py)
+    linkpreview.register(app)  # /api/link-preview: outside links' previews (linkpreview.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
