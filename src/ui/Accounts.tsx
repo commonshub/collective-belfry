@@ -12,6 +12,7 @@ import { isGuest } from '../core/invite'
 import { BELFRY, NAME } from '../config'
 import { accounts, activeId, addAccount, addOtherBelfry, otherBelfries, removeOtherBelfry, switchTo, type Account } from '../core/accounts'
 import { useVersion } from '../core/store'
+import { signerCalls, signerCallsIn } from '../core/auth'
 import { me } from '../core/sync'
 import { allSocks, sendTraces } from '../core/conn'
 import { Avatar, back, Btn, Form, go, Sheet } from './common'
@@ -282,6 +283,7 @@ export function Diagnostics() {
         <div className="place-section"><h3>New devices</h3></div>
         <ul className="diag-list">
           <li className="diag-auto"><b>Last automatic add</b><small>{auto ? `${new Date(auto.at).toLocaleString()} · ${auto.name}: ${auto.result}` : 'No new device has asked in this browser.'}</small></li>
+          <li><b>Signer requests</b><small>{signerCallsIn(1000)} in the first second · {signerCallsIn(10_000)} in the first 10 s · {signerCalls.length} since the page opened</small></li>
           <li><b>Last check</b><small>{pass ? new Date(pass).toLocaleTimeString() : 'Not yet'}{build ? ` · build ${build}` : ''}</small></li>
         </ul>
         <div className="place-section"><h3>Last sends</h3></div>

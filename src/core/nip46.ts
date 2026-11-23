@@ -13,6 +13,10 @@ const TIMEOUT = 10_000
 const KIND = 24133
 /** no answer, or the socket went away under the request: asked once more on a fresh socket */
 const retryable = (e: unknown) => e instanceof Error && /timeout|timed out|connection closed|not connected/i.test(e.message)
+/** the bunker relay refused for rate ("restricted: connection rate limit exceeded", 2026-11-23):
+ *  asked again after a back-off (0.5 s, 1 s, 2 s, 4 s), never failed for that */
+const rateLimited = (e: unknown) => e instanceof Error && /rate.?limit|too many|slow down/i.test(e.message)
+const MAX_IN_FLIGHT = 4 // a page's first burst goes out a few at a time
 
 export interface Remote {
   call(method: string, params: string[]): Promise<string>
@@ -71,13 +75,23 @@ export function remoteSigner(clientSecret: Uint8Array, bp: BunkerPointer): Remot
       throw e
     }
   }
+  let inFlight = 0
+  const queue: (() => void)[] = []
+  const slot = async () => { while (inFlight >= MAX_IN_FLIGHT) await new Promise<void>((r) => queue.push(r)); inFlight++ }
+  const release = () => { inFlight--; queue.shift()?.() }
   return {
     async call(method, params) {
       s.wanted = true
-      try { return await once(method, params) } catch (e) {
-        if (!retryable(e)) throw e
-        return once(method, params) // once more on a fresh socket
-      }
+      await slot()
+      try {
+        for (let i = 0; ; i++) {
+          try { return await once(method, params) } catch (e) {
+            if (rateLimited(e) && i < 4) { await new Promise((r) => setTimeout(r, 500 * 2 ** i)); continue }
+            if (!retryable(e) || i > 0) throw e
+            // once more on a fresh socket (the loop's next turn)
+          }
+        }
+      } finally { release() }
     },
     stop() { off(); sub?.close(); waiting.forEach((w) => w.fail(new Error('stopped'))); waiting.clear() },
   }

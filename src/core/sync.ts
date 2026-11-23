@@ -752,6 +752,7 @@ function resubscribe(target: Target) {
       if (target === 'main' && relayAuthed('main')) void pageMain()
       if (target !== 'groups') return
       if (status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' })
+      markSeenIn(); refusalBackoff = 0 // the groups relay answered our subscription to its end: let in
       void firstChannel()
     },
     onclose: (reason) => {
@@ -761,16 +762,44 @@ function resubscribe(target: Target) {
       if (target === 'groups') noteRefusal(reason)
       // the relay ended the live subscription for another reason (or we closed it to replace it):
       // without a new one nothing arrives until a reload, so open it again while the socket lives
+      // a refusal (a rate limit above all): back off, 2 s then doubling up to 2 min, so we never
+      // hammer the relay into refusing again
       if (subs[target] === sub && relayOf(target) === r && r.connected && status.access !== 'denied') {
-        setTimeout(() => { if (subs[target] === sub && relayOf(target) === r) resubscribe(target) }, 2000)
+        const refused = /rate.?limit|too many|slow down/i.test(reason) || (target === 'groups' && Date.now() - refusedAt < 5000)
+        const wait = refused ? (refusalBackoff = Math.min(120e3, Math.max(2000, refusalBackoff * 2))) : 2000
+        setTimeout(() => { if (subs[target] === sub && relayOf(target) === r) resubscribe(target) }, wait)
       }
     },
   })
   const sub = subs[target]
 }
 
+// "Almost in" only on a definite answer (Xavier 2026-11-23: a member and admin saw it for a second
+// after "restricted: connection rate limit exceeded"). A refusal counts as being about membership
+// only when its words say so and not a limit, a connection or a timeout; then /whois must confirm
+// that this key holds no pass; a key this browser has ever seen let in never gets it from the
+// relay's word alone. Anything else: stay, and the subscription is tried again with a back-off.
+const NOT_MEMBERSHIP = /rate|limit|too many|slow down|connection|timeout|timed out|later|busy|overload|error|network/i
+export const aboutMembership = (reason: string) => /^(restricted|blocked)\b|\bpass\b|member|invite|not allowed|not permitted/i.test(reason) && !NOT_MEMBERSHIP.test(reason)
+const SEEN_IN = 'belfry:seen-in:' // + pubkey: this browser saw the groups relay let this key in (not secret)
+const seenIn = () => { try { return !!(signer && localStorage.getItem(SEEN_IN + signer.pubkey)) } catch { return false } }
+function markSeenIn() { try { if (signer) localStorage.setItem(SEEN_IN + signer.pubkey, '1') } catch { /* private window */ } }
+let refusedAt = 0, refusalBackoff = 0
 function noteRefusal(reason: string) {
-  if (/^(restricted|blocked)|pass|member/i.test(reason)) setStatus({ access: 'denied', accessReason: reason })
+  refusedAt = Date.now()
+  if (!aboutMembership(reason)) return // a limit, the connection…: the back-off in onclose tries again
+  void confirmNoPass(reason)
+}
+/** /whois for my own key: a 200 naming me = in (member, agent or guest); a 401/403 or an answer
+ *  without me = no pass; anything else (offline, 5xx, a timeout) = can't tell: nothing changes. */
+async function confirmNoPass(reason: string) {
+  if (!signer || status.access === 'denied') return
+  if (seenIn()) return // seen let in here: never from the relay's word alone
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}/whois`, 'POST', { pubkeys: [signer.pubkey] }) } catch { return }
+  let no = r.status === 401 || r.status === 403
+  if (r.ok) { const d = await r.json().catch(() => null) as { people?: Record<string, string> } | null; no = !!d && typeof d.people === 'object' && !d.people?.[signer.pubkey] }
+  if (no && status.access !== 'ok') setStatus({ access: 'denied', accessReason: reason })
 }
 
 function connect(target: Target): Promise<void> {

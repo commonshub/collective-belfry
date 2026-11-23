@@ -279,16 +279,6 @@ export function MembershipScreen({ session, reason, onSignOut }: {
           <div style={{ height: 10 }} />
           <button className="btn ghost" onClick={() => setSent(null)}>{sent === 'request' ? 'Send another request' : 'Ask the admins instead'}</button>
         </>
-      ) : loaded && !a ? (
-        <>
-          <div style={{ marginBottom: 12 }}><span className="badge orange">Not in yet</span></div>
-          <h2>Almost in</h2>
-          <p>You're logged in{who}, but you're not a member of {PLACE} yet. Apply to join: the answer comes by e-mail.</p>
-          {THEME === 'belfry' ? <ApplyForm email={session.email} /> : <a className="btn" style={{ textDecoration: 'none', display: 'grid', placeItems: 'center' }} href={`https://${BELFRY.domain}/apply`} target="_blank" rel="noreferrer">Apply to join</a>}
-          <div style={{ height: 10 }} />
-          <button className="btn ghost" onClick={() => { recheckAccess(); void loadAccessInfo() }}>I've been let in: check again</button>
-          <button className="link" style={{ alignSelf: 'center', marginTop: 12 }} onClick={onSignOut}>Log out</button>
-        </>
       ) : a?.needs_admin ? (
         <>
           <div style={{ marginBottom: 12 }}><span className="badge lime">{THEME === 'belfry' ? 'New belfry' : 'New village'}</span></div>
@@ -298,12 +288,22 @@ export function MembershipScreen({ session, reason, onSignOut }: {
           <button className="btn" disabled={busy} onClick={() => send('admin', { admin: true, name })}>{busy ? 'Sending…' : `Become the admin of ${THEME === 'belfry' ? PLACE : 'this village'}`}</button>
           <p className="hint" style={{ fontSize: 13, marginTop: 10 }}>Whoever runs the server can change admins later.</p>
         </>
+      ) : THEME === 'belfry' || (loaded && !a) ? ( /* the only Almost-in on a belfry: the apply form (2026-11-23) */
+        <>
+          <div style={{ marginBottom: 12 }}><span className="badge orange">Not in yet</span></div>
+          <h2>Almost in</h2>
+          <p>You're logged in{who}, but you're not a member of {PLACE} yet. Apply to join: the answer comes by e-mail.</p>
+          {THEME === 'belfry' ? <ApplyForm email={session.email} /> : <a className="btn" style={{ textDecoration: 'none', display: 'grid', placeItems: 'center' }} href={`https://${BELFRY.domain}/apply`} target="_blank" rel="noreferrer">Apply to join</a>}
+          <div style={{ height: 10 }} />
+          <button className="btn ghost" onClick={() => { recheckAccess(); void loadAccessInfo() }}>I've been let in: check again</button>
+          <button className="link" style={{ alignSelf: 'center', marginTop: 12 }} onClick={onSignOut}>Log out</button>
+        </>
       ) : (
         <>
           <div style={{ marginBottom: 12 }}><span className="badge orange">Not in yet</span></div>
           <h2>Almost in</h2>
           <p>You're signed in{who}, but this key isn't a member of {PLACE} yet.</p>
-          {reason && <p className="hint" style={{ fontSize: 13 }}>{THEME === 'belfry' ? 'The relay' : 'The village'} said: {reason}</p>}
+          {reason && <p className="hint" style={{ fontSize: 13 }}>The village said: {reason}</p>}
           {error && <div className="error">{error}</div>}
           <Form onSubmit={() => send('code', { claim: code })}>
             <label className="field"><span>Invite code</span>

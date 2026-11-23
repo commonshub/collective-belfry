@@ -290,7 +290,23 @@ export const loadSession = () => kvGet<Session>('session')
 export const saveSession = (s: Session) => kvSet('session', s)
 export const clearSession = () => kvDel('session')
 
-export async function makeSigner(s: Session): Promise<Signer> {
+/** Signer calls of this page load (Diagnostics; the lead asked how many go out in the first second). */
+export const signerCalls: { at: number; method: string }[] = []
+const pageStart = Date.now()
+export const signerCallsIn = (ms: number) => signerCalls.filter((c) => c.at - pageStart <= ms).length
+function counted(sg: Signer): Signer {
+  const n = (method: string) => { if (signerCalls.length < 2000) signerCalls.push({ at: Date.now(), method }) }
+  return {
+    pubkey: sg.pubkey,
+    sign: (t) => { n('sign_event:' + t.kind); return sg.sign(t) },
+    encrypt: (p, x) => { n('encrypt'); return sg.encrypt(p, x) },
+    decrypt: (p, x) => { n('decrypt'); return sg.decrypt(p, x) },
+    ...(sg.decrypt04 ? { decrypt04: (p: string, x: string) => { n('decrypt04'); return sg.decrypt04!(p, x) } } : {}),
+  }
+}
+
+export async function makeSigner(s: Session): Promise<Signer> { return counted(await makeSignerRaw(s)) }
+async function makeSignerRaw(s: Session): Promise<Signer> {
   if (s.demoSecret) {
     const sk = hexToBytes(s.demoSecret)
     const key = (peer: string) => nip44.v2.utils.getConversationKey(sk, peer)

@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
-import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
+import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, signerCalls, signerCallsIn, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, MemberInviteScreen, MemberNameScreen, OpeningScreen } from './GuestJoin'
 import { nameNext } from '../core/guestjoin'
@@ -197,7 +197,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
-          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, signRoster: testSignRoster, has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk), notices: () => sealedNotices().map((n) => n.device) } })
+          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, signRoster: testSignRoster, signerIn: signerCallsIn, signerCalls: () => signerCalls.map((c) => c.method), has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk), notices: () => sealedNotices().map((n) => n.device) } })
         }
         watchDms() // others typing to me (typing.ts): one live subscription on the community relay
         startNames() // names never known: asked for, never a shortened npub
