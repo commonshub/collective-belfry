@@ -194,6 +194,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
           {notes && <div className="notes-line" role="note">{sealed ? NOTES_SEALED : NOTES_OPEN}</div>}
+          {notes && list.length === 0 && !locked && <p className="notes-empty">Write anything you want to keep: ideas, lists, pictures, files.</p>}
           {list.length === 0 && !locked && !notes && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
           {rows.map((r) => {
             const t = 'd' in r ? r.d.at * 1000 : r.l.at
