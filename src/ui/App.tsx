@@ -61,6 +61,8 @@ import { MentionsScreen } from './Mentions'
 import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBar, TodosScreen, demoApplyStatus, placeOf, placesOn, townPath } from './Places'
 import { CardScreen } from './Card'
 import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
+import { encTest, startEnc } from '../core/enc/runtime'
+import { testFormat3 } from '../core/access'
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 
 // demo: a card's claim makes its group or topic here, as the belfry's groups key would
@@ -216,6 +218,9 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         if (sealedOn && session.clientSecret) {
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
+          // encrypted conversations, format 3 (docs/encrypted.md): read always, written when belfry.json says 3
+          void startEnc(session.clientSecret)
+          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3 } })
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
           if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, signRoster: testSignRoster, signerIn: signerCallsIn, signerCalls: () => signerCalls.map((c) => c.method), has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk), notices: () => sealedNotices().map((n) => n.device) } })
         }

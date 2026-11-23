@@ -8,7 +8,7 @@
 import { hexToBytes } from '@noble/hashes/utils'
 import { getPublicKey, type Filter, type NostrEvent } from 'nostr-tools'
 import { BELFRY } from '../../config'
-import { belfryGroupsKey, belfryNostrKey, encryptedFormat } from '../access'
+import { belfryGroupsKey, belfryNostrKey, encryptedFormat, loadAccessInfo, onAccessInfo } from '../access'
 import { kvGet, kvSet } from '../db'
 import { addEvents, all, latestCreatedAt, subscribe } from '../store'
 import { me, queryPaged, setExtraMainFilters, setPagedMainFilters } from '../sync'
@@ -42,6 +42,18 @@ export const encKeyCount = () => keys.size
 // ---- device lists --------------------------------------------------------------------------
 
 let partners: string[] = []
+/** People whose lists something here waits for (a key or message from someone not yet a partner). */
+const wanted = new Set<string>()
+const wantAsked = new Map<string, number>()
+function want(accounts: string[]) {
+  const fresh = accounts.filter((a) => E.isKey(a) && !wanted.has(a) && !partners.includes(a))
+  for (const a of fresh) wanted.add(a)
+  const ask = accounts.filter((a) => E.isKey(a) && Date.now() - (wantAsked.get(a) ?? 0) > 30_000)
+  if (!ask.length || !belfry()) return
+  for (const a of ask) wantAsked.set(a, Date.now())
+  if (fresh.length && device) setExtraMainFilters(filters, 'enc')
+  void queryPaged('main', [{ kinds: [E.LIST], authors: [belfry()], '#p': ask }], 5000).then((got) => { if (got?.length) addEvents(got) })
+}
 /** The people I talk to (dm.ts): their lists are kept on the live subscription. */
 export function setEncPartners(ps: string[]) {
   const next = [...new Set(ps)].sort()
@@ -69,7 +81,7 @@ function filters(): Filter[] {
   const m = me()
   const since = Math.max(0, latestCreatedAt((e) => e.kind >= E.KEY && e.kind <= E.PACK) - 3600) // §17.11: ordinary catch-up
   return [
-    { kinds: [E.LIST], authors: [belfry()], '#p': [...new Set([m, ...partners])] },
+    { kinds: [E.LIST], authors: [belfry()], '#p': [...new Set([m, ...partners, ...wanted])] },
     { kinds: [E.KEY, E.MSG, E.PACK], '#p': [m], since },
     { kinds: [E.ASK, E.ANSWER], '#p': [m] },
   ]
@@ -85,6 +97,9 @@ export async function startEnc(clientSecret: string) {
   for (const r of (await kvGet<KeyRec[]>(KV_KEYS).catch(() => undefined)) ?? []) if (r && E.isKey(r.K) && E.isKey(r.k)) holdKey(r)
   for (const c of (await kvGet<string[]>(KV_CONVS).catch(() => undefined)) ?? []) if (typeof c === 'string') encConvs.add(c)
   setExtraMainFilters(filters, 'enc')
+  // belfry.json: the belfry key (who signs lists) and the format; its filters again once known
+  onAccessInfo(() => setExtraMainFilters(filters, 'enc'))
+  void loadAccessInfo()
   setPagedMainFilters(() => (device && belfry() ? [{ kinds: [E.LIST], authors: [belfry()], '#p': [...new Set([me(), ...partners])] }] : []), 'enc')
   let t: ReturnType<typeof setTimeout> | null = null
   subscribe(() => { t ??= setTimeout(() => { t = null; void takeEnvelopes() }, 150) })
@@ -106,7 +121,7 @@ async function takeEnvelopes() {
     try { o = E.openPeopleEnvelope(device.secret, e) } catch { envSeen.add(e.id); continue } // a bad entry: skipped, never blocking (§17.12)
     if (!o) { if (d) noEntry.add(d); envSeen.add(e.id); markConvByAlias(d); continue }
     const v = E.acceptKeyRumor(o.rumor, m, chainFor)
-    if (v === 'wait') continue // judged again when lists come
+    if (v === 'wait') { want(o.rumor.tags.filter((t) => t[0] === 'p').map((t) => t[1])); continue } // judged again when lists come
     envSeen.add(e.id)
     if (v !== 'ok') continue
     const K = o.rumor.tags.find((t) => t[0] === 'K')![1]
@@ -149,7 +164,7 @@ export async function openEnc(e: NostrEvent): Promise<Opened> {
   let o: { seal: NostrEvent; rumor: E.Rumor }
   try { o = E.openPeopleMessage(key.k, e) } catch { return { ok: false, retry: false } } // a copy that doesn't open with the right k: dropped
   const v = E.acceptPeopleMessage(e, o.seal, o.rumor, key.conv, chainFor(o.rumor.pubkey))
-  if (v === 'wait') return { ok: false, retry: true, state: 'opening' }
+  if (v === 'wait') { want([o.rumor.pubkey]); return { ok: false, retry: true, state: 'opening' } }
   if (v === 'no') return { ok: false, retry: false }
   encConvs.add(key.conv)
   return { ok: true, rumor: o.rumor as unknown as NostrEvent, conv: key.conv }
