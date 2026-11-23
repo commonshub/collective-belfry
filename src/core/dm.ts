@@ -132,7 +132,7 @@ const channelSends = new Set<string>() // email-ids sent as a shared inbox, stil
  *  Resolves with the email-id; `report(id)` then follows its delivery. */
 export async function sendAsChannel(m: { channel: string; /** the channel's address before the @: its plain alias when it has one (model.mailLocal), else its id */ local: string; channelName: string; to: string; subject: string; text: string; inReplyTo?: string; /** the thread's Message-IDs before In-Reply-To, oldest first */ references?: string; cardId: string }): Promise<string> {
   // format 3: e-mail out waits for the mail server's format-3 build (the review's P1.5)
-  if (!isLocalOnly() && (await freshFormat()) !== 1) throw new Error(heldText(new EncHeld('mail'), displayName)) // format 3, unknown or a stale 1: not the version-1 way
+  if (!isLocalOnly() && (encryptedFormat() === 3 || encSeen()) && (await freshFormat()) !== 1) throw new Error(heldText(new EncHeld('mail'), displayName)) // format 3, unknown or a stale 1: not the version-1 way
   const b = await bridge()
   if (!b) throw new Error('This belfry does not send e-mail yet.')
   // envelope (mail-from) and From header alike: the bridge checks they match (mail.outgoing)
@@ -521,7 +521,7 @@ async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv
   // a conversation this device has seen encrypted stays encrypted whatever the cache says (§17.2)
   let f: 1 | 3 | undefined = 1
   // (unknown and never seen an encrypted object here: format 1 at once, no delay: the review's P3)
-  if (!isLocalOnly() && (encryptedFormat() !== undefined || encSeen())) { await formatReady(); f = await freshFormat() }
+  if (!isLocalOnly() && (encryptedFormat() === 3 || encSeen())) { await formatReady(); f = await freshFormat() }
   const encConv = !!conv && conv.startsWith('n:') && isEncConv([...to, me()])
   if (f === undefined && !encConv && conv && (conv.startsWith('n:') || conv.startsWith('m:'))) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('format'), displayName), upload })
   if (f === 3 && conv && conv.startsWith('m:')) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('mail'), displayName), upload })
@@ -676,7 +676,7 @@ async function sendHeld(refresh = false) {
 }
 /** format 3: a held message encrypted again (lists refreshed); still not possible: its reason updated. */
 async function sendHeldEnc(h: Held) {
-  const f = isLocalOnly() || (encryptedFormat() === undefined && !encSeen()) ? 1 : await freshFormat()
+  const f = isLocalOnly() || (encryptedFormat() !== 3 && !encSeen()) ? 1 : await freshFormat()
   const encConv = h.conv.startsWith('n:') && isEncConv([...h.to, me()])
   if (h.conv.startsWith('m:') && f === 3) return // e-mail on format 3 waits for its build
   if (f === undefined && !encConv) return // the format unknown (or a stale 1): waits for a fresh read

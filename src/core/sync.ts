@@ -360,7 +360,14 @@ async function send(item: OutboxItem, step: (name: string) => void): Promise<Nos
   let content = item.content
   const tags = [...item.tags]
   const h = item.target === 'groups' ? item.tags.find((t) => t[0] === 'h')?.[1] : undefined
+  // a private group (the review's P1.2, re-read P1-2): decided before anything is uploaded or sent:
+  // never clear because encryption isn't running yet (the outbox flushes before enc/runtime registers),
+  // nor while the group or the format is unknown
+  const verdict = !localOnly && item.target === 'groups' && privateVerdict ? privateVerdict(h ?? '', { kind: item.kind, tags: item.tags }) : undefined
+  if (verdict === 'hold') throw new Error('timeout: waiting for this group to be known')
+  if (verdict === 'enc' && (!groupWrap || (item.attachments.length && !encryptsFiles))) throw new Error('timeout: encryption isn’t ready on this device yet')
   const sealFiles = !localOnly && !!h && !!encryptsFiles?.(h, item.kind)
+  if (verdict === 'enc' && item.attachments.length && !sealFiles) throw new Error('timeout: encryption isn’t ready on this device yet')
   for (const a of item.attachments) {
     const blob = await d.get('blobs', a.blobKey)
     if (!blob) continue
@@ -378,13 +385,6 @@ async function send(item: OutboxItem, step: (name: string) => void): Promise<Nos
     content = content ? content + '\n' + url : url
   }
   const tpl: EventTemplate = { kind: item.kind, content, tags, created_at: item.created_at }
-  // a private group on format 3 (the review's P1.2): never sent clear because encryption isn't running
-  // yet (the outbox flushes before enc/runtime registers), nor while the group's metadata is unknown
-  if (!localOnly && item.target === 'groups' && privateVerdict) {
-    const v = privateVerdict(h ?? '', tpl)
-    if (v === 'hold') throw new Error('timeout: waiting for this group to be known')
-    if (v === 'enc' && !groupWrap) throw new Error('timeout: encryption isn’t ready on this device yet')
-  }
   // a private group (docs/encrypted.md §6): encrypted now, after its uploads (enc/runtime.ts)
   if (!localOnly && groupWrap && item.target === 'groups') {
     step('encrypting')

@@ -223,7 +223,7 @@ async function startEncNow(clientSecret: string) {
   setExtraGroupsFilters(() => { const ids = myPrivateGroups(); return device && ids.length ? [{ kinds: [E.KEY, E.MSG], '#h': ids }] : [] }, 'enc')
   setGroupWrap((tpl) => wrapForGroup(tpl))
   setEncryptedHere((h) => encConvs.has('g:' + h))
-  setEncryptsFiles((h, kind) => writesFormat3() && privateHere(h) && !clearInGroup({ kind, pubkey: me(), tags: [] }))
+  setEncryptsFiles((h, kind) => groupEncrypts(h) && !clearInGroup({ kind, pubkey: me(), tags: [] }))
   setRefuse(refuseClear)
   let gt: ReturnType<typeof setTimeout> | null = null
   let groupIds = ''
@@ -369,7 +369,7 @@ export async function encryptFor(rumor: E.Rumor, people: string[]): Promise<{ ev
   const m = me()
   const all = [...new Set([m, ...people])].sort()
   // guests first (a guest's session runs no runtime: the lead): unencrypted, or held when encrypted here before
-  if (guestIn(all)) { if (encConvs.has(E.peopleId(all))) throw new Held('guest'); return null }
+  if (guestIn(all)) { if (await neverEncrypted(E.peopleId(all))) return null; throw new Held('guest') } // (re-read P1-b: never encrypted, from a complete read)
   if (!device) throw new Held('not_listed')
   if (E.peopleOf(rumor) !== E.peopleId(all)) throw new Error('the message is not for these people') // a programming error, never shown
   if (new TextEncoder().encode(JSON.stringify(E.withId(rumor))).length > E.MAX_RUMOR) throw new Error('the message is too long to encrypt') // before any key (P2.1)
@@ -613,6 +613,8 @@ export async function answerDevice(to: AddedDevice, what: 'shared' | 'removed') 
 export const isPrivateGroup = (h?: string) => { const g = h ? groupOf(h) : undefined; return !!g && g.isPod && g.closed && g.inviteOnly }
 /** P1.2: private here: its metadata says so, or a key of it was seen (once encrypted, never clear). */
 export const privateHere = (h: string) => isPrivateGroup(h) || encConvs.has('g:' + h)
+/** P2-1 + re-read P1-a: encrypted when a key of it was seen (any format), or private on format 3. */
+export const groupEncrypts = (h: string) => encConvs.has('g:' + h) || (writesFormat3() && isPrivateGroup(h))
 const myPrivateGroups = () => allGroups().filter((g) => g.isPod && g.closed && g.inviteOnly && g.members.has(me())).map((g) => g.id)
 /** §16.9: what stays in clear in a private group (core.clearInGroup with this belfry's groups key). */
 export const clearInGroup = (e: { kind: number; pubkey: string; tags: string[][] }) => E.clearInGroup(e, belfryGroupsKey())
@@ -663,6 +665,7 @@ function groupKeyFor(h: string, K: string): KeyRec | undefined | 'wait' {
 const envCount = new Map<string, number>()
 function judgeSet(h: string, rec: KeyRec, envs: unknown[]) {
   envCount.set(rec.K, envs.length)
+  if (rec.mine && !envs.length) return // (my own key: its envelopes may not be back from the relay yet)
   const match = E.deviceSet(E.entryKeys(envs)) === rec.claimed
   rec.lists = match ? rec.claimed! : ''
   if (match) cantCheck.delete(h); else cantCheck.add(h)
@@ -678,6 +681,8 @@ function privileged(r: E.Rumor): boolean {
   const L = r.tags.filter((t) => t[0] === 'L').map((t) => t[1])
   if (!L.some((x) => x?.startsWith('belfry/'))) return false
   if (L.every((x) => x === 'belfry/action')) return false
+  // the ruling: pins, inbox, event and proposal status come through (the model's own admin / author checks apply)
+  if (L.every((x) => ['belfry/pin', 'belfry/inbox', 'belfry/event-status', 'belfry/proposal-status'].includes(x))) return false
   if (L.every((x) => x === 'belfry/action-result') && (r.pubkey === belfryGroupsKey() || r.pubkey === belfry())) return false
   return true
 }
@@ -716,8 +721,7 @@ export const encryptGroupEvent = (tpl: { kind: number; content: string; tags: st
 const membersReadOn = new Map<string, number>() // group → the groups-relay connection its 39002 was read on
 async function wrapForGroup(tpl: { kind: number; content: string; tags: string[][]; created_at: number }) {
   const h = hOf(tpl)
-  if (!writesFormat3()) return null // P2-1: format 1: as everyone else writes it
-  if (!h || !privateHere(h) || clearInGroup({ ...tpl, pubkey: me() }) || tpl.kind === E.KEY || tpl.kind === E.MSG) return null
+  if (!h || !groupEncrypts(h) || clearInGroup({ ...tpl, pubkey: me() }) || tpl.kind === E.KEY || tpl.kind === E.MSG) return null
   if (!device) throw new Error('timeout: this device isn’t set up for encrypted messages yet')
   // P2.4: the member list from a 39002 read on this connection, with me in it (never a stale or empty cache)
   if (membersReadOn.get(h) !== connectionOf('groups')) {
@@ -747,6 +751,13 @@ async function wrapForGroup(tpl: { kind: number; content: string; tags: string[]
   if (devices.length > E.MAX_GROUP_DEVICES) throw new Error('error: Too many devices in this group to encrypt for everyone.') // §4: it never falls back
   const set = E.deviceSet(devices)
   let key = E.pickKey([...keys.values()], 'g:' + h, set) as KeyRec | undefined
+  // re-read P1-3: another's key judged again right before use (its envelope events counted now); adopted
+  // only while every entry seen adds up to what it claims
+  if (key && key.claimed && !key.unconfirmedGroup) {
+    const envs = all(me()).filter((e) => e.kind === E.KEY && hOf(e) === h && e.tags.some((t) => t[0] === 'd' && t[1] === key!.K))
+    judgeSet(h, key, envs)
+    if (!key.mine && key.lists !== set) key = undefined
+  }
   const before: { kind: number; created_at: number; tags: string[][]; content: string }[] = []
   if (!key) {
     const { k, K } = E.newKey()

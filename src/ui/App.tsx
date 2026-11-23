@@ -62,6 +62,7 @@ import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBa
 import { CardScreen } from './Card'
 import { GroupWho } from './WhoCanRead'
 import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
+import { setEncryptedHere } from '../core/model'
 import { encProbe, encTest, encWhy, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
 import { testFormat3 } from '../core/access'
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
@@ -239,7 +240,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret && !guestInfo()) {
           void startEnc(session.clientSecret)
           if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy, probe: encProbe } })
-        }
+        } else setEncryptedHere(() => false) // no runtime here (a guest, no device key): no key ever seen, nothing waits for it
         if (sealedOn) expectSealed()
         startDms()
         if (sealedOn && session.clientSecret) {

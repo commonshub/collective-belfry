@@ -2,7 +2,8 @@
 // sending a press, and the demo hooks. The parsing and the rules are in buttoncore.ts.
 // (src/core/actions.ts is the app's write actions; this is the message buttons' part.)
 
-import { encryptFor, encryptGroupEvent, privateHere, writesFormat3 } from './enc/runtime'
+import { encryptFor, encryptGroupEvent } from './enc/runtime'
+import { groupWriteMode } from './model'
 import { finalizeEvent, getEventHash, getPublicKey, type NostrEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -86,7 +87,9 @@ export async function press(e: NostrEvent, group: string, button: Button): Promi
   const tpl = { ...t, created_at: Math.floor(Date.now() / 1000) }
   // a private group (docs/encrypted.md §24a): the press is encrypted into the group like any group
   // event and, for a belfry: action, a copy goes to the groups key as a people conversation
-  if (!isLocalOnly() && writesFormat3() && privateHere(group)) {
+  const mode = isLocalOnly() ? undefined : groupWriteMode(group)
+  if (mode === 'hold') throw new Error('timeout: encryption isn’t ready on this device yet')
+  if (mode === 'enc') {
     const w = await encryptGroupEvent(tpl)
     if (w) {
       for (const b of w.before) await publishNow('groups', await currentSigner().sign(b))
@@ -97,6 +100,7 @@ export async function press(e: NostrEvent, group: string, button: Button): Promi
       addEvents([rumor]) // shown at once; its 8572 opens to the same rumor
       return rumor
     }
+    throw new Error('timeout: encryption isn’t ready on this device yet') // never clear in a private group
   }
   const ev = await currentSigner().sign(tpl)
   if (!isLocalOnly()) await publishNow('groups', ev)

@@ -31,3 +31,4 @@ export const setDemoRole = () => {}
 export const groupWrapReady = () => false
 export const setPrivateVerdict = (_f: unknown) => {}
 export const encryptedFormat = (): 1 | 3 | undefined => 1
+export const encSeen = () => false

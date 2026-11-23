@@ -3,7 +3,6 @@
 // Test build: VITE_TEST_RELAYS=1 VITE_MAIN_RELAY=VITE_GROUPS_RELAY=ws://127.0.0.1:4481
 // VITE_GROUPS_RELAY=ws://localhost:4481 (the same relay, its own socket: the app keeps one per URL) VITE_DISCOVERY=/belfry.json, with dist-enctest/belfry.json = {nostr:{pubkey: <test belfry>}, encrypted:{format:3}}.
 //   node enc.cjs [dist folder]     (starts its own relay on 4481 and http on 4482)
-// (a copy of ~/agents/belfry/site/.shots/chat/enc.cjs; run it from that folder: profiles live there)
 const { spawn } = require("child_process"); const fs = require("fs"); const crypto = require("crypto");
 const chat = process.env.HOME + "/agents/belfry-webapp/work/chat";
 const { finalizeEvent, getPublicKey, nip59 } = require(chat + "/node_modules/nostr-tools");
@@ -306,6 +305,19 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   const ok = await new Promise((res) => { const w = new WebSocket("ws://127.0.0.1:4481"); w.onopen = () => w.send(JSON.stringify(["EVENT", old])); w.onmessage = (m) => { const x = JSON.parse(m.data); if (x[0] === "OK") { w.close(); res(x[2]) } }; setTimeout(() => res(null), 4000) });
   check("an 8572 dated 400 s ago is refused by the relay (§18.1)", ok === false, ok);
 
+  // re-read P1-a: the belfry now says format 1 (a stale cache, a rollback) but Sam has seen a key of the
+  // private group: it stays encrypted there, never a clear kind 9
+  const bj = dist + "/belfry.json", bjWas = fs.readFileSync(bj, "utf8");
+  try {
+    const j = JSON.parse(bjWas); j.encrypted = { format: 1 }; fs.writeFileSync(bj, JSON.stringify(j));
+    await S.ev("localStorage.setItem('belfry-enc-format', '1'); location.reload()"); await sleep(6000);
+    const beforeF = new Set((await dump()).map((e) => e.id));
+    await S.ev(`location.hash = '#/c/${gid}'`); await sleep(2000);
+    await S.ev(`(async () => { const i = document.querySelector('.composer textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(i, 'Format says 1 now'); i.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const b = [...document.querySelectorAll('.composer button')].find((x) => /^Send/i.test(x.getAttribute('aria-label') || '') || x.classList.contains('send')); b && b.click() })()`);
+    await until(async () => (await dump()).some((e) => !beforeF.has(e.id) && (e.kind === 8572 || e.kind === 9) && e.tags.some((t) => t[0] === "h" && t[1] === gid)), 20000);
+    const nf = (await dump()).filter((e) => !beforeF.has(e.id) && e.tags.some((t) => t[0] === "h" && t[1] === gid));
+    check("format 1 after a key was seen: the private group stays encrypted (an 8572, no clear kind 9)", nf.some((e) => e.kind === 8572) && !nf.some((e) => e.kind === 9 && e.content.includes("Format says 1")), nf.map((e) => e.kind));
+  } finally { fs.writeFileSync(bj, bjWas) }
   console.log(bad ? `== enc: ${bad} failed` : "== enc: all ok");
   for (const p of procs) try { p.kill() } catch {}
   await sleep(500); for (const n of ["lina", "sam", "nojson", "sam2"]) try { fs.rmSync(`${dir}/prof-enc-${n}`, { recursive: true, force: true }) } catch {}

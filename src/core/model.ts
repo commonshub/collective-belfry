@@ -7,7 +7,7 @@ import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
 import { plainName, plainOf } from './refs'
-import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat } from './access'
+import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat, encSeen } from './access'
 import { CHARTER_ID, placeName } from './places'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
@@ -442,17 +442,29 @@ export const group = (id: string): Group | undefined => groupSets().byId.get(id)
 // own rule, whatever screen asks): only unarchiving it, leaving it, or deleting it
 // the review's P1.2 (sync.ts): a group write on format 3 is encrypted when its group is private here
 // (its metadata, or a key of it already seen: enc/runtime adds that), and waits while the group isn't known
-let encryptedHere: (h: string) => boolean = () => false
+// (re-read P1-a) a key of the group seen on this device: encrypted whatever the format says; until
+// enc/runtime has loaded what it saw (setEncryptedHere), a device that ever saw format 3 holds
+let encryptedHere: ((h: string) => boolean) | undefined
 export const setEncryptedHere = (f: (h: string) => boolean) => { encryptedHere = f }
-/** The review's P1.4 (a ruling): events, meetings, proposals and tickets can't be made from a private group on format 3 yet. */
-export const noExtrasHere = (h: string) => { const g = group(h); return encryptedFormat() === 3 && (!!(g?.isPod && g.closed && g.inviteOnly) || encryptedHere(h)) }
+const privateMeta = (h: string) => { const g = group(h); return !!(g?.isPod && g.closed && g.inviteOnly) }
+/** Whether writing in group H is encrypted ('enc'), must wait ('hold'), or is plain (undefined). */
+export function groupWriteMode(h: string): 'enc' | 'hold' | undefined {
+  if (!h) return undefined
+  const f = encryptedFormat(), seen = encSeen()
+  if (!encryptedHere) return f === 3 || seen ? 'hold' : undefined // runtime not loaded yet
+  if (encryptedHere(h)) return 'enc'
+  if (f === 3) return privateMeta(h) ? 'enc' : group(h)?.known ? undefined : 'hold'
+  if (f === undefined && seen) return privateMeta(h) || !group(h)?.known ? 'hold' : undefined
+  return undefined
+}
+/** A private group, encrypted or waiting to be: P1.4's rule, the guest rule, no typing. */
+export const privateNow = (h: string) => groupWriteMode(h) === 'enc' || (groupWriteMode(h) === 'hold' && privateMeta(h))
+/** The review's P1.4 (a ruling): events, meetings, proposals and tickets can't be made from a private group yet. */
+export const noExtrasHere = (h: string) => privateNow(h)
 export const NO_EXTRAS = 'Not available in private groups yet.'
 setPrivateVerdict((h, t) => {
-  if (encryptedFormat() !== 3 || !h || clearInGroup({ ...t, pubkey: me() }, belfryGroupsKey())) return undefined
-  const g = group(h)
-  if ((g?.isPod && g.closed && g.inviteOnly) || encryptedHere(h)) return 'enc'
-  if (!g?.known) return 'hold'
-  return undefined
+  if (!h || clearInGroup({ ...t, pubkey: me() }, belfryGroupsKey())) return undefined
+  return groupWriteMode(h)
 })
 setWriteGuard((t) => {
   const of = (k: string) => t.tags.find((x) => x[0] === k)?.[1]
@@ -460,7 +472,7 @@ setWriteGuard((t) => {
   // a private group on format 3 (docs/encrypted.md): nothing goes there unencrypted. A guest's
   // session can't take part yet (the lead, 2026-11-23); a session where encryption doesn't run can't post
   const g0 = h ? group(h) : undefined
-  if (g0?.isPod && g0.closed && g0.inviteOnly && encryptedFormat() === 3 && ![9021, 9022].includes(t.kind) && !(t.kind === 30078 && (of('d') ?? '').startsWith('seen:'))) {
+  if (h && privateNow(h) && ![9021, 9022].includes(t.kind) && !(t.kind === 30078 && (of('d') ?? '').startsWith('seen:'))) {
     if (allGroups().some((x) => guestJoins(x.id).some((j) => j.pubkey === me() && !j.member))) return 'Guests can’t take part in private groups yet.'
     if (!groupWrapReady()) return 'This device can’t post in private groups yet.'
   }
