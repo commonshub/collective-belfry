@@ -15,17 +15,18 @@ const belfrySk = sk("belfry"), belfry = getPublicKey(belfrySk);
 const procs = [];
 const relay = spawn("node", [dir + "/sealedrelay.cjs", "4481"], { stdio: "ignore" }); procs.push(relay);
 const web = spawn("python3", ["-m", "http.server", "4482", "-d", dist], { stdio: "ignore" }); procs.push(web);
-const counters = {};
-async function publishList(account, devices, prevId) {
+const counters = {}, lastIds = {};
+async function publishList(account, devices, prevId = lastIds[account]) {
   counters[account] = (counters[account] || 0) + 1
   const n = counters[account]
   const e = finalizeEvent({ kind: 8570, created_at: Math.floor(Date.now() / 1000), tags: [["p", account], ["n", String(n)], ...(prevId ? [["prev", prevId]] : []), ...[...devices].sort().map((d) => ["device", d])], content: "" }, belfrySk)
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([e]) })
+  lastIds[account] = e.id
   return e.id
 }
 const dump = async () => (await (await fetch(relayHttp + "/dump")).json());
 
-async function browser(name, port, email) {
+async function browser(name, port, email, noJson = false) {
   const prof = `${dir}/prof-enc-${name}`; fs.rmSync(prof, { recursive: true, force: true });
   const ch = spawn("chromium-browser", ["--headless=new", "--disable-gpu", `--remote-debugging-port=${port}`, "--user-data-dir=" + prof, "about:blank"]); procs.push(ch);
   let t; for (let i = 0; i < 40; i++) { try { t = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(300); } }
@@ -35,6 +36,10 @@ async function browser(name, port, email) {
   const send = (method, params = {}) => new Promise((r) => { const i = ++id; wait[i] = r; ws.send(JSON.stringify({ id: i, method, params })); });
   const ev = async (e) => (await send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true })).result?.value;
   await send("Network.enable"); await send("Network.setBypassServiceWorker", { bypass: true });
+  if (noJson) { // belfry.json never answers 200: the format stays unknown
+    ws.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.method === "Fetch.requestPaused") send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 404, responseHeaders: [{ name: "Content-Type", value: "application/json" }], body: Buffer.from("{}").toString("base64") }) });
+    await send("Fetch.enable", { patterns: [{ urlPattern: "*belfry.json*" }] });
+  }
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await send("Page.navigate", { url: base + "?backend=demo" }); await sleep(2500);
   await ev(`(() => { const i = document.querySelector('input[type=email]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, ${JSON.stringify(email)}); i.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('form').requestSubmit() })()`)
@@ -82,6 +87,20 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   const Ks = new Set(d.filter((e) => e.kind === 8571).map((e) => e.tags.find((t) => t[0] === "d")[1]))
   check("Lina wrote with a key she made (4 envelopes: two keys, never adopting Sam's)", d.filter((e) => e.kind === 8571).length === 4 && Ks.size === 4, d.filter((e) => e.kind === 8571).length);
   await S.shot("sam-thread");
+  // part 5: the lock next to the name, and Who can read this (encrypted/conversation, who-can-read)
+  check("the lock next to the name", await until(() => S.ev("!!document.querySelector('.topbar .seal-lock')"), 8000));
+  await S.ev("document.querySelector('.topbar .seal-lock').click()"); await sleep(1500);
+  let w = await S.ev("document.body.innerText");
+  check("Who can read this: the line, Others with a count, my devices by name, this device marked", /Who can read this/.test(w) && /Only .+’s devices and yours can read this conversation\./.test(w) && /Others/.test(w) && /1 device/.test(w) && /This device/.test(w) && /You see how many devices others have, never which\./.test(w) && /How it works/.test(w), w.slice(0, 600));
+  check("…no trash on this device (sign-out stays in Settings)", !(await S.ev("!!document.querySelector('.who-trash')")));
+  // Xavier's v19: a second device of mine gets a trash icon that asks first
+  await publishList(pkS, [sS.device, getPublicKey(sk("sam-laptop"))]); await sleep(2500);
+  check("a second device of mine: one trash icon (never on this device)", await until(async () => (await S.ev("document.querySelectorAll('.who-trash').length")) === 1, 8000), await S.ev("document.querySelectorAll('.who-trash').length"));
+  await S.ev("document.querySelector('.who-trash').click()"); await sleep(500);
+  check("…it asks first (Remove · Cancel)", /Remove .+\?/.test(await S.ev("document.body.innerText")) && /Cancel/.test(await S.ev("document.body.innerText")));
+  await S.ev("[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel').click()"); await sleep(300);
+  await S.shot("who-can-read");
+  await S.ev("history.back()"); await sleep(800);
 
   // §17.1: someone with no list: held with its text, never sent the old way
   const nobody = getPublicKey(sk("nolist"));
@@ -106,6 +125,31 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await S.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`);
   check("a clear message after the first key shows, marked Not encrypted", await until(async () => (await has(S, "Sent the old way")) && (await has(S, "Not encrypted")), 15000), await S.ev("document.body.innerText.slice(-300)"));
   await S.shot("sam-clear");
+  // the third read's N1: an envelope refused for good is rebuilt for the same key at once (and the message with it)
+  const pkO = getPublicKey(sk("other2")); await publishList(pkO, [getPublicKey(sk("other2-device"))]);
+  await fetch(relayHttp + "/refuse/8571/1");
+  await S.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkO)})`); await sleep(1200);
+  await typeSend(S, "Repaired?");
+  const repaired = await until(async () => { const x = await dump(); return x.some((e) => e.kind === 8571 && e.tags.some((t) => t[0] === "p" && t[1] === pkO)) && x.some((e) => e.kind === 8572 && e.tags.some((t) => t[0] === "p" && t[1] === pkO)) }, 40000);
+  check("a refused envelope: rebuilt, so the recipient has an envelope and the message", !!repaired);
+  // a clear reaction from Lina's account key on Sam's encrypted message: never acts (§17.2, the startup race)
+  await S.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`); await sleep(1000);
+  const target = (await dump()).find((e) => e.kind === 8572 && e.tags.some((t) => t[0] === "p" && t[1] === pkS)); // (its rumor id isn't known here: a reaction on any id of the conversation)
+  const clearReact = nip59.wrapEvent({ kind: 7, content: "👎", tags: [["e", "f".repeat(64)], ["p", pkS], ["k", "14"]], created_at: Math.floor(Date.now() / 1000) }, linaSk, pkS);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([clearReact]) });
+  await S.ev("location.reload()"); await sleep(5000);
+  await S.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`); await sleep(2500);
+  check("after a reload, a clear reaction in the encrypted conversation shows nowhere", !(await has(S, "👎")) && !!target);
+  // the format unknown (no belfry.json answer): a message is held with words, never sent the old way
+  const N = await browser("nojson", 9493, "nojson@example.org", true);
+  const pkN = await N.ev("window.__demoMe()");
+  await N.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`); await sleep(1500);
+  const toLina = async () => (await dump()).filter((e) => (e.kind === 8572 || e.kind === 1059) && e.tags.some((t) => t[0] === "p" && t[1] === pkL)).length;
+  const beforeN = await toLina();
+  await typeSend(N, "Before the format is known");
+  await sleep(8000);
+  check("format unknown: nothing published to Lina for it (no 8572, no 1059)", (await toLina()) === beforeN, { beforeN, after: await toLina() });
+  check("…held in the conversation, with words", await has(N, "Before the format is known") && await has(N, "Not sent"), await N.ev("document.body.innerText.slice(-200)"));
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
     const w = new WebSocket("ws://127.0.0.1:4481"); const out = [];
@@ -122,6 +166,6 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
 
   console.log(bad ? `== enc: ${bad} failed` : "== enc: all ok");
   for (const p of procs) try { p.kill() } catch {}
-  await sleep(500); for (const n of ["lina", "sam"]) try { fs.rmSync(`${dir}/prof-enc-${n}`, { recursive: true, force: true }) } catch {}
+  await sleep(500); for (const n of ["lina", "sam", "nojson"]) try { fs.rmSync(`${dir}/prof-enc-${n}`, { recursive: true, force: true }) } catch {}
   process.exit(bad ? 1 : 0);
 })();

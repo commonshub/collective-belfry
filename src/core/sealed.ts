@@ -9,6 +9,7 @@
 //
 // Rules from the boards: never a key, npub or id as text; only MY devices are named, other
 // people's are a count (and a "changed in the last 30 days" line); channels never have a lock.
+import { encConvHere } from './enc/runtime'
 import { thread, type Conv } from './dm'
 import * as R from './sealedrt'
 import * as SC from './sealedcore'
@@ -127,7 +128,8 @@ function realLines(conv: Conv): DeviceLine[] {
 }
 
 // demo: Notes to myself is sealed as soon as I have devices (window.demoSealed), like the real rule
-export const isSealed = (conv: Conv) => (real() ? R.isSealedConv(conv) : state.sealed.has(conv) || (conv === 'n:' + me() && state.mine.length > 0))
+// (format 3: a conversation encrypted with conversation keys shows the same lock: encrypted/conversation)
+export const isSealed = (conv: Conv) => encConvHere(conv) || (real() ? R.isSealedConv(conv) : state.sealed.has(conv) || (conv === 'n:' + me() && state.mine.length > 0))
 export const myDevices = () => (real() ? realMine() : state.mine)
 export const hasDevices = () => myDevices().length > 0
 /** canvas v117: this browser is my only device for sealed conversations (never for a guest; not

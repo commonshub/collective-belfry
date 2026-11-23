@@ -44,6 +44,8 @@ export interface Dm {
   clear?: boolean
   /** format 3 (§17.5): the people it couldn't reach (no device), "‹name› won't get this" */
   notTo?: string[]
+  /** format 3 (encrypted/state-fetching): a message whose key is here but that can't be opened yet: a placeholder */
+  opening?: boolean
   /** my e-mail's rumor tags, while it may still be sealed again (§9) */
   mailTags?: string[][]
   /** a kind 15: its tags (what opens its file, dmfiles.ts); FILE undefined when they are unusable */
@@ -326,7 +328,17 @@ async function process() {
           // format 3 (docs/encrypted.md): opened with the conversation key; its key or the author's
           // lists not here yet: kept and tried again (never marked seen on that, §6)
           const o = await openEnc(e)
-          if (!o.ok) { if (!o.retry) markSeen(e); continue }
+          if (!o.ok) {
+            if (!o.retry) { markSeen(e); if (items.delete('p:' + e.id)) save(); continue }
+            // its conversation is known (its key is here): "Opening this message…" there until it opens
+            if (o.conv && o.state === 'opening' && !items.has('p:' + e.id)) {
+              const others = o.conv.split(',').filter((p) => p !== self)
+              items.set('p:' + e.id, { rid: 'p:' + e.id, conv: 'n:' + (others.join(',') || self), from: '', mine: false, at: e.created_at, kind: 14, text: '', opening: true })
+              save()
+            }
+            continue
+          }
+          items.delete('p:' + e.id)
           const rumor = o.rumor
           if (rumor.kind === 7 || rumor.kind === 5) reactionRumor(rumor)
           else { d = await fromRumor(rumor); if (d) d.sealed = true }

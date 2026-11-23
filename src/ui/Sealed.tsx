@@ -1,6 +1,8 @@
 // Sealed conversations, the screens (canvas "Messages · encryption", approved 20 Nov). Data:
 // core/sealed.ts (demo only until the lead's docs/sealed.md). Never a key, npub or id as text;
 // only my own devices are named.
+import { encConvHere } from '../core/enc/runtime'
+import { WhoCanRead } from './WhoCanRead'
 import { useEffect, useRef, useState } from 'react'
 import { convName, isMail, mailAddress, peers, type Conv } from '../core/dm'
 import { displayName, realName } from '../core/model'
@@ -126,6 +128,7 @@ export function MyDeviceRows({ list, extra }: { list: MyDevice[]; extra?: (d: My
 export function EncryptionScreen({ conv }: { conv: Conv }) {
   useVersion()
   const [open, setOpen] = useState(true)
+  if (encConvHere(conv)) return <WhoCanRead conv={conv} /> // format 3 (docs/encrypted.md): its own screen
   if (!isSealed(conv)) { replaceHash('#/dm/' + encConv(conv)); return null }
   const mail = isMail(conv)
   const others = peers(conv).filter((p) => p !== me()).sort((a, b) => displayName(a).localeCompare(displayName(b)))

@@ -1,5 +1,6 @@
 import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
 import { ComposerPreview, OgCard } from './LinkPreview'
+import { encConvHere, encFirstAt } from '../core/enc/runtime'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { openProfile } from './Profile'
@@ -105,7 +106,7 @@ function NotesRow({ last }: { last?: Dm }) {
   const sealed = isSealed(conv)
   return (
     <button className="chan dm-row notes-row" onClick={() => go('dm/' + enc(conv))}>
-      <span className="notes-face"><Avatar pubkey={me()} size={36} />{sealed && <span className="notes-lock" aria-label="End-to-end encrypted"><LockIcon /></span>}</span>
+      <span className="notes-face"><Avatar pubkey={me()} size={36} />{sealed && !encConvHere(conv) && <span className="notes-lock" aria-label="End-to-end encrypted"><LockIcon /></span>}</span>
       <span className="t">
         <b>{NOTES}</b>
         <small>{last ? plainRefs(previewOf(last)).split('\n')[0] : 'Only you can read these'}</small>
@@ -159,6 +160,10 @@ export function MessageThread({ conv }: { conv: Conv }) {
   // message; what came before the conversation was sealed reads as usual, then the amber block
   const locked = lockedHere(conv)
   const list = thread(conv).filter((d) => !lockedMsg(conv, d.at))
+  // format 3: the first key's date, and whether unencrypted messages came before it (the not-before line)
+  const firstEnc = conv.startsWith('n:') ? encFirstAt([...peers(conv), me()]) : undefined
+  const clearBefore = firstEnc !== undefined && list.some((d) => d.at < firstEnc && !d.sealed && !d.opening)
+  let notBeforeShown = false
   const mail = isMail(conv)
   const scroller = useRef<HTMLDivElement>(null)
   const visible = useVisible()
@@ -198,18 +203,21 @@ export function MessageThread({ conv }: { conv: Conv }) {
           {notes && <div className="notes-line" role="note">{sealed ? NOTES_SEALED : NOTES_OPEN}</div>}
           {notes && list.length === 0 && !locked && <p className="notes-empty">Write anything you want to keep: ideas, lists, pictures, files.</p>}
           {list.length === 0 && !locked && !notes && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
+          {(() => { notBeforeShown = false; return null })()}
           {rows.map((r) => {
             const t = 'd' in r ? r.d.at * 1000 : r.l.at
             const dd = fmtDay(new Date(t))
             const sep = dd !== day ? (day = dd) : ''
             if ('l' in r) { shareRun = undefined; return <div key={r.l.id} className="dm-item seal-item">{sep && <div className="day">{sep}</div>}<DeviceLineRow conv={conv} l={r.l} onShare={onShare} /></div> }
             const d = r.d
-            const body = r.files.length ? <FilesItem files={r.files} caption={r.caption} /> : <DmItem d={d} head={mail ? title : ''} />
+            const body = d.opening ? <OpeningItem d={d} /> : r.files.length ? <FilesItem files={r.files} caption={r.caption} /> : <DmItem d={d} head={mail ? title : ''} />
             // §8: a shared history sits in its sharer's block (a left rule), one line above it
             const by = sharedBy(d.rid)
             const opens = !!by && by !== shareRun
             shareRun = by
             const item = <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '') + (by ? ' seal-shared' : '')}>{sep && <div className="day">{sep}</div>}{body}</div>
+            // encrypted/not-before: one line where the unencrypted messages end (format 3)
+            if (firstEnc !== undefined && !notBeforeShown && d.at >= firstEnc && clearBefore) { notBeforeShown = true; return <Fragment key={d.rid}><div className="dm-item seal-item"><div className="not-before" role="note">Messages after this are encrypted. Earlier ones are not.</div></div>{item}</Fragment> }
             return opens ? <Fragment key={d.rid}><div className="dm-item seal-item"><SharedByLine who={by} /></div>{item}</Fragment> : item
           })}
           {locked && <LockedBlock since={sealedAt(conv) || Date.now()} />}
@@ -243,6 +251,12 @@ function PersonHead({ pubkey, sealed }: { pubkey: string; sealed?: Conv }) {
 
 /** A message and, under it on its side, its reactions (the same chips as in channels). A hold or
  *  a right-click on the bubble opens the reactions row; e-mail has none. */
+/** encrypted/state-fetching: a message not opened yet; offline: when it opens. It opens by itself. */
+function OpeningItem({ d }: { d: Dm }) {
+  const online = typeof navigator === 'undefined' || navigator.onLine
+  return <div className="dm-bubble dm-opening" role="status"><span className="spinner" aria-hidden="true" /> {online ? 'Opening this message…' : 'Opens when you’re back online'}<time>{fmtTime(d.at)}</time></div>
+}
+
 function DmItem({ d, head }: { d: Dm; head: string }) {
   const [picking, setPicking] = useState(false)
   const can = d.kind !== 1301 && !d.pending && !d.failed

@@ -2241,3 +2241,11 @@ form .create-where { margin-bottom: 14px; }
 .og-pre .t2 { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .og-pre .og-x { width: 44px; height: 44px; border-radius: 22px; border: 0; background: none; display: flex; align-items: center; justify-content: center; flex: none; cursor: pointer; color: var(--text); }
 .og-pre .og-x svg { background: var(--surface-2); border-radius: 16px; padding: 8px; box-sizing: content-box; }
+/* format 3 (Encrypted canvas): the not-before line, a message being opened, Who can read this */
+.not-before { text-align: center; font-size: 13px; color: var(--muted); padding: 6px 12px; }
+.dm-opening { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-style: italic; }
+.dm-opening .spinner { width: 14px; height: 14px; }
+.dm-opening time { margin-left: 8px; font-style: normal; font-size: 12px; }
+.who-can-read .who-lead { text-align: center; margin: 8px 0 0; }
+.who-can-read .who-trash { color: #b91c1c; margin-left: auto; }
+.who-can-read .seal-facts h3 { margin: 18px 0 6px; font-size: 15px; }

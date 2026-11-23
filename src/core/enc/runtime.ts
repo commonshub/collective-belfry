@@ -234,7 +234,7 @@ const keyListeners = new Set<() => void>()
 /** Called when new keys arrive (dm.ts reads the messages waiting for them again). */
 export const onEncKeys = (l: () => void) => { keyListeners.add(l) }
 
-export type Opened = { ok: true; rumor: NostrEvent; conv: string } | { ok: false; retry: boolean; state?: 'opening' | 'unreadable' }
+export type Opened = { ok: true; rumor: NostrEvent; conv: string } | { ok: false; retry: boolean; state?: 'opening' | 'unreadable'; /** its conversation when its key is here (the placeholder's place) */ conv?: string }
 const dRead = new Map<string, { at: number; found: boolean }>() // alias → the last complete #d read
 /** An 8572 for me: its rumor when it opens and is accepted; retry when its key or the author's
  *  lists aren't here yet (never marked seen on that, §6). */
@@ -271,7 +271,7 @@ export async function openEnc(e: NostrEvent): Promise<Opened> {
     const c = chainOnly(o.rumor.pubkey)
     if (readOnThisConnection(o.rumor.pubkey) && c && !c.gaps && !c.lists.some((l) => l.devices.includes(o.seal.pubkey))) return { ok: false, retry: false }
     want([o.rumor.pubkey])
-    return { ok: false, retry: true, state: 'opening' }
+    return { ok: false, retry: true, state: 'opening', conv: key.conv }
   }
   if (v === 'no') return { ok: false, retry: false }
   noteConv(key.conv, key.at)
@@ -387,6 +387,23 @@ export async function repairKey(envId: string): Promise<NostrEvent[]> {
   }
   return []
 }
+
+// ---- for the screens (Who can read this, Me › Devices) --------------------------------------
+
+/** ACCOUNT's current list as the screens show it: its devices and readers (undefined: no list known;
+ *  the service keys: themselves). Others are only ever shown as a count. */
+export function devicesOf(account: string): { devices: string[]; readers: string[]; since?: Map<string, number> } | undefined {
+  const c = chainFor(account)
+  if (c === undefined) return undefined
+  if (c === E.SERVICE) return { devices: [account], readers: [] }
+  const cur = E.current(c)
+  // when each one first appeared on a list (Added …), for my own rows
+  const since = new Map<string, number>()
+  for (const l of c.lists) for (const d of [...l.devices, ...l.readers]) if (!since.has(d)) since.set(d, l.created_at)
+  return { devices: cur.devices, readers: cur.readers, since }
+}
+/** Is CONV (n:…) a format-3 conversation here (keys or messages seen for it, §18.6). */
+export const encConvHere = (conv: string) => conv.startsWith('n:') && isEncConv([...conv.slice(2).split(','), me()])
 
 // tests against a local relay (TEST_RELAYS): public facts only, never a secret
 export const encTest = () => ({ device: encDevice(), keys: encKeyCount(), listed: listedHere(), on: encOn(), convs: [...encConvs.keys()], relay: BELFRY.mainRelay })
