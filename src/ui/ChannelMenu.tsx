@@ -15,7 +15,7 @@ import { canAdmin } from '../core/access'
 import { groupRole } from '../core/checkin'
 import { reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
-import { todoParts, todoPartsText, channelIcon, displayName, dropLinks, group, isPublicChannel, messages, recentlyActive, topics, ANNOUNCE, isAnnouncement, type Group } from '../core/model'
+import { todoParts, todoPartsText, channelIcon, displayName, dropLinks, group, isPublicChannel, messages, recentlyActive, topics, ANNOUNCE, isAnnouncement, type Group, followsIt } from '../core/model'
 import { leaveGroup } from '../core/actions'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -93,7 +93,8 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
     { page: 'topics', icon: <HashIcon />, title: 'Topics', n: c.topics },
   ].filter((r) => (r.n as number) > 0 || (r.page === 'todos' && f.allTasks.length > 0))
   const asking = g.isPod && canAdmin(g) ? g.applications.length : 0
-  rows.push({ page: 'members', icon: <PeopleIcon />, title: 'Members', n: g.members.size, hint: asking ? `${asking} asking to join` : undefined })
+  // a channel's people are its followers (Xavier, 23 Nov); a group keeps its members
+  rows.push({ page: 'members', icon: <PeopleIcon />, title: followsIt(g) ? 'Followers' : 'Members', n: g.members.size, hint: asking ? `${asking} asking to join` : undefined })
   if (!guestish) rows.push({ page: 'notifications', icon: <BellIcon on={notifyRow.on} />, title: 'Notifications', n: notifyRow.value })
   if (mayEdit(g) && !g.archived) rows.push({ page: 'settings', icon: <GearIcon />, title: 'Settings' })
   // Notifications is a sheet over the channel (three choices, applied on tap); the others are screens
@@ -198,7 +199,7 @@ export function ChannelPage({ id, page }: { id: string; page: string }) {
     <div className={'screen chan-page' + (wide ? '' : ' slide-in')}>
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => up(parent)}>‹</button>
-        <h1>{TITLES[page] ?? page}<small>{name}</small></h1>
+        <h1>{page === 'members' && followsIt(g) ? 'Followers' : TITLES[page] ?? page}<small>{name}</small></h1>
         {/* "add one" is an icon top right, like Groups' + (Xavier, 2026-11-22; canvas v185) */}
         {page === 'members' && mayInvite && <button className="icon-btn round invite-btn" aria-label="Invite someone" title="Invite someone" onClick={() => setInviting(true)}><PlusIcon /></button>}
       </div>

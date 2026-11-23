@@ -6,7 +6,7 @@ import { isLocalOnly, me } from '../core/sync'
 import { baseSubject, channelSignature, DEMO_GROUPS, fetchLarge, report, sendAsChannel } from '../core/dm'
 import { hexToBytes } from '@noble/hashes/utils'
 import { assignCard, createChannel, setCardStatus, setInbox } from '../core/actions'
-import { displayName, plainRefs, type CardState, type Group, nameOf } from '../core/model'
+import { displayName, followsIt, plainRefs, type CardState, type Group, nameOf } from '../core/model'
 import { BELFRY } from '../config'
 import { parseMail, type Mail } from '../core/mime'
 import { mailIn, mailOut, type MailItem, type MailThread } from '../core/mailthreads'
@@ -243,7 +243,7 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
       <div className={'send-to' + (mail ? ' mail' : ' team')} role="status">
         {mail
           ? <span className="st-what">An e-mail from <b>{address}</b> to {name}</span>
-          : <span className="st-what">Only members of {where} see this. <b>{firstName} does not.</b></span>}
+          : <span className="st-what">Only {g && followsIt(g) ? 'followers' : 'members'} of {where} see this. <b>{firstName} does not.</b></span>}
       </div>
     </div>
   )

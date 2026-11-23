@@ -11,7 +11,7 @@
 import { LinkPair } from './LinkPair'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import qrcode from 'qrcode-generator'
-import { channelIcon, displayName, group, profiles, nameOf } from '../core/model'
+import { channelIcon, displayName, followsIt, group, profiles, nameOf } from '../core/model'
 import { inChannel, inviteMember, isAgent, isGuest, LinkFailed, makeInviteLink, myAgents, type GuestDays, type JoinsAs, type LinkOpts, type Membership, type MyAgents } from '../core/invite'
 import { agentOwner } from '../core/access'
 import { isBelfryAdmin } from '../core/people'
@@ -219,7 +219,7 @@ function InviteMember({ id }: { id: string }) {
         return (
           <div key={pk} className="invite-row">
             <Avatar pubkey={pk} size={28} />
-            <span className="t">{displayName(pk)}<small>{kind(pk)}{here ? (g?.closed || isGuest(pk) ? 'Already in' : 'Already a member') : 'Not in this channel'}</small></span>
+            <span className="t">{displayName(pk)}<small>{kind(pk)}{here ? (g && followsIt(g) && !isGuest(pk) ? 'Already following' : g?.closed || isGuest(pk) ? 'Already in' : 'Already a member') : 'Not in this channel'}</small></span>
             {done.has(pk) || (here && isGuest(pk))
               ? <span className="hint">{done.get(pk) ?? ''}</span>
               : <Btn className="btn small" onClick={async () => {

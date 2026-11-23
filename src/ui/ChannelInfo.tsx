@@ -13,7 +13,7 @@ import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from
 import { inboxKnown, isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage, nameOf } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, assignTask, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
-import { ACTIVE_DAYS, allGroups, archivable, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
+import { ACTIVE_DAYS, allGroups, archivable, followsIt, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
 import { isGuest } from '../core/invite'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
@@ -45,7 +45,7 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
       </div>
       {g?.archived && <ArchivedBar g={g} />}
       {/* archived: what there is to read (no to-dos to tick) */}
-      <ChannelInfoBody id={id} tab={g?.archived && tab === 'tasks' ? 'about' : tab} setTab={setTab} tabs={g?.archived ? [['about', 'About'], ['members', 'Members'], ['files', 'Files'], ['log', 'Log']] : undefined} />
+      <ChannelInfoBody id={id} tab={g?.archived && tab === 'tasks' ? 'about' : tab} setTab={setTab} tabs={g?.archived ? [['about', 'About'], ['members', followsIt(g) ? 'Followers' : 'Members'], ['files', 'Files'], ['log', 'Log']] : undefined} />
       {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
     </div>
   )
@@ -310,7 +310,7 @@ const CheckIcon = () => <svg className="vis-check" width="20" height="20" viewBo
 const VIS: [Vis, () => JSX.Element, string, string][] = [
   ['members', VisLock, 'Members only', 'Everyone with a pass in this belfry'],
   ['public', VisGlobe, 'Public', 'Anyone on the web can read it. Only members write.'],
-  ['closed', VisAsk, 'Closed', 'People ask to join. A steward of this channel approves.'],
+  ['closed', VisAsk, 'Closed', 'People ask to follow. A steward of this channel approves.'],
 ]
 /** A group's Settings: the New group form's three choices (the lead, 2026-11-22, note n-groups-new) */
 const POD_VIS: [Vis, () => JSX.Element, string, string][] = [
@@ -553,9 +553,9 @@ export function Members({ groupId }: { groupId: string }) {
   const isMember = !allGroups().flatMap((x) => guestJoins(x.id)).some((j) => j.pubkey === me() && !j.member)
   return (
     <div>
-      {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}
+      {reviewing.length > 0 && <div className="section-title">{followsIt(g) ? 'Asking to follow' : 'Asking to join'} <span>{reviewing.length}</span></div>}
       {reviewing.map((a) => <GroupRequest key={a.ev.id} g={g!} a={a} />)}
-      {reviewing.length > 0 && <div className="section-title">Members <span>{g?.members.size}</span></div>}
+      {reviewing.length > 0 && <div className="section-title">{followsIt(g) ? 'Followers' : 'Members'} <span>{g?.members.size}</span></div>}
       <Guard fallback={null}><Suspense fallback={<div className="members-map" />}>
         {mapped.length > 0
           ? <MembersMap pubkeys={members} onOpen={openProfile} />

@@ -541,11 +541,11 @@ function JoinBar({ g }: { g: Group }) {
   return (
     <>
       <div className="join-bar">
-        <span>{applied ? (g.vouches > 0 ? 'Request sent. Its members vouch, or its stewards answer.' : `Request sent. The ${what}’s stewards will answer.`) : `Members apply to join this ${what}.`}</span>
-        {!applied && <button className="btn small" onClick={() => setAsking(true)}>Apply to join</button>}
+        <span>{applied ? (g.vouches > 0 ? 'Request sent. Its members vouch, or its stewards answer.' : `Request sent. The ${what}’s stewards will answer.`) : g.isPod ? `Members apply to join this ${what}.` : 'People ask to follow this channel.'}</span>
+        {!applied && <button className="btn small" onClick={() => setAsking(true)}>{g.isPod ? 'Apply to join' : 'Ask to follow'}</button>}
       </div>
       {asking && (
-        <Sheet title={`Apply to ${g.name}`} onClose={() => setAsking(false)}>
+        <Sheet title={g.isPod ? `Apply to ${g.name}` : `Ask to follow #${g.name}`} onClose={() => setAsking(false)}>
           <Form onSubmit={async (e) => { e.preventDefault(); await joinGroup(g.id, answer.trim()); setAsking(false) }}>
             <p className="apply-q">{g.prompt || DEFAULT_PROMPT}</p>
             <textarea className="input" rows={4} autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} />

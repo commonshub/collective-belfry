@@ -1184,6 +1184,11 @@ export function replyRoot(groupId: string, id: string): string | undefined {
 export const deletedMessage = (_groupId: string, id: string) => deleted(all(me())).has(id)
 
 /** A private group I'm not in (nor run): not listed to me, no Join or Apply (the lead, 2026-11-22). */
+/** Xavier, 2026-11-23 (the lead): in a channel (a topic) its people are followers, not members;
+ *  groups, events and proposals keep members. The belfry's own members stay members everywhere. */
+export const followsIt = (g?: { isPod: boolean; isEvent: boolean; isProposal: boolean }) => !!g && !g.isPod && !g.isEvent && !g.isProposal
+/** "12 followers" in a channel, "8 members" elsewhere. */
+export const peopleCount = (g: { isPod: boolean; isEvent: boolean; isProposal: boolean }, n: number) => followsIt(g) ? `${n} ${n === 1 ? 'follower' : 'followers'}` : `${n} ${n === 1 ? 'member' : 'members'}`
 export const hiddenFromMe = (g: Group | undefined): boolean => !!g && g.isPod && g.inviteOnly && !g.members.has(me()) && !g.admins.has(me())
 
 /** Someone joined the belfry (docs/one-shape.md "Joining the belfry", 2026-11-22): the groups key's

@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { channelIcon, displayName, group, plainRefs, profiles, proposalFor, STATUS_LABEL } from '../core/model'
+import { channelIcon, displayName, group, peopleCount, plainRefs, profiles, proposalFor, STATUS_LABEL } from '../core/model'
 import { onIt } from './ChannelInfo'
 import { Avatar } from './common'
 import { isGuest } from '../core/invite'
@@ -60,7 +60,6 @@ export function RefName({ r }: { r: Ref }) {
 }
 
 const KIND_LABEL: Record<RefKind, string> = { channel: 'Channel', group: 'Group', event: 'Event', proposal: 'Proposal', todo: 'To-do', message: 'Message', person: 'Person', drop: 'Drop box' }
-const count = (n: number) => `${n} ${n === 1 ? 'member' : 'members'}`
 
 /** At the end of a message: a box that opens it. */
 export function RefPreview({ r }: { r: Ref }) {
@@ -135,7 +134,7 @@ export function RefPreview({ r }: { r: Ref }) {
   const parent = p && group(p.groupId)?.parent
   const sub = x.kind === 'proposal'
     ? ['Proposal' + (parent && group(parent) ? ` in #${group(parent)!.name}` : ''), p ? STATUS_LABEL[p.status] : ''].filter(Boolean).join(' · ')
-    : [KIND_LABEL[x.kind], count(g!.members.size), g!.closed ? 'closed' : ''].filter(Boolean).join(' · ')
+    : [KIND_LABEL[x.kind], peopleCount(g!, g!.members.size), g!.closed ? 'closed' : ''].filter(Boolean).join(' · ')
   const votes = p?.poll ? [...p.poll.votes.values()] : []
   const about = p?.summary || g?.about
   return (
