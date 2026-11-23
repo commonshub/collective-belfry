@@ -540,7 +540,7 @@ export function sealWraps(rumor: C.Rumor, to: string[]): NostrEvent[] {
   return [...new Set([...to, me()])].map((p) => {
     const lb = lbFor(p)
     if (!lb) throw new NoHead(p) // whose device isn't ready (v98: "‹Name›'s new device isn't ready")
-    return C.sealToLetterbox(device!.secret, r, p, lb)
+    return C.sealToLetterbox(device!.secret, r, p, lb, undefined, p === me()) // my own copy: silent (§4)
   })
 }
 
@@ -941,7 +941,7 @@ async function sendConfirms() {
       // left my head (removed) or never added by a roster after the root: nothing to tell
       if (!by || by.n === 1 || !head.devices.includes(dev) || !aboutRoster(st.notices?.[dev], by)) { await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, sent: true } } }); continue }
       try {
-        await publishNow('main', C.sealToLetterbox(device.secret, C.confirmRumor(device.pub, me(), dev, by.id, nowS()), me(), head.lb))
+        await publishNow('main', C.sealToLetterbox(device.secret, C.confirmRumor(device.pub, me(), dev, by.id, nowS()), me(), head.lb, undefined, true))
         await commit((x) => { const n = x.notices?.[dev]; if (n) x.notices = { ...x.notices, [dev]: { ...n, sent: true } } })
       } catch { /* refused or offline: the next pass */ }
     }
@@ -1117,7 +1117,7 @@ async function handBack(giver: string, got: C.LbKey[]) {
   const extra = Object.entries(st.keys).filter(([lb]) => !brought.has(lb)).map(([lb, secret]) => ({ lb, secret }))
   if (!extra.length || (await kvGet(KV_BACK + giver).catch(() => undefined))) return
   try {
-    for (const chunk of C.keyChunks(device.pub, me(), extra, nowS())) await publishNow('main', C.handKeys(device.secret, me(), chunk, giver))
+    for (const chunk of C.keyChunks(device.pub, me(), extra, nowS())) await publishNow('main', C.handKeys(device.secret, me(), chunk, giver, undefined, true))
     await kvSet(KV_BACK + giver, { giver, at: Date.now() }).catch(() => {})
   } catch { /* not accepted: tried again at the next hand-over from it */ }
 }
@@ -1180,7 +1180,7 @@ function noteHanded(dev: string) { const at = nowS(); handedAt.set(dev, at); voi
 async function handAllKeys(dev: string): Promise<boolean> {
   const keys = Object.entries(st.keys).map(([lb, secret]) => ({ lb, secret }))
   try {
-    for (const chunk of C.keyChunks(device!.pub, me(), keys, nowS())) await publishNow('main', C.handKeys(device!.secret, me(), chunk, dev))
+    for (const chunk of C.keyChunks(device!.pub, me(), keys, nowS())) await publishNow('main', C.handKeys(device!.secret, me(), chunk, dev, undefined, true))
     noteHanded(dev)
     return true
   } catch { return false }
@@ -1261,7 +1261,7 @@ async function rotate(gone: string[]) {
   const trusted = st.pins[me()]?.trusted // after a switch (§5.6, 52808c2): never to a device this one wouldn't answer without a prompt
   for (const d of ev.tags.filter((t) => t[0] === 'device').map((t) => t[1])) {
     if (d === device!.pub || !live.has(d) || (trusted && !trusted.includes(d))) continue
-    try { await publishNow('main', C.handKeys(device!.secret, me(), [k], d)); noteHanded(d) } catch { /* it asks again (§5.5) */ }
+    try { await publishNow('main', C.handKeys(device!.secret, me(), [k], d, undefined, true)); noteHanded(d) } catch { /* it asks again (§5.5) */ }
   }
   await writeMyName()
 }
@@ -1310,7 +1310,7 @@ export async function shareHistory(person: string, rumors: C.Rumor[], conv: Conv
   if (!c) throw new Error('Their new device isn’t ready yet.')
   const { packs: list } = C.packHistory(me(), person, rumors.map((r) => C.withId(r)), nowS())
   for (const p of list) { packs.set(p.id, p); await kvSet(KV_PACK + p.id, p).catch(() => {}) }
-  for (const p of list) await enqueueSigned('main', C.sealToLetterbox(device.secret, p, person, C.headOf(c).lb), p.id)
+  for (const p of list) await enqueueSigned('main', C.sealToLetterbox(device.secret, p, person, C.headOf(c).lb, undefined, person === me()), p.id)
   void flush()
   await commit((s) => { const f = s.fresh[person]; if (f && !f.shared.includes(conv)) f.shared.push(conv) })
   touch()
@@ -1415,7 +1415,7 @@ async function resealQueued() {
     const r = packs.get(o.dm!) ?? rumorSource?.(o.dm!)
     if (!r) continue
     try {
-      const nw = C.sealToLetterbox(device.secret, r, to, want)
+      const nw = C.sealToLetterbox(device.secret, r, to, want, undefined, C.isSilent(w) || to === me())
       await putOutbox({ ...o, signed: nw, content: nw.content, tags: nw.tags, created_at: nw.created_at, status: o.status === 'failed' ? 'queued' : o.status, error: undefined })
     } catch { /* too big or broken: left as it was */ }
   }

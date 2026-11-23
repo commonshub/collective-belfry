@@ -210,6 +210,12 @@ export function signWith(secret: Uint8Array, t: { kind: number; created_at: numb
 const backdated = (now: number) => now - Math.floor(Math.random() * BACKDATE)
 const conv = (secret: Uint8Array, pub: string) => nip44.v2.utils.getConversationKey(secret, pub)
 
+/** §4 "Silent wraps" (27e149a): the tag on a wrap that addresses only its own sender (my copy of a
+ *  message, a note, an 8563, keys and history to my own devices): the belfry sends no push for it.
+ *  Readers ignore it (and any wrap tag they don't know). */
+export const SILENT: string[] = ['silent', '1']
+export const isSilent = (w: { tags: string[][] }) => w.tags.some((t) => t[0] === 'silent' && t[1] === '1')
+
 /** RUMOR sealed by SIGNER and gift-wrapped, both encrypted to the key TO. */
 function wrapTo(signer: Uint8Array, rumor: Rumor, to: string, tags: string[][], f: Fixed = {}, now = Math.floor(Date.now() / 1000)): NostrEvent {
   const r = withId(rumor)
@@ -224,9 +230,9 @@ function wrapTo(signer: Uint8Array, rumor: Rumor, to: string, tags: string[][], 
 export const sealToKey = (signer: Uint8Array, rumor: Rumor, to: string, tags: string[][], f?: Fixed) => wrapTo(signer, rumor, to, tags, f)
 
 /** §4: RUMOR sealed by a device key (the belfry's for its mail) to the letterbox LB of ACCOUNT. */
-export function sealToLetterbox(signer: Uint8Array, rumor: Rumor, account: string, lb: string, f?: Fixed): NostrEvent {
+export function sealToLetterbox(signer: Uint8Array, rumor: Rumor, account: string, lb: string, f?: Fixed, silent = false): NostrEvent {
   if (!isKey(account) || !isKey(lb)) throw new Error('account and letterbox are 64 hex characters')
-  return wrapTo(signer, rumor, lb, [['p', account], ['lb', lb]], f)
+  return wrapTo(signer, rumor, lb, [['p', account], ['lb', lb], ...(silent ? [SILENT] : [])], f)
 }
 
 /** (seal, rumor as sent) of a gift wrap to SECRET's key; throws when it doesn't open. */
@@ -319,9 +325,9 @@ export function keyChunks(giver: string, account: string, keys: LbKey[], at: num
 }
 
 /** The giver's key chain gift-wrapped to a device: ["p", <receiving device>], no lb. */
-export function handKeys(giver: Uint8Array, account: string, keys: LbKey[], toDevice: string, f?: Fixed & { rumorAt?: number }): NostrEvent {
+export function handKeys(giver: Uint8Array, account: string, keys: LbKey[], toDevice: string, f?: Fixed & { rumorAt?: number }, silent = false): NostrEvent {
   const r = keysRumor(getPublicKey(giver), account, keys, f?.rumorAt ?? Math.floor(Date.now() / 1000))
-  return wrapTo(giver, r, toDevice, [['p', toDevice]], f)
+  return wrapTo(giver, r, toDevice, [['p', toDevice], ...(silent ? [SILENT] : [])], f)
 }
 
 /** (seal, rumor) of a hand-over to this device; throws when it isn't one. */

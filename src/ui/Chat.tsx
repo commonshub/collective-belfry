@@ -935,7 +935,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}
         onEvent={events ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
-      {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => setPrefill(`https://${BELFRY.domain}/events/${d} `)} />}
+      {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => { const url = `https://${BELFRY.domain}/events/${d}`; void postMessage(id, url, [], undefined, false, eventTags(url)) }} />} {/* SPEC 19.63: the meeting's URL is sent in the channel at once, not left in the composer */}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => { setNewTodo(false); setTodoFrom(null) }} initial={todoFrom?.text} from={todoFrom?.from} />}
       {newThread && <NewThreadSheet groupId={id} onClose={() => setNewThread(false)} onSent={() => { stick.current = true }} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}

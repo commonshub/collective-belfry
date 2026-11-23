@@ -436,7 +436,7 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
   const seal = await s.sign({ kind: 13, created_at: backdate(), tags: [], content: await s.encrypt(to, JSON.stringify(rumor)) })
   const one = generateSecretKey()
   return finalizeEvent({
-    kind: 1059, created_at: backdate(), tags: [['p', to]],
+    kind: 1059, created_at: backdate(), tags: [['p', to], ...(to === me() ? [['silent', '1']] : [])], // my own copy: silent (sealed.md §4)
     content: nip44.v2.encrypt(JSON.stringify(seal), nip44.v2.utils.getConversationKey(one, to)),
   }, one)
 }
