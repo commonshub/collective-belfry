@@ -41,7 +41,7 @@ import { ArchiveIcon, AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRig
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { takeMid } from '../core/cards'
-import { agentOwner, canAdmin, isAdmin } from '../core/access'
+import { agentOwner, belfryGroupsKey, canAdmin, isAdmin } from '../core/access'
 import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, reading, useGuestMode } from '../core/guestmode'
 import { cleared, messageSent, typed, type Place } from '../core/typing'
@@ -794,9 +794,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   // a shared inbox's e-mails: one row per e-mail thread, where its latest activity is (mailthreads.ts)
   const gkey = knownGroupsKey()
   const mt = mailThreads(id, gkey)
-  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'entered'; j: BelfryJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number }
+  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'entered'; j: BelfryJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number } | { t: 'card'; m: Message; at: number }
   const items: Item[] = []
-  for (const m of list) if (!mt.of.has(m.ev.id)) items.push({ t: 'msg', m, at: m.ev.created_at })
+  // the groups key's "started this group from a printed card" line (core/cards.ts): a system line, never a person's message
+  for (const m of list) if (!mt.of.has(m.ev.id)) items.push(isCardLine(m) ? { t: 'card', m, at: m.ev.created_at } : { t: 'msg', m, at: m.ev.created_at })
   if (!topic) for (const x of mt.list) items.push({ t: 'mail', th: x, at: x.last })
   for (const j of joins) items.push({ t: 'join', j, at: j.at })
   for (const j of entered) items.push({ t: 'entered', j, at: j.at })
@@ -890,6 +891,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
           {items.map((it, i) => {
             if (it.t === 'join') return <JoinLine key={'j' + it.j.id} j={it.j} />
+            if (it.t === 'card') return <CardLine key={'c' + it.m.ev.id} m={it.m} groupId={id} />
             if (it.t === 'entered') return <EnteredLine key={'e' + it.j.id} j={it.j} />
             if (it.t === 'mail') {
               const prevAt = items[i - 1]?.at
@@ -1586,6 +1588,20 @@ function EnteredLine({ j }: { j: BelfryJoin }) {
         ? <span>{who}, {owner ? (owner === me() ? 'your agent' : <><b>{displayName(owner)}</b>’s agent</>) : 'an agent'}, joined</span>
         : <span>{who} joined {community}</span>}
       <time>{fmtTime(j.at)}</time>
+    </div>
+  )
+}
+
+/** The groups key's kind 9 tagged ["card", "1"] (cards server): who started this group or topic from a printed card. */
+const isCardLine = (m: Message) => m.ev.pubkey === belfryGroupsKey() && m.ev.tags.some((t) => t[0] === 'card' && t[1] === '1')
+/** "<name> started this group from a printed card" (our words; never the event's text, never the card's id). */
+function CardLine({ m, groupId }: { m: Message; groupId: string }) {
+  const who = m.ev.tags.find((t) => t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? ''))?.[1]
+  const word = group(groupId)?.isPod ? 'group' : 'topic'
+  return (
+    <div className="join-line" role="note">
+      <span>{who ? <><b>{who === me() ? 'You' : displayName(who)}</b> started this {word}</> : `This ${word} was started`} from a printed card</span>
+      <time>{fmtTime(m.ev.created_at)}</time>
     </div>
   )
 }

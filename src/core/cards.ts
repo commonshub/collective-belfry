@@ -8,7 +8,8 @@
 //   POST /cards/<id>/claim-start    {email}                         NIP-98 by this browser's new key → 202 (a 6-digit code by e-mail)
 //   POST /cards/<id>/claim-verify   {email, code, name, title, about, hashtag?}  the same key
 //                                     → {signed_in, bunker_url, pubkey, nip05?, group}: that key is the session's
-// Errors by code, in the app's own words: 409 claimed {group, invite} (someone was first: join
+// Errors by code, in the app's own words (never the server's `message`): 409 retired (the card's
+// retired screen), 403 no_pass / agent / guest_not_saved / unverified (signed-in claim), 409 claimed {group, invite} (someone was first: join
 // theirs through the guest link, no second code), 409 hashtag_taken, 409 own_key / agent / key_taken,
 // 400 wrong_code {tries_left}, 410 expired, 422 invalid {field}, 429, 503 signer | relay.
 // A claimed card IS a guest link: its invite goes through the usual path (auth.ts pendingInvite).
@@ -85,11 +86,11 @@ export const dropForm = () => { try { localStorage.removeItem(FORM) } catch { /*
 export const hashtagSlug = (s: string) => s.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30)
 
 // ---- errors -----------------------------------------------------------------------------------
-export type CardError = 'claimed' | 'hashtag_taken' | 'own_key' | 'agent' | 'key_taken' | 'wrong_code' | 'expired' | 'invalid' | 'too_many' | 'signer' | 'unknown' | 'unsupported' | 'offline' | 'failed'
+export type CardError = 'claimed' | 'retired' | 'no_pass' | 'guest_not_saved' | 'unverified' | 'hashtag_taken' | 'own_key' | 'agent' | 'key_taken' | 'wrong_code' | 'expired' | 'invalid' | 'too_many' | 'signer' | 'unknown' | 'unsupported' | 'offline' | 'failed'
 export class CardFailed extends Error {
   constructor(public code: CardError, public extra: { triesLeft?: number; field?: string; group?: string; invite?: string } = {}) { super(code) }
 }
-const KNOWN = new Set<CardError>(['claimed', 'hashtag_taken', 'own_key', 'agent', 'key_taken', 'wrong_code', 'expired', 'invalid', 'too_many', 'signer'])
+const KNOWN = new Set<CardError>(['claimed', 'retired', 'no_pass', 'guest_not_saved', 'unverified', 'hashtag_taken', 'own_key', 'agent', 'key_taken', 'wrong_code', 'expired', 'invalid', 'too_many', 'signer'])
 export function cardFailure(status: number, d: Record<string, unknown>): CardFailed {
   if (status === 404) return new CardFailed('unknown')
   if (status === 429) return new CardFailed('too_many')
@@ -110,9 +111,13 @@ export function cardErrorText(f: CardFailed, kind: CardKind = 'group'): string {
   if (f.code === 'invalid') return f.extra.field === 'email' ? 'That doesn’t look like an e-mail address.' : f.extra.field === 'hashtag' ? 'Use letters, digits and dashes, 2 to 30 characters.' : f.extra.field === 'name' ? 'Please give your name.' : `Please give the ${kind}’s name, up to 80 characters.`
   return ({
     claimed: `Someone just started this ${kind}.`,
+    retired: `This card was retired: it doesn’t start a ${kind} any more.`,
+    no_pass: `Only members of this belfry can start a ${kind} while signed in. Sign out to start it as a guest with your e-mail.`,
+    guest_not_saved: `Save your account with your e-mail first, then scan the card again.`,
+    unverified: `Confirm your e-mail address first, then scan the card again.`,
     hashtag_taken: 'This hashtag is taken. Try another one.',
     own_key: 'This address has an account that signs in with its own key. Sign in with it, then scan the card again.',
-    agent: 'This address is an AI agent’s. Use a person’s address.',
+    agent: 'An AI agent can’t start it. Use a person’s account.',
     key_taken: 'That did not work. Send a new code and try again.',
     wrong_code: 'That code is not right. Check the e-mail and try again.',
     expired: 'That code has expired. Send a new one.',
@@ -152,15 +157,17 @@ export function infoOf(d: Record<string, unknown>): CardInfo {
 }
 
 /** Is HASHTAG free for a new topic? */
-export async function hashtagState(hashtag: string): Promise<'free' | 'taken' | 'invalid'> {
+/** 'unknown': the belfry couldn't check just now (503, offline): try again. */
+export async function hashtagState(hashtag: string): Promise<'free' | 'taken' | 'invalid' | 'unknown'> {
   const h = hashtagSlug(hashtag)
   if (h.length < 2) return 'invalid'
   if (demo()) return ['general', 'events', 'market', 'requests'].includes(h) ? 'taken' : 'free'
   try {
     const r = await fetch(api('/hashtag/' + encodeURIComponent(h)))
+    if (r.status >= 500 || r.status === 429) return 'unknown'
     const d = (await r.json().catch(() => ({}))) as { state?: string }
-    return d.state === 'free' || d.state === 'taken' ? d.state : 'invalid'
-  } catch { return 'invalid' }
+    return d.state === 'free' || d.state === 'taken' ? d.state : 'invalid' // a reserved name answers taken
+  } catch { return 'unknown' }
 }
 
 const claimBody = (kind: CardKind, f: CardForm) => ({ title: plainLabel(f.title).slice(0, 80), about: f.about.trim().slice(0, 500), ...(kind === 'topic' ? { hashtag: hashtagSlug(f.hashtag) } : {}) })
@@ -211,7 +218,7 @@ export async function claimVerify(id: string, kind: CardKind, f: CardForm, code:
     try { localStorage.setItem(DEMO, JSON.stringify({ ...demoClaimed(), [id]: group })) } catch { /* private mode */ }
     return { signed: { session: { ...demoSession(f.email.trim()), clientSecret: bytesToHex(applicantKey()) }, address: f.email.trim(), open: group, moved: false }, group }
   }
-  const d = await postNew(`/${id}/claim-verify`, { email: f.email.trim(), code: code.trim(), name: plainLabel(f.name).slice(0, 100), ...claimBody(kind, f) })
+  const d = await postNew(`/${id}/claim-verify`, { email: f.email.trim(), code: code.trim(), name: plainLabel(f.name).slice(0, 100), client: 'belfry-web', ...claimBody(kind, f) })
   if (d.signed_in !== true || typeof d.group !== 'string' || !GROUP.test(d.group)) throw new CardFailed('failed')
   let signed: SignedIn
   try { signed = signedInFrom(d, applicantKey(), f.email) } catch { throw new CardFailed('failed') }

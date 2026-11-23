@@ -63,7 +63,7 @@ export function CardScreen({ id, signedIn, onIn, onInvite, onStarted, onClose }:
     </Dead>
   )
   if (info.state === 'archived') return <Dead title={`${info.title || `This ${info.kind}`} has ended`} onClose={onClose}>The {info.kind} was archived.</Dead>
-  return <StartForm id={id} kind={info.kind} signedIn={signedIn} onIn={onIn} onTaken={join} onStarted={onStarted} />
+  return <StartForm id={id} kind={info.kind} signedIn={signedIn} onIn={onIn} onTaken={join} onStarted={onStarted} onRetired={() => setInfo({ state: 'retired', kind: info.kind, title: '' })} />
 }
 
 /** A card that can't go the usual way: why, and the belfry's page (states-closed, -archived, -offline). */
@@ -85,8 +85,8 @@ function Dead({ title, children, again, onClose }: { title: string; children: Re
 
 type Step = 'form' | 'code' | 'taken'
 
-function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted }: {
-  id: string; kind: CardKind; signedIn?: string; onIn: (r: SignedIn) => void | Promise<void>; onTaken: (group: string, invite: string) => void; onStarted: (group: string) => void
+function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: {
+  id: string; kind: CardKind; signedIn?: string; onIn: (r: SignedIn) => void | Promise<void>; onTaken: (group: string, invite: string) => void; onStarted: (group: string) => void; onRetired: () => void
 }) {
   const community = useCommunityName(NAME)
   const [f, setF] = useState<CardForm>(() => keptForm(id) ?? EMPTY)
@@ -95,7 +95,8 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted }: {
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
-  const [tag, setTag] = useState<'' | 'free' | 'taken' | 'invalid' | 'checking'>('')
+  const [tag, setTag] = useState<'' | 'free' | 'taken' | 'invalid' | 'unknown' | 'checking'>('')
+  const [recheck, setRecheck] = useState(0)
   const [taken, setTaken] = useState<{ group: string; invite: string } | null>(null)
   const set = (k: keyof CardForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF((o) => ({ ...o, [k]: e.target.value }))
   useEffect(() => { keepForm(id, f) }, [id, f])
@@ -109,11 +110,12 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted }: {
     asked.current = slug
     const t = setTimeout(() => { void hashtagState(slug).then((s) => { if (asked.current === slug) setTag(s) }) }, 350)
     return () => clearTimeout(t)
-  }, [slug, kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slug, kind, recheck]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const word = kind === 'topic' ? 'topic' : 'group'
   const fail = (e: unknown) => {
     const x = e instanceof CardFailed ? e : new CardFailed('failed')
+    if (x.code === 'retired') { dropForm(); onRetired(); return }
     if (x.code === 'claimed' && x.extra.group && x.extra.invite) { dropForm(); setTaken({ group: x.extra.group, invite: x.extra.invite }); setStep('taken'); return }
     if (x.code === 'hashtag_taken') { setTag('taken'); setStep('form') }
     setError(cardErrorText(x, kind))
@@ -183,7 +185,7 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted }: {
       <Form className="start-form card-form" onSubmit={start}>
         {kind === 'topic' && <label className="field"><span>Hashtag</span>
           <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required onChange={set('hashtag')} placeholder="sourdough" /></span>
-          <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? '✓ Available' : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : ''}</small>
+          <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? '✓ Available' : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : tag === 'unknown' ? <>Couldn’t check just now · <button type="button" className="link" onClick={() => setRecheck((n) => n + 1)}>Try again</button></> : ''}</small>
         </label>}
         <label className="field"><span>{kind === 'topic' ? 'Topic' : 'Title'}</span>
           <input className="input" value={f.title} maxLength={80} required onChange={set('title')} placeholder={kind === 'topic' ? 'What the topic is' : 'What you wrote on the card'} /></label>
