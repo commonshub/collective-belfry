@@ -1,169 +1,237 @@
 # Sealed conversations, version 2: one list of devices, a copy for each
 
-Status: **draft for review, nothing built** (2026-11-23). Replaces the chain of rosters, the
-letterbox, the anchor, device requests as a way IN, key hand-overs, endorsements and §5.7 of
-`docs/sealed.md`. What stays from version 1: device keys, the seal signed by the device, the
-gift wrap, silent wraps, sealed history (8564), "It was me" once for all (8563), the 40 000
-byte ceiling, files (kind 15), Notes to myself.
+Status: **contract, agreed 2026-11-23 after review by Android, iPhone and web; being built.**
+Replaces the chain of rosters, the letterbox, the anchor, device requests as a way in, key
+hand-overs, endorsements and §5.7 of `docs/sealed.md`. Kept from version 1: device keys, the
+seal signed by the device, the gift wrap, silent wraps, history packs (8564), "It was me"
+(8563), the 40 000 byte ceiling, files (kind 15), Notes to myself, reading v1 wraps.
+
+Changes to this file after today go through the lead and are announced to the three apps
+with the section that changed. Vectors: `vectors/sealed.json`, section `v2`, in belfry-android.
 
 ## 0. Why
 
-Xavier, 2026-11-23, after a morning of new devices that said "Messages are locked on this
-device": "This entire thing looks very complicated. It shouldn't be. We need to trust any
-device that entered the 6-digit. It should be added to the list of devices of the identity in
-the bunker of the belfry and from that moment on, anyone sending a private message to that
-identity should encrypt it for that new device as well. And that new device can write a self
-note that will be encrypted for all existing devices. When on the new device you open the
-private messages there should be a message to ask your other devices for history (explaining
-that previous conversations have been encrypted for the other devices, you can ask them to
+Xavier, 2026-11-23, after new devices kept saying "Messages are locked on this device": "This
+entire thing looks very complicated. It shouldn't be. We need to trust any device that
+entered the 6-digit. It should be added to the list of devices of the identity in the bunker
+of the belfry and from that moment on, anyone sending a private message to that identity
+should encrypt it for that new device as well. And that new device can write a self note that
+will be encrypted for all existing devices. When on the new device you open the private
+messages there should be a message to ask your other devices for history (explaining that
+previous conversations have been encrypted for the other devices, you can ask them to
 re-encrypt them for your device). Then all other devices get a notification to approve that
 and proceed (or remove device because not trusted)."
 
-Version 1 made a person's own devices the authority on which devices are theirs. That cost a
-chain, a shared key that had to travel, and a new device that waited for an old one. Xavier's
-choices of 22 and 23 November already gave the authority back to "whoever holds a signed-in
-session"; version 2 says so plainly and drops the machinery.
-
 ## 1. What it protects, and what not
 
-- A sealed message is readable only on the devices that were on the recipient's (and the
-  sender's) device list when it was sent. Not by the relay, not by the belfry's signer, not
-  by an admin reading the database.
-- **Not protected, said plainly.** The belfry decides what is on a person's device list: a
-  device is on it because it holds a signed-in chat session (the e-mail code). So whoever can
-  open a session on an account (the belfry's server, hence its admins; someone with the
-  person's mailbox) gets a device on the list and reads everything sealed FROM THEN ON. They
-  get nothing sealed before, unless one of the person's devices approves sharing it. Every
-  device of the person shows "‹session name› was added ‹time› · Not you? Remove it".
+- A sealed message is readable only on the devices that were on its participants' device
+  lists when it was sent. Not by the relay, not by the signer, not by reading the database.
+- **Not protected, said plainly.** The belfry writes the device lists. A device is on a list
+  because it holds a signed-in chat session (the e-mail code). So whoever can open a session
+  on an account (the belfry's server, hence its admins; someone with the person's mailbox)
+  reads everything sealed FROM THEN ON. They get nothing sealed before unless one of the
+  person's devices shares it. The person's devices show "‹session name› was added ‹time› ·
+  Not you? Remove it"; §3.3 makes that notice hard for the belfry to suppress.
+- The relay sees, for every message, how many devices each participant has.
 - A removed device keeps what it already had.
 - The web app's code is served by the belfry. E-mail is in clear at the mail server's edge.
 
 ## 2. Keys
 
-One key per device: the session's client key (as today; made on the device, never leaves it).
-There is no letterbox, no shared key, nothing to hand over.
+One key per device: the session's client key (made on the device, never leaves it). No
+letterbox, no shared key, nothing to hand over.
 
 ## 3. The device list
 
-A person's device list is ONE replaceable event, signed by the **account** key through the
-signer, written by the belfry (the onboarding service), never by an app:
+### 3.1 The event
+
+One replaceable event per account, signed by the **belfry's own key** (`belfry.json`
+`nostr.pubkey`), written by the onboarding service and by nothing else:
 
 ```
-kind 30078, pubkey = the account, tags [["d","belfry:devices"],
-  ["device", <device pubkey>, <session created_at, seconds>, <session name>], ...]   (0 to 20)
+kind 30078, pubkey = the belfry key,
+tags [["d","belfry:devices:<account hex>"], ["p", <account>], ["device", <device pubkey>], ...]
 content ""
 ```
 
-- It lists the account's live chat sessions (the `chat: true` rows of `/api/me/sessions`),
-  oldest first, at most 20 (the 20 most recently active when there are more).
-- The belfry rewrites it at the moment a chat session is bound (every sign-in path), at a
-  revoke or sign-out, when a session expires, and checks hourly that it matches. A sign-in
-  answers only after the list with the new device is on the relay (else the app would open
-  with nothing readable).
-- On the community relay. Readable by members like profiles.
-- Accounts that hold their own key, and agents, have no list: they are not sealed (as today).
-- Apps read `{kinds:[30078], authors:[A], "#d":["belfry:devices"]}`, always without `since`,
-  after AUTH, and keep the newest by `created_at` (then lower id).
+- Signed by the belfry, not the account: no session of the account, and no other app
+  connected to it, can write or forge one (they sign as the account, never as the belfry).
+- `device` tags: the account's live chat sessions (`chat: true` rows of the sessions list)
+  that were active in the last 30 days, oldest session first, no names, no dates. At most
+  20: when there are more, the 20 most recently active. 0 devices = an empty list event.
+- `created_at` = max(now, the standing list's + 1). Readers ignore a list dated more than
+  10 minutes ahead of their clock.
+- Rewritten when a chat session is bound (every sign-in path), revoked, signed out or
+  expired, and checked every 10 minutes against the sessions (idle ones leave then).
+- Every account with a chat session has one: members, guests. Agents and accounts that hold
+  their own key have none and are not sealed.
+- On the community relay. Apps read `{kinds:[30078], authors:[belfry key],
+  "#d":["belfry:devices:<A>"]}`, without `since`, after AUTH; the newest wins (`created_at`,
+  then lower id). Never from another author.
 
-There is no pin, no chain, no "going back" rule: the newest list is the list. An app
-remembers the lists it has seen only to show notices (§6).
+A signed-in device that does not find itself on its account's list (the cap, or the list
+not written yet) says so in one line with Retry, and seals nothing meanwhile: "Getting your
+messages ready…", then after 15 s "This device isn't on your device list yet." It is never
+"locked".
+
+### 3.2 What an app remembers
+
+Per account: the lists it has seen (event id, `created_at`, devices, when this app first
+saw it), for good. That memory serves accepting (§4.2), notices (§6.4) and §3.3.
+
+### 3.3 The list a message was sealed to
+
+Every sealed rumor carries, for each participant, the list it was sealed to:
+
+```
+["list", <account>, <id of that account's list event>]
+```
+
+inside the rumor, so under the seal: the belfry cannot change it. A device that opens a
+message whose `list` tag for ITS OWN account names a list it has never seen reads that list
+by id (`{ids:[…]}`); if the list has a device this app did not know as mine, it shows the
+added-device notice for it, marked "seen by ‹sender›, not shown to this device before". This
+is the check that does not depend on what the belfry serves this device: a list shown only
+to my correspondents is found out by the first message they send.
 
 ## 4. A sealed message
 
-Rumor as today (kind 14, 15, 1301, 7, 5; `pubkey` = the account). For every device D on the
-list of every participant, the sender included (except the sending device itself, which keeps
-its own copy locally):
+### 4.1 Sending
 
-- seal, kind 13: `pubkey` = the sending device, signed by it; content = NIP-44 with
-  conv(sending device secret, D) of the rumor JSON;
+Rumor as today (kind 14, 15, 1301, 7, 5; `pubkey` = the account), plus the `list` tags. For
+every device D on the list of every participant, **the sending device itself included**:
+
+- seal, kind 13: `pubkey` = the sending device, signed by it, `tags: []`; content = NIP-44
+  with conv(sending device secret, D) of the rumor JSON;
 - gift wrap, kind 1059: one-time key; content = NIP-44 with conv(one-time secret, D) of the
   seal; tags `["p", <D's account>]`, `["d", <D>]`, and `["silent","1"]` when D's account is
   the sender's own.
 
-A device reads `{kinds:[1059], "#p":[my account], "#d":[my device]}`. It accepts a rumor when
-the seal's signer is on the list of the rumor's `pubkey` account now, or was on a list this
-device has seen for it; a seal by a device it has never seen listed is kept 30 days and
-judged again when that account's list is read (a message can arrive before the list). The
-belfry's own key seals mail in (§7) the same way and is accepted for kind 1301 only.
+Before each send the app reads every participant's list again (the live subscription keeps
+them fresh; wait at most 3 s). The outbox keeps the RUMOR and builds the wraps when it
+sends: a message still queued when a list changes gains the new devices and loses the
+removed ones. A message is "sent" when every wrap was accepted. At most 10 wraps a second.
 
-At most 20 devices a person, so a two-person message is at most 39 wraps. A conversation of
-more than 8 people is not sealed in this version.
+### 4.2 Receiving
 
-**Before each send** the app reads every participant's list again (3 s; the live
-subscription keeps it fresh). A participant with no list, or an empty one: §5.
+A device reads `{kinds:[1059], "#p":[my account], "#d":[my device]}` (and, for version 1
+wraps, the old `{kinds:[1059], "#p":[my account]}` read stays). It accepts a rumor when the
+seal's signer S and the rumor's `pubkey` account A satisfy one of:
+
+- S is on A's newest list;
+- S was on a list of A this app has seen, and the rumor is not dated after this app first
+  saw a list of A without S (a removed device cannot go on writing as A);
+- A is the belfry's key and the rumor is kind 1301 or a report (§7).
+
+Otherwise the wrap is kept 30 days and judged again whenever A's list is read (a message
+can arrive before the list that names its device). Same rumor id twice = once.
+
+### 4.3 Cost
+
+Two people with 3 devices each: 6 wraps a message. The cap makes it at most 40. The
+community relay's limit goes from 60 to 600 events a minute per address. Typing is not sent
+in sealed conversations (as today). Reactions and take-backs are wrapped like messages.
 
 ## 5. When a conversation is sealed
 
-A conversation is sealed when every participant has a device list with at least one device.
-No `ready`, no waiting for all of someone's devices: a device is on the list the moment it
-signs in. Sealed is sticky per device as today (never sent the old way again), and "the old
-way only on knowledge" stays: a list that cannot be read means hold, not unsealed.
-
-Notes to myself: the conversation whose only participant is me; sealed as soon as I have a
-list, which is as soon as I am signed in.
+- Sealed when every participant has a list with at least one device and the participants'
+  devices total 100 or fewer. Over 100: not sealed, and the conversation says so in one line
+  ("Too many devices to encrypt for everyone here"); never a silent downgrade.
+- No `ready`, no waiting: a device is on the list when it signs in.
+- Sticky per device, as today: once sealed, never sent the old way again.
+- **Hold, never unseal.** A list that cannot be read = hold the message (shown as sending).
+  Once a non-empty list was seen for an account, a missing or empty one also means hold,
+  never the old way.
+- Notes to myself: sealed as soon as I have a list, which is as soon as I am signed in.
 
 ## 6. A new device
 
-1. It signs in (e-mail code). The belfry puts it on the list. From that second it reads and
-   writes everything sealed from then on. Nothing is "locked".
-2. It has none of the earlier sealed messages. Messages shows, on top and in sealed
-   conversations above the older part: "Earlier messages were encrypted for your other
-   devices. Ask them to share them with this one." with **Ask my other devices**.
-3. Asking publishes a request, kind 8562 as today (signed by the device, `["p", account]`).
-   Every other device of mine shows a card (and the belfry pushes it, type `device_history`):
-   "‹session name› asks for your earlier messages · signed in ‹time› · **Share** ·
-   **Remove this device**".
-4. **Share**: that device re-seals what it holds to the asking device (kind 8564 history
-   packs as today: the rumors of kinds 14, 15, 7, 5 and 1301 of every sealed conversation it
-   holds, in packs under the ceiling), then sends an 8563 naming the request so the card goes
-   on my other devices. Sharing is the person's tap, never automatic. A second device may
-   share too; rumors already held are skipped.
-5. **Remove this device**: `POST /api/me/sessions/revoke` for that session. The belfry
-   rewrites the list without it. Nothing else to do: no key changes hands, there is nothing
-   to rotate.
-6. The notice. A device that sees a device on my list that was not on the last list it saw
-   shows "‹session name› was added ‹time› · Not you? Remove it" until "It was me" (8563, once
-   for all my devices) or Remove. This is the only alarm; it needs one of my devices opened.
+1. It signs in. The belfry puts it on the list. It reads and writes everything sealed from
+   then on. Nothing is locked.
+2. It has none of the earlier sealed messages. On top of Messages, and above the older part
+   of sealed conversations: "Earlier messages were encrypted for your other devices. Ask
+   them to share them with this one. · **Ask my other devices**". The line stays until the
+   person asks or dismisses it.
+3. **Asking**: kind 8562, signed by the device, `["p", account]`, content "". One request
+   per device; again only after 24 h or when another of my devices appears on the list. A
+   request from a device not on the list is ignored. The belfry pushes it to my other
+   devices (type `device_history`).
+4. **The card, on every other device of mine** (it is also the added-device notice for that
+   device, one card not two): "‹session name› was added ‹time› and asks for your earlier
+   messages: ‹N› conversations since ‹date› · **Share** · **Not you? Remove this device**".
+   Without a request the card reads "‹session name› was added ‹time› · It was me · Not you?
+   Remove it".
+5. **Share**: that device seals what it holds to the asking device as history packs (kind
+   8564 as today: the rumors of kinds 14, 15, 7, 5, 1301 of its sealed conversations, v1 and
+   v2 alike, under the ceiling per pack), then sends the 8563 (§6.5) so the card goes on my
+   other devices. The person's tap, never automatic. Share counts as "It was me".
+   The asking device takes packs only while it has an open request, only from a device on
+   my list, never replaces a rumor it already holds, and marks each conversation "Earlier
+   messages here were shared by ‹device› on ‹date›".
+6. **Remove**: `POST /api/me/sessions/revoke` for that session. The belfry rewrites the list
+   without it. Nothing to rotate.
 
-Messages sealed under version 1 (to a letterbox) stay readable on the devices that hold that
-letterbox's secret, and are shared with a new device like any other earlier message (as
-rumors, through 8564). No letterbox secret is ever sent again.
+### 6.4 The notice
+
+A device shows the card for a device D of my list when D was not on the last list it saw,
+or §3.3 reveals it. Never for devices whose session is older than this device's own, and
+none at all for the first list an app ever sees (the day of the update, a fresh install).
+In a sealed conversation the other side sees one grey line: "‹Name› added a device".
+
+### 6.5 "It was me", once for all
+
+```
+kind 8563, pubkey = the confirming device,
+tags [["p", account], ["device", <the added device>], ["list", <id of the list that has it>]]
+```
+
+sealed to my own devices like a note (silent). It clears the card for that device on a
+device of mine when its signer is on my list, is not the named device, has a session older
+than the named device's (sessions list), and has no open card of its own here. Share sends
+the same event with `["request", <id of the 8562>]`.
 
 ## 7. E-mail
 
 In: the belfry seals a mail to every device on the member's list (seal signed by the belfry
-key). No list: as before sealing. Out: a device-sealed 1301 to the belfry key (one wrap, to
-the belfry's key, as today) is accepted when the seal's signer is on the sender's list.
-Reports (7679) are sealed per device like a message from the belfry.
+key, `list` tag included). No list: as before sealing. A list that cannot be read: 451.
+Out: one device-sealed 1301 to the belfry's key, as today; accepted when the seal's signer
+is on the sender's list. Reports (7679): one per device of the sender.
 
-## 8. What the server builds
+## 8. Version 1, and moving
 
-- `devices.py`: the list event (build, sign through the signer, publish), hooks at session
-  bind / revoke / expiry, the hourly check, `belfry devices` CLI to print and rewrite.
-- Sign-in answers after the list is published.
-- `mail.py`: seal per device; accept device-sealed mail by the list.
-- Push: `device_history`; the wrap filter by `#d` is the apps'.
-- `belfry.json`: `"sealed": {"version": 2}` when the belfry writes device lists.
+- The belfry writes lists for everyone from the day it runs this code; `belfry.json` says
+  `"sealed": {"version": 1, "lists": true}` until every released app sends version 2, then
+  `{"version": 2}`.
+- **While the belfry says version 1**, a v2 app sends BOTH: the per-device wraps, and the
+  version 1 wrap to the letterbox of anyone who has a ready chain (so apps that only know
+  version 1 keep reading; a v2 reader sees the same rumor twice and keeps one). It stops
+  making, following or changing chains: no rosters, anchors, requests-to-join, hand-overs.
+- **When the belfry says version 2**, nothing is sent the version 1 way.
+- A v2 app keeps opening version 1 wraps with the letterbox secrets it holds, for good, and
+  shares them like any earlier message. No letterbox secret is ever sent again.
+- The first v2 build reads its `#d` wraps from 0.
+- An app older than v2 cannot open a per-device wrap (it takes it for an old NIP-17 wrap,
+  asks the signer, fails): harmless while both are sent; after the flip it reads nothing
+  new. So the flip waits for the web to be live, the TestFlight build, and an Android
+  release that has been out for some days.
+- Queued version 1 wraps not yet sent when an app updates are rebuilt from their rumor.
 
-## 9. Moving from version 1
+## 9. What the server builds
 
-- The server starts writing device lists for everyone with a chat session. Apps that know
-  version 2 use the list as soon as an account has one and ignore its chain; version 1 apps
-  keep using the chain. So during the move a v1 sender seals to a letterbox that v2-only
-  devices (new ones) do not hold: those messages reach them only through history sharing.
-  To keep that window short: web first (it updates itself), then the TestFlight build and
-  the Android release the same day, then `belfry.json` says version 2 and v2 apps stop
-  reading v1 chains for sending altogether.
-- A v2 app that holds letterbox secrets keeps opening v1 wraps for good.
-- Nothing on the relay is deleted.
+- `devices.py`: the list (build from sessions, sign as the belfry key, publish with
+  retries), hooks at session bind / revoke / sign-out / expiry, the 10-minute check, CLI
+  `python -m belfry_onboarding devices [--write]`.
+- `mail.py`: seal per device with the `list` tag; accept device-sealed mail by the list;
+  reports per device. The version 1 paths stay while `version` is 1.
+- Push: one "dm" push per account per 5 seconds however many wraps arrive (never per wrap);
+  `device_history` for an 8562 of a listed device.
+- The relay's limit: 600 events a minute per address.
+- `belfry.json` `sealed`.
+- `docs/sealed.md` gets a line on top pointing here.
 
-## 10. Open, to settle in review
+## 10. Later, not in this version
 
-- The belfry writes the list as the account, through the signer: a belfry on Keycast needs
-  the same call (all four run the own signer today).
-- A participant whose list lists 20 devices of which most are dead: the cap keeps the most
-  recently active; a sender still makes up to 20 wraps for them.
-- Reading old wraps: `#d` is an indexed tag on rnostr and zooid? (to verify live before
-  building; `#lb` was not.)
-- Group conversations between 9 and more people.
-- Whether Share should offer "only this conversation".
+- A younger session revoking an older one asks for a fresh e-mail code.
+- Share "only this conversation".
+- One envelope per account with a key slot per device, in place of a wrap per device.
+- Sealing for agents and own-key accounts.
