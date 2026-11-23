@@ -1,0 +1,496 @@
+{
+ "about": "Meetings (SPEC 19.63). removal: who is no longer among a meeting's people. Of the kind 9000 / 9001 events of the meeting's chat that are signed by its maker or a belfry admin (anyone in `admins`), the latest per `p` decides: a 9001 = removed; a later 9000 brings them back. Events by anyone else are ignored. The maker is never removed. Written by belfry-android 2026-11-22.",
+ "removal": {
+  "maker": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "admins": [
+   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  ],
+  "cases": [
+   {
+    "name": "the maker removes someone",
+    "events": [
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000001",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000002",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000001,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000003",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": [
+     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ]
+   },
+   {
+    "name": "a belfry admin removes someone",
+    "events": [
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000004",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000005",
+      "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": [
+     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+   },
+   {
+    "name": "a 9001 by anyone else is ignored",
+    "events": [
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000006",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000007",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000001,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000008",
+      "pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000009",
+      "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "created_at": 1793000011,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": []
+   },
+   {
+    "name": "a later 9000 brings them back",
+    "events": [
+     {
+      "id": "000000000000000000000000000000000000000000000000000000000000000a",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "000000000000000000000000000000000000000000000000000000000000000b",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "000000000000000000000000000000000000000000000000000000000000000c",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000020,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": []
+   },
+   {
+    "name": "a later 9000 by someone else does not",
+    "events": [
+     {
+      "id": "000000000000000000000000000000000000000000000000000000000000000d",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "000000000000000000000000000000000000000000000000000000000000000e",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "000000000000000000000000000000000000000000000000000000000000000f",
+      "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "created_at": 1793000020,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": [
+     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+   },
+   {
+    "name": "the latest counts, whatever the order received",
+    "events": [
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000010",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000020,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000011",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000012",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000010,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": [
+     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+   },
+   {
+    "name": "removed again after coming back",
+    "events": [
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000013",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000000,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000014",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000015",
+      "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "created_at": 1793000020,
+      "kind": 9000,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "member"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     },
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000016",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": 1793000030,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": [
+     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+   },
+   {
+    "name": "the maker is never removed",
+    "events": [
+     {
+      "id": "0000000000000000000000000000000000000000000000000000000000000017",
+      "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "created_at": 1793000010,
+      "kind": 9001,
+      "tags": [
+       [
+        "h",
+        "ev-2026-meet01"
+       ],
+       [
+        "p",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       ]
+      ],
+      "content": "",
+      "sig": ""
+     }
+    ],
+    "removed": []
+   }
+  ]
+ }
+}

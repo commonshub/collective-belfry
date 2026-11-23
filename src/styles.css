@@ -1025,6 +1025,8 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .meet-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .meet-row .t small { color: var(--muted); font-size: 12px; }
 .meet-row.there .t small { color: var(--accent); font-weight: 600; }
+.meet-mark { font-weight: 700; }
+.meet-remove { flex: none; color: var(--muted); }
 .badge.meet { margin-right: 6px; }
 .meet-named { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
 .meet-named > .hint { width: 100%; font-size: 13px; }

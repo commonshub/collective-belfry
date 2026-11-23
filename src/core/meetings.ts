@@ -12,6 +12,9 @@ import { calendar, group, recentlyActive, profiles, displayName, type CalEvent }
 import { all } from './store'
 import { enqueue, isLocalOnly, me, signedFetch } from './sync'
 import { BELFRY } from '../config'
+import { belfryAdminKeys } from './access'
+import { removedOf } from './meetingrules'
+export { removedOf }
 import { createEvent, editEvent, formOf, localTz, zonedToUtc, utcToZoned } from './events'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -87,6 +90,16 @@ export async function handOver(groupId: string, pubkey: string, email: string) {
   }
   const r = await signedFetch(`${BELFRY.api}/meeting-guests/transfer`, 'POST', { pubkey, email: email.trim() })
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || 'That did not work.')
+}
+
+export const removedFromMeeting = (e: Pick<CalEvent, 'groupId' | 'creator'>) => removedOf(all(me()), e.groupId, e.creator, belfryAdminKeys())
+/** May I remove people from meeting E (before its start: its maker or a belfry admin; a co-host's
+ *  9001 is ignored by readers)? */
+export const mayRemove = (e: Pick<CalEvent, 'creator' | 'start'>, isBelfryAdmin: boolean) => (me() === e.creator || isBelfryAdmin) && Date.now() < +e.start
+/** Remove PUBKEY from meeting E: a 9001 in its chat, and a new version without their invitation. */
+export async function removeFromMeeting(e: CalEvent, pubkey: string) {
+  await enqueue('groups', { kind: 9001, tags: [['h', e.groupId], ['p', pubkey]] })
+  if (e.invited.includes(pubkey)) await editEvent(e, formOf(e), [], [pubkey])
 }
 
 /** Who the hosts marked as there (true) or not (false), latest label per person. */

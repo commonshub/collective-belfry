@@ -187,6 +187,16 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
 }
 
 
+// meetings.json (belfry-android f5142d5, SPEC 19.63): who is no longer among a meeting's people
+{
+  const mv = vec('meetings.json')
+  for (const c of mv.removal.cases) {
+    const h = c.events[0]?.tags.find((t) => t[0] === 'h')?.[1] ?? ''
+    const got = [...M.removedOf(c.events, h, mv.removal.maker, mv.removal.admins)].sort()
+    check(`meetings removal: ${c.name}`, eq(got, [...c.removed].sort()), { got, want: c.removed })
+  }
+}
+
 // sealed.json (collective-belfry docs/sealed-vectors.json, docs/sealed.md v1): chains, wraps, the
 // size ceiling and history packing, key hand-over, the link proof, shared history, ready
 {

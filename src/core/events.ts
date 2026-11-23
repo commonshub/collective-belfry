@@ -385,9 +385,10 @@ export async function createEvent(n: EventForm, extra: string[][] = []): Promise
 }
 
 /** A host's new version (rule B: any host's newest counts; the coordinate stays the creator's). */
-export async function editEvent(e: CalEvent, n: EventForm, extra: string[][] = []) {
+export async function editEvent(e: CalEvent, n: EventForm, extra: string[][] = [], uninvite: string[] = []) {
   // a meeting's own tags stay (core/meetings.ts): what it is, where it was made, who is invited
-  const keep = e.ev.tags.filter((t) => (t[0] === 't' && t[1] === 'meeting') || t[0] === 'channel' || (t[0] === 'p' && t[3] === 'invited'))
+  // (UNINVITE: people removed, SPEC 19.63)
+  const keep = e.ev.tags.filter((t) => (t[0] === 't' && t[1] === 'meeting') || t[0] === 'channel' || (t[0] === 'p' && t[3] === 'invited' && !uninvite.includes(t[1])))
   const v = versionTags(e.d, n, [...keep.filter((k) => !extra.some((x) => x.join() === k.join())), ...extra, ...(e.status === 'cancelled' ? [['status', 'cancelled']] : [])])
   await enqueue('main', { kind: v.kind, content: n.description, tags: v.tags })
   const g = group(e.groupId)

@@ -2,3 +2,4 @@ export { allGroups, group, plainRefs, reactions, channelType, nameOf, refName } 
 export { parts, plainOf, refKey } from '../../src/core/refs'
 export { pricesOf, priceFull } from '../../src/core/prices'
 export * as S from '../../src/core/sealedcore'
+export { removedOf } from '../../src/core/meetingrules'

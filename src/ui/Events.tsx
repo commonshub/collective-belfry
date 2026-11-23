@@ -29,7 +29,8 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 import { CalendarIcon, ExternalIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, ImageIcon, MessageIcon, PersonPlusIcon, PinIcon, ScanIcon, ShareIcon, TicketIcon } from './icons'
 import { EventFormSheet, DateChip, when, LABEL } from './Calendar'
-import { addByName, attendance, checkIn, handOver } from '../core/meetings'
+import { addByName, attendance, checkIn, handOver, mayRemove, removeFromMeeting, removedFromMeeting } from '../core/meetings'
+import { isAdmin } from '../core/access'
 import { guestJoins } from '../core/model'
 import { Logo } from './Login'
 
@@ -175,15 +176,15 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
         : st === 'applied' || st === 'waitlist' || st === 'declined' ? <RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} />
         : !plain && !p.holders.has(me()) && !v?.ticket ? (open ? <Btn className="btn ev-main" onClick={take}><TicketIcon /> Get tickets</Btn> : null)
         : !plain ? <>
-            {code && <button className="btn ev-main" onClick={() => setSheet('ticket')}><TicketIcon /> Show my ticket</button>}
+            {code && !e.meeting && <button className="btn ev-main" onClick={() => setSheet('ticket')}><TicketIcon /> Show my ticket</button>}
             {open && <RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} />}
           </>
         : <>
             {open && <RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} />}
-            {code && <button className="btn small ghost ev-ticket-link" onClick={() => setSheet('ticket')}><TicketIcon /> Show my ticket</button>}
+            {code && !e.meeting && <button className="btn small ghost ev-ticket-link" onClick={() => setSheet('ticket')}><TicketIcon /> Show my ticket</button>}
           </>}
       {asking > 0 && <button className="btn small ghost ev-asking" onClick={() => setSheet('guests')}><PeopleIcon /> {asking} {asking === 1 ? 'person asks' : 'people ask'} to come · Review</button>}
-      {may && onTheDay(e) && e.status !== 'cancelled' && <button className="btn ev-checkin" onClick={() => setSheet('checkin')}><ScanIcon /> Check people in</button>}
+      {may && !e.meeting && onTheDay(e) && e.status !== 'cancelled' && <button className="btn ev-checkin" onClick={() => setSheet('checkin')}><ScanIcon /> Check people in</button>}
     </div>
   )
   const faces = (keys: string[]) => (
@@ -330,6 +331,19 @@ function PhotoThumb({ m, onOpen }: { m: Media; onOpen: () => void }) {
   return <button className="photo-thumb" onClick={onOpen} aria-label="Open the photo">{src && <img src={src} alt="" loading="lazy" />}</button>
 }
 
+/** SPEC 19.63: a meeting's people by status, never colour alone (a mark and a word each). */
+type MStatus = 'in' | 'yes' | 'maybe' | 'no' | 'invited'
+const STATUS_WORD: Record<MStatus, string> = { in: 'Checked in', yes: 'Confirmed', maybe: 'Maybe', no: 'Can’t come', invited: 'Invited' }
+const STATUS_COUNT: Record<MStatus, string> = { in: 'checked in', yes: 'confirmed', maybe: 'maybe', no: 'can’t come', invited: 'invited' }
+const STATUS_MARK: Record<MStatus, string> = { in: '✔', yes: '✓', maybe: '?', no: '✕', invited: '🕓' }
+function meetingStatus(e: CalEvent, k: string, there: Map<string, boolean>): MStatus {
+  if (there.get(k)) return 'in'
+  const r = e.rsvps.get(k)
+  if (r === 'accepted' || (k === e.creator && !r)) return 'yes'
+  return r === 'tentative' ? 'maybe' : r === 'declined' ? 'no' : 'invited'
+}
+const StatusMark = ({ s }: { s: MStatus }) => <span className={'meet-mark ' + s} aria-hidden="true">{STATUS_MARK[s]} </span>
+
 /** Hosts first (Host / Co-host / Door under the name), then Going, then Maybe. Tap → the
  *  profile; the message button opens a conversation. A check for who is in, for those who check in. */
 function EventPeople({ e, p, holders, titles, may, plain, onCheckIn }: { e: CalEvent; p: People; holders: Map<string, string>; titles: Map<string, string>; may: boolean; plain: boolean; onCheckIn: () => void }) {
@@ -371,28 +385,38 @@ function EventPeople({ e, p, holders, titles, may, plain, onCheckIn }: { e: CalE
 function MeetingPeople({ e, host }: { e: CalEvent; host: boolean }) {
   useVersion()
   const there = attendance(e)
-  const keys = [...new Set([e.creator, ...e.invited, ...[...e.rsvps.keys()]])]
+  const gone = removedFromMeeting(e) // SPEC 19.63: removed by the maker or a belfry admin
+  const keys = [...new Set([e.creator, ...e.invited, ...[...e.rsvps.keys()]])].filter((k) => !gone.has(k))
   // name-only accounts I made: mine to hand over (the belfry checks it too)
   const held = new Set(guestJoins(e.groupId).filter((j) => j.unsaved && j.by === me()).map((j) => j.pubkey))
   const [adding, setAdding] = useState({ name: '', email: '' })
   const [giving, setGiving] = useState<{ k: string; email: string } | null>(null)
+  const [removing, setRemoving] = useState<string | null>(null)
   const [err, setErr] = useState('')
-  const started = +e.start - Date.now() < 3600e3
-  const sub = (k: string) => {
-    const r = e.rsvps.get(k)
-    return there.get(k) ? 'There' : r ? LABEL[r] : e.hosts.has(k) ? 'Host' : 'Invited'
-  }
+  // SPEC 19.63: check-in opens AT the start; before it, the maker (or a belfry admin) may remove
+  const started = Date.now() >= +e.start
+  const remover = mayRemove(e, isAdmin())
+  const st = (k: string) => meetingStatus(e, k, there)
+  const counts = (['in', 'yes', 'maybe', 'no', 'invited'] as const).map((s) => [s, keys.filter((k) => st(k) === s).length] as const).filter(([, n]) => n > 0)
   return (
     <section className="meet-people">
-      <h3>People <span>{keys.length}{there.size ? ` · ${[...there.values()].filter(Boolean).length} there` : ''}</span></h3>
+      <h3>People <span>{counts.map(([s, n]) => `${n} ${STATUS_COUNT[s]}`).join(' · ')}</span></h3>
       {keys.map((k) => (
-        <div key={k} className={'meet-row' + (there.get(k) ? ' there' : '')}>
+        <div key={k} className={'meet-row' + (st(k) === 'in' ? ' there' : '')}>
           <button className="face" onClick={() => openProfile(k)} aria-label={`${displayName(k)}: profile`}><Avatar pubkey={k} size={32} /></button>
-          <span className="t">{displayName(k)}<small>{sub(k)}{held.has(k) ? ' · account held by you' : ''}</small></span>
+          <span className="t">{displayName(k)}<small><StatusMark s={st(k)} />{[roleWord(e.groupId, k, e), STATUS_WORD[st(k)]].filter(Boolean).join(' · ')}{held.has(k) ? ' · account held by you' : ''}</small></span>
           {host && held.has(k) && <button className="btn small ghost" onClick={() => setGiving({ k, email: '' })}>Hand over</button>}
-          {host && <Btn className={'btn small' + (there.get(k) ? '' : ' ghost')} aria-pressed={!!there.get(k)} onClick={() => checkIn(e, k, !there.get(k))}>{there.get(k) ? '✓ There' : started ? 'Check in' : 'Confirm'}</Btn>}
+          {host && started && <Btn className={'btn small' + (there.get(k) ? '' : ' ghost')} aria-pressed={!!there.get(k)} onClick={() => checkIn(e, k, !there.get(k))}>{there.get(k) ? '✓ Checked in' : 'Check in'}</Btn>}
+          {!started && remover && k !== e.creator && <button className="icon-btn meet-remove" aria-label={`Remove ${displayName(k)}`} onClick={() => setRemoving(k)}><CloseIcon /></button>}
         </div>
       ))}
+      {removing && (
+        <Sheet title={`Remove ${displayName(removing)}?`} onClose={() => setRemoving(null)}>
+          <p className="hint">They are no longer invited to {e.title}.</p>
+          <Btn className="btn danger" onClick={async () => { setErr(''); try { await removeFromMeeting(e, removing); setRemoving(null) } catch (y) { setErr(y instanceof Error ? y.message : String(y)) } }}>Remove</Btn>
+          <button className="btn ghost" onClick={() => setRemoving(null)}>Cancel</button>
+        </Sheet>
+      )}
       {giving && (
         <Form className="row meet-give" onSubmit={async (x) => { x.preventDefault(); setErr(''); try { await handOver(e.groupId, giving.k, giving.email); setGiving(null) } catch (y) { setErr(y instanceof Error ? y.message : String(y)) } }}>
           <input className="input" type="email" autoFocus placeholder={`${displayName(giving.k)}'s e-mail`} value={giving.email} onChange={(x) => setGiving({ ...giving, email: x.target.value })} aria-label="Their e-mail" />
@@ -501,7 +525,7 @@ function EventMenu({ e, host, may, onClose, open }: { e: CalEvent; host: boolean
         <Item icon={<GlobeIcon />} label="QR code" onClick={() => open('qr')} />
         {e.isNew && e.visibility !== 'members' && <Item icon={<LinkIcon />} label="Open the public page" onClick={() => { window.open(eventUrl(e), '_blank', 'noopener'); onClose() }} />}
       </div>
-      {may && <div className="act-group"><Item icon={<ScanIcon />} label="Check people in" onClick={() => open('checkin')} /></div>}
+      {may && !e.meeting && <div className="act-group"><Item icon={<ScanIcon />} label="Check people in" onClick={() => open('checkin')} /></div>}
       {host && e.isNew && (
         <div className="act-group">
           <Item icon={<PencilIcon />} label="Edit the event" onClick={() => open('edit')} />
