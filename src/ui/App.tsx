@@ -235,7 +235,8 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         const sealedOn = (session.backend === 'belfry' || TEST_RELAYS) && !!session.clientSecret && !guestInfo()
         // encrypted conversations, format 3 (docs/encrypted.md): every chat session is a device, a
         // guest's too (the lead's ruling, the review's P1.1); read always, written when belfry.json says 3
-        if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret) {
+        // (never for a guest's session: guests aren't on the community relay's whitelist; the lead, 2026-11-23)
+        if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret && !guestInfo()) {
           void startEnc(session.clientSecret)
           if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy } })
         }

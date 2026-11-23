@@ -259,6 +259,30 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent(EC.groupMessage(gkSk, ans, gkKey.K, gid), gkSk)]) });
   check("the groups key's answer opens: 'Closed by the belfry.'", await until(() => has(S, "Closed by the belfry."), 20000), await S.ev("document.body.innerText.slice(-300)"));
   await S.shot("group");
+  // guests, for now (the lead): a people conversation with a guest stays unencrypted; a guest member of
+  // a private group gets no entry in its keys
+  const gSk = sk("a-guest"), pkG = getPublicKey(gSk), gDev = getPublicKey(sk("a-guest-device"));
+  await publishList(pkG, [gDev]); // (a list exists: the rule, not a missing list, keeps it out)
+  const gjoin = finalizeEvent({ kind: 9000, created_at: Math.floor(Date.now() / 1000), tags: [["h", "general"], ["p", pkG, "member"], ["guest", ""], ["invited-by", pkS], ["name", "Gus"]], content: "" }, relaySk);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([gjoin]) }); await sleep(1500);
+  const beforeG = new Set((await dump()).map((e) => e.id));
+  await S.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkG)})`); await sleep(1200);
+  await typeSend(S, "Hello guest");
+  await until(async () => (await dump()).some((e) => !beforeG.has(e.id) && [1059, 8572].includes(e.kind) && e.tags.some((t) => t[0] === "p" && t[1] === pkG)), 15000); // (not the typing event)
+  d = (await dump()).filter((e) => !beforeG.has(e.id));
+  check("to a guest: the NIP-17 way (a 1059 to the guest), no 8571/8572", d.some((e) => e.kind === 1059 && e.tags.some((t) => t[0] === "p" && t[1] === pkG)) && !d.some((e) => (e.kind === 8572 || e.kind === 8571) && e.tags.some((t) => t[0] === "p" && t[1] === pkG)), d.map((e) => e.kind));
+  check("…and no lock on that conversation", !(await S.ev("!!document.querySelector('.topbar .seal-lock')")));
+  // the guest in the private group: Sam's next key has no entry for the guest's device
+  const mem2 = finalizeEvent({ kind: 39002, created_at: Math.floor(Date.now() / 1000) + 1, tags: [["d", gid], ["p", pkS], ["p", pkL], ["p", pkG]], content: "" }, relaySk);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([mem2]) }); await sleep(2000);
+  const beforeG2 = new Set((await dump()).map((e) => e.id));
+  await S.ev(`location.hash = '#/c/${gid}'`); await sleep(1500);
+  await S.ev(`(async () => { const i = document.querySelector('.composer textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(i, 'With a guest in the group'); i.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const b = [...document.querySelectorAll('.composer button')].find((x) => /^Send/i.test(x.getAttribute('aria-label') || '') || x.classList.contains('send')); b && b.click() })()`);
+  await until(async () => (await dump()).some((e) => !beforeG2.has(e.id) && e.kind === 8572 && e.tags.some((t) => t[0] === "h" && t[1] === gid)), 20000);
+  // (the guest skipped, the device set is unchanged: Sam's key is reused, no new envelope; none of the group's envelopes has the guest)
+  const envG = (await dump()).filter((e) => e.kind === 8571 && e.tags.some((t) => t[0] === "h" && t[1] === gid));
+  const sent2 = (await dump()).some((e) => !beforeG2.has(e.id) && e.kind === 8572 && e.pubkey === pkS && e.tags.some((t) => t[0] === "h" && t[1] === gid));
+  check("a private group with a guest member: sent, and no envelope of the group has an entry for the guest's device", sent2 && envG.length > 0 && envG.every((e) => !Object.keys(JSON.parse(e.content)).includes(gDev)), { sent2, envs: envG.length });
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
     const w = new WebSocket("ws://127.0.0.1:4481"); const out = [];

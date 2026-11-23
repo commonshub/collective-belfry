@@ -361,15 +361,13 @@ async function neverEncrypted(conv: string): Promise<boolean> {
  *  encrypted (a conversation that starts over 100 devices: no lock). Throws Held when it can't be
  *  encrypted now. MISSING: people with no device, who won't get it (§17.5). */
 export async function encryptFor(rumor: E.Rumor, people: string[]): Promise<{ events: NostrEvent[]; missing: string[] } | null> {
-  if (!device) throw new Held('not_listed')
   const m = me()
   const all = [...new Set([m, ...people])].sort()
+  // guests first (a guest's session runs no runtime: the lead): unencrypted, or held when encrypted here before
+  if (guestIn(all)) { if (encConvs.has(E.peopleId(all))) throw new Held('guest'); return null }
+  if (!device) throw new Held('not_listed')
   if (E.peopleOf(rumor) !== E.peopleId(all)) throw new Error('the message is not for these people') // a programming error, never shown
   if (new TextEncoder().encode(JSON.stringify(E.withId(rumor))).length > E.MAX_RUMOR) throw new Error('the message is too long to encrypt') // before any key (P2.1)
-  // the lead, 2026-11-23 (until decided): guests aren't on the community relay's whitelist, so a
-  // conversation with a guest (or from a guest's session) stays unencrypted: no lock, the NIP-17 way.
-  // One already encrypted here never goes clear (§17.2): held instead.
-  if (guestIn(all)) { if (encConvs.has(E.peopleId(all))) throw new Held('guest'); return null }
   // P2.5: lists count only after one complete read for these accounts on this connection
   // (an account with no list known is read again at every try: its list may have come since)
   const toRead = all.filter((a) => chainFor(a) !== E.SERVICE && (!readOnThisConnection(a) || chainFor(a) === undefined))
@@ -668,6 +666,7 @@ async function wrapForGroup(tpl: { kind: number; content: string; tags: string[]
     const c = chainFor(a)
     if (c === undefined) continue // no list found after two reads: skipped for this message (§23); an empty list: no devices, no entry
     if (c === E.SERVICE) { devices.push(a); continue }
+    if (guestTest(a)) continue // a guest member gets no entry for now (the lead: guests can't take part in private groups yet)
     if (c.fork || c.invalidAbove) throw new Error('timeout: couldn’t check who can read this group')
     devices.push(...E.receivers(E.current(c))); lines.push({ account: a, id: E.current(c).id })
   }

@@ -143,6 +143,8 @@ let groupWrap: GroupWrap | undefined
 let encryptsFiles: ((h: string, kind: number) => boolean) | undefined
 export function setEncryptsFiles(f: (h: string, kind: number) => boolean) { encryptsFiles = f }
 export function setGroupWrap(f: GroupWrap) { groupWrap = f }
+/** Whether a private group's events can be encrypted here (enc/runtime started). */
+export const groupWrapReady = () => !!groupWrap
 let beforeFlushHook: (() => Promise<void>) | undefined
 /** sealedrt.ts: sealed wraps are checked against fresh heads before they go out. */
 export function setBeforeFlush(f: () => Promise<void>) { beforeFlushHook = f }

@@ -44,7 +44,7 @@ import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { encOn, isPrivateGroup } from '../core/enc/runtime'
 import { takeMid } from '../core/cards'
-import { agentOwner, belfryGroupsKey, canAdmin, isAdmin } from '../core/access'
+import { agentOwner, belfryGroupsKey, canAdmin, isAdmin, encryptedFormat } from '../core/access'
 import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, guestTopic, reading, useGuestMode } from '../core/guestmode'
 import { switchToLogin } from '../core/signedin'
@@ -794,6 +794,9 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   useGuestMode()
   const guestReading = reading()
   if (guestReading) readOnly = true
+  // a private group on format 3: a guest's session can't take part yet (the lead, 2026-11-23): no composer, no writes
+  const privateGuest = isPrivateGroup(id) && encryptedFormat() === 3 && isGuest(me()) && !guestReading
+  if (privateGuest) readOnly = true
   const g = group(id)
   const frozen = !!g?.archived // archived: nothing is written, reacted to, edited or pinned
   if (frozen) readOnly = true
@@ -964,6 +967,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           <button className="btn" onClick={() => (only === 'thread' ? setNewThread(true) : only === 'proposal' ? setNewProp(true) : setNewEvent(true))}>{only === 'thread' ? 'New thread' : only === 'proposal' ? 'New proposal' : 'New event'}</button>
         </div>
       )}
+      {privateGuest && <div className="join-bar" role="note"><span>Guests can’t take part in private groups yet.</span></div>}
       {!readOnly && <RecordingBar groupId={id} />}
       {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce, np) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, [...eventTags(text), ...(np ? [NO_PREVIEW] : [])]) }} prefill={prefill}

@@ -4,9 +4,9 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
-import { me, setWriteGuard } from './sync'
+import { me, setWriteGuard, groupWrapReady } from './sync'
 import { plainName, plainOf } from './refs'
-import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow } from './access'
+import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat } from './access'
 import { CHARTER_ID, placeName } from './places'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
@@ -442,6 +442,13 @@ export const group = (id: string): Group | undefined => groupSets().byId.get(id)
 setWriteGuard((t) => {
   const of = (k: string) => t.tags.find((x) => x[0] === k)?.[1]
   const h = of('h')
+  // a private group on format 3 (docs/encrypted.md): nothing goes there unencrypted. A guest's
+  // session can't take part yet (the lead, 2026-11-23); a session where encryption doesn't run can't post
+  const g0 = h ? group(h) : undefined
+  if (g0?.isPod && g0.closed && g0.inviteOnly && encryptedFormat() === 3 && ![9021, 9022].includes(t.kind) && !(t.kind === 30078 && (of('d') ?? '').startsWith('seen:'))) {
+    if (allGroups().some((x) => guestJoins(x.id).some((j) => j.pubkey === me() && !j.member))) return 'Guests can’t take part in private groups yet.'
+    if (!groupWrapReady()) return 'This device can’t post in private groups yet.'
+  }
   if (!h || !group(h)?.archived) return undefined
   if (t.kind === 9002 && t.tags.some((x) => x[0] === 'archived' && x[1] === '0')) return undefined
   if (t.kind === 9022 || t.kind === 9008) return undefined
