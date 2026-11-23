@@ -354,13 +354,16 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const chain = (events, a) => E.chainOf(events, B, a)
     const chains = (events) => (a) => (a === B ? E.SERVICE : chain(events, a) ?? undefined) // §20: a chain, service, or undefined
     const nul = (v) => (v === undefined ? null : v)
-    const view = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork }
+    const view = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork, invalidAbove: c.invalidAbove }
     for (const [n, c] of Object.entries(ev.lists.valid)) { const l = E.parseList(c.event, B); check(`encrypted list valid: ${n}`, !!l === c.valid && (!l || (l.devices.length === c.devices && l.readers.length === c.readers)), c) }
     for (const c of ev.lists.chains) check(`encrypted chain: ${c.name}`, eq(view(chain(c.events, c.account)), c.expect), view(chain(c.events, c.account)))
     check('encrypted changes', eq(E.changes(chain(ev.changes.lists, K.sam)), ev.changes.expect), E.changes(chain(ev.changes.lists, K.sam)))
     { const c = chain(ev.listed_before.lists, K.sam); for (const x of ev.listed_before.cases) check(`encrypted listed before: ${x.older.slice(0, 6)} before ${x.device.slice(0, 6)}`, E.listedBefore(c, x.older, x.device) === x.expect, x) }
     { const c = chain(ev.signs_at.lists, K.sam); for (const x of ev.signs_at.cases) check(`encrypted signs at: ${x.device.slice(0, 6)} @${x.at}`, nul(E.signsAt(c, x.device, x.at)) === x.expect, x) }
     { const c = chain(ev.signs_at_gap.lists, K.sam); for (const x of ev.signs_at_gap.cases) check(`encrypted signs at, a list missing: ${x.device.slice(0, 6)} @${x.at}`, nul(E.signsAt(c, x.device, x.at)) === x.expect, x) }
+    { const c = chain(ev.signs_at_relisted.lists, K.sam); for (const x of ev.signs_at_relisted.cases) check(`encrypted signs at, dropped and listed again: ${x.device.slice(0, 6)} @${x.at}`, nul(E.signsAt(c, x.device, x.at)) === x.expect, x) }
+    { const c = chain(ev.signs_at_behind.lists, K.sam); for (const x of ev.signs_at_behind.cases) check(`encrypted signs at, a list may be behind: ${x.device.slice(0, 6)} @${x.at}`, nul(E.signsAt(c, x.device, x.at)) === x.expect, x) }
+    { const c = chain(ev.invalid_above.events, K.sam); check('encrypted chain: a newer list that is not valid is reported', c.invalidAbove === ev.invalid_above.invalid_above && eq(view(c), ev.invalid_above.expect), view(c)) }
     { const c = chain(ev.listed_at_gap.lists, K.sam); for (const x of ev.listed_at_gap.cases) check(`encrypted listed at, a list missing: ${x.device.slice(0, 6)} @${x.at}`, nul(E.listedAt(c, x.device, x.at)) === x.expect, x) }
     { const c = chain(ev.listed_at.lists, K.sam); for (const x of ev.listed_at.cases) check(`encrypted listed at: ${x.device.slice(0, 6)} @${x.at}`, nul(E.listedAt(c, x.device, x.at)) === x.expect, x) }
     for (const x of ev.alias) check('encrypted alias', E.alias(x.K, x.account) === x.expect, x)

@@ -54,7 +54,7 @@ const bad = {
 }
 const L6gap = list('L6', keys.sam, 6, keys.other, [keys.d2], 6000)
 const chainEvents = [L3, bad.other_signer, L1, bad.wrong_prev_fork, L2, LC1]
-const chainView = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork }
+const chainView = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork, invalidAbove: c.invalidAbove }
 const listCases = {
   valid: Object.fromEntries(Object.entries({ L1, L2, L3, L4, L5, LC1, LA1, ...bad }).map(([k, e]) => { const l = E.parseList(e, keys.belfry); return [k, { event: e, valid: !!l, ...(l ? { devices: l.devices.length, readers: l.readers.length } : {}) }] })),
   chains: [
@@ -75,6 +75,15 @@ const nul = (v) => (v === undefined ? null : v)
 const signsAt = [[keys.d1, 2500], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 999999], [keys.agent, 3500], [keys.d3, 2500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))
 const cGap = E.chainOf([L1, L2, L4], keys.belfry, keys.sam) // list 3 missing: what dropped d1 isn't known
 const signsAtGap = [[keys.d1, 3500], [keys.d2, 3500], [keys.d4, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cGap, d, at)) }))
+// the review (P3): d1 dropped by list 3 (3000), listed again by R4 (4000): not accepted for 3601–3999
+const R4 = list('R4', keys.sam, 4, L3.id, [keys.d1, keys.d2], 4000, [keys.agent])
+const cRe = E.chainOf([L1, L2, L3, R4], keys.belfry, keys.sam)
+const signsAtRelisted = [[keys.d1, 3500], [keys.d1, 3700], [keys.d1, 4000], [keys.d1, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cRe, d, at)) }))
+// the review (P2.3): a device on no list known here, dated at or after the newest list: its list may be behind (wait)
+const signsAtBehind = [[keys.d4, 3500], [keys.d4, 2500], [keys.d3, 3000]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))
+// the review (P2.7): a newer list that isn't valid (self beside a device) → invalidAbove; a fork is reported
+const L4bad = signed(B, { kind: 8570, created_at: 4000, tags: [['p', keys.sam], ['n', '4'], ['prev', L3.id], ['device', keys.sam, 'self'], ['device', keys.d2]], content: '' })
+const invalidAbove = { events: [L1, L2, L3, L4bad], expect: chainView(E.chainOf([L1, L2, L3, L4bad], keys.belfry, keys.sam)), invalid_above: E.chainOf([L1, L2, L3, L4bad], keys.belfry, keys.sam).invalidAbove }
 const listedAtGap = [[keys.d1, 3500], [keys.d2, 2500], [keys.d1, 2500]].map(([d, at]) => ({ device: d, at, expect: nul(E.listedAt(cGap, d, at)) }))
 const listedAt = [[keys.d1, 1500], [keys.d1, 3000], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 1999], [keys.d2, 2000], [keys.d2, 900]].map(([d, at]) => ({ device: d, at, expect: nul(E.listedAt(c3, d, at)) }))
 
@@ -251,7 +260,7 @@ const doc = {
   alias: aliases, lists_hash: lh,
   people_key: peopleKey, group_key: groupKey, people_messages: peopleMsgs, group_messages: groupMsgs,
   packs: packCases, declare: decl, people_of: peopleCases, clear_after_key: clear, limits,
-  signs_at_gap: { lists: [L1, L2, L4], cases: signsAtGap }, listed_at_gap: { lists: [L1, L2, L4], cases: listedAtGap }, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
+  signs_at_gap: { lists: [L1, L2, L4], cases: signsAtGap }, signs_at_relisted: { lists: [L1, L2, L3, R4], cases: signsAtRelisted }, signs_at_behind: { lists: [L1, L2, L3], cases: signsAtBehind }, invalid_above: invalidAbove, listed_at_gap: { lists: [L1, L2, L4], cases: listedAtGap }, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
 }
 writeFileSync(path.join(root, 'vectors/encrypted.json'), JSON.stringify(doc, null, 1) + '\n')
 console.log('vectors/encrypted.json', createHash('sha256').update(JSON.stringify(doc, null, 1) + '\n').digest('hex'))

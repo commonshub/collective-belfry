@@ -76,18 +76,29 @@ export interface Chain {
   gaps: boolean
   /** §17.7: two different lists with the same n, or a prev that doesn't name the list before: warn, for good */
   fork: boolean
+  /** a list event from the belfry for this account with a higher n than every valid one, that isn't
+   *  valid (self with devices, more than 20…): the newest word can't be read (hold, §18.5) */
+  invalidAbove: boolean
 }
 
 /** ACCOUNT's lists among EVENTS (several for one n: a fork, the lower id kept). Null when there is none. */
 export function chainOf(events: unknown[], belfry: string, account: string): Chain | null {
   const byN = new Map<number, DeviceList[]>()
+  let badTop = 0
   for (const e of events) {
     const l = parseList(e, belfry)
-    if (!l || l.account !== account) continue
+    if (!l) { // not valid: remember its n when it is the belfry's word about this account
+      const x = e as { kind?: unknown; pubkey?: unknown; tags?: unknown }
+      if (x && x.kind === LIST && x.pubkey === belfry && Array.isArray(x.tags) && (x.tags as string[][]).some((t) => t[0] === 'p' && t[1] === account)) {
+        const n = Number((x.tags as string[][]).find((t) => t[0] === 'n')?.[1]); if (Number.isInteger(n) && n > badTop) badTop = n
+      }
+      continue
+    }
+    if (l.account !== account) continue
     const at = byN.get(l.n) ?? []
     if (!at.some((x) => x.id === l.id)) byN.set(l.n, [...at, l])
   }
-  if (!byN.size) return null
+  if (!byN.size) return null // (an account whose only lists are invalid has no list: Held)
   let fork = false
   const lists = [...byN.keys()].sort((a, b) => a - b).map((n) => {
     const c = byN.get(n)!.sort((a, b) => (a.id < b.id ? -1 : 1))
@@ -96,7 +107,7 @@ export function chainOf(events: unknown[], belfry: string, account: string): Cha
   })
   lists.forEach((l, i) => { const before = lists[i - 1]; if (before && before.n === l.n - 1 && l.prev !== before.id) fork = true })
   const top = lists[lists.length - 1].n
-  return { account, lists, gaps: lists.length < top, fork }
+  return { account, lists, gaps: lists.length < top, fork, invalidAbove: badTop > top }
 }
 
 /** §17.7 what changed on each list: the devices it added and removed against the list before (the
@@ -123,19 +134,16 @@ export const listById = (c: Chain, id: string) => c.lists.find((l) => l.id === i
 /** Every key that receives copies for this account now: devices and readers. */
 export const receivers = (l: DeviceList) => [...l.devices, ...l.readers]
 
-/** §6: DEVICE may sign for the account at AT: on the current list, or on an earlier one when AT is
- *  not later than GRACE after the list that dropped it. Readers never sign as the account.
- *  Undefined: can't tell yet (the list right after its last one is missing, or the current list
- *  may be behind a gap). */
+/** §6: DEVICE may sign for the account at AT (the outer event's date, §18.2): on the list that was
+ *  current at AT, or on the one before it when AT is not later than GRACE after the list that dropped
+ *  it (a device dropped and listed again isn't accepted for the gap). Readers never sign as the
+ *  account. Undefined: can't tell yet: a list around AT is missing, or (§20, the review's P2.3) the
+ *  device is on no list known here and AT isn't before the newest list: its list may be behind. */
 export function signsAt(c: Chain, device: string, at: number): boolean | undefined {
-  if (current(c).devices.includes(device)) return true
-  let last = -1
-  c.lists.forEach((l, i) => { if (l.devices.includes(device)) last = i })
-  if (last < 0) return c.gaps ? undefined : false
-  if (last === c.lists.length - 1) return true
-  const dropped = nextKnown(c, last)
-  if (!dropped) return undefined // V5: the list that dropped it isn't here: wait
-  return at <= dropped.created_at + GRACE
+  const v = listedAt(c, device, at)
+  if (v !== false) return v
+  if (!c.lists.some((l) => l.devices.includes(device)) && at >= current(c).created_at) return undefined
+  return false
 }
 
 /** §16.2 for a group: DEVICE was on the account's list that was current at AT (with the grace).

@@ -213,14 +213,17 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         // sealed conversations (docs/sealed.md): this sign-in's device key is the session's client
         // key; members and admins only, never a guest session (§5.1). Sends wait until it has loaded.
         const sealedOn = (session.backend === 'belfry' || TEST_RELAYS) && !!session.clientSecret && !guestInfo()
+        // encrypted conversations, format 3 (docs/encrypted.md): every chat session is a device, a
+        // guest's too (the lead's ruling, the review's P1.1); read always, written when belfry.json says 3
+        if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret) {
+          void startEnc(session.clientSecret)
+          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3 } })
+        }
         if (sealedOn) expectSealed()
         startDms()
         if (sealedOn && session.clientSecret) {
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
-          // encrypted conversations, format 3 (docs/encrypted.md): read always, written when belfry.json says 3
-          void startEnc(session.clientSecret)
-          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3 } })
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
           if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, askNow, signRoster: testSignRoster, signerIn: signerCallsIn, signerCalls: () => signerCalls.map((c) => c.method), has: hasEvent, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk), notices: () => sealedNotices().map((n) => n.device) } })
         }

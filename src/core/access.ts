@@ -38,6 +38,7 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
   nostrKey ||= (await kvGet<string>('belfry-nostr-key')) ?? ''
   groupsPub ||= (await kvGet<string>('belfry-groups-key')) ?? ''
   format3 ||= (await kvGet<boolean>('belfry-enc-format3')) ?? false
+  if (format3) formatDone()
   try {
     const res = await fetch(DISCOVERY, { cache: 'no-store' })
     const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string>; branding?: unknown; nostr?: { pubkey?: string }; groups_key?: { pubkey?: string }; encrypted?: { format?: unknown } }
@@ -47,7 +48,7 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
     if (typeof doc.nostr?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.nostr.pubkey)) { nostrKey = doc.nostr.pubkey; await kvSet('belfry-nostr-key', nostrKey) }
     if (typeof doc.groups_key?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.groups_key.pubkey)) { groupsPub = doc.groups_key.pubkey; await kvSet('belfry-groups-key', groupsPub) }
     // encrypted conversations (docs/encrypted.md §12, §17.13): format 3 once seen is kept for good
-    if (doc.encrypted?.format === 3 && !format3) { format3 = true; await kvSet('belfry-enc-format3', true) }
+    if (doc.encrypted?.format === 3 && !format3) { format3 = true; try { localStorage.setItem('belfry-enc-format3', '1') } catch { /* private mode: kv below */ } await kvSet('belfry-enc-format3', true) }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
@@ -62,6 +63,7 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
       setBranding(doc.branding ?? {}) // the admins' logo, cover and colours (absent: none)
     }
   } catch { /* offline: the cached state */ }
+  formatDone() // answered or failed: what this device knows is the format (3 is kept for good)
   listeners.forEach((l) => l())
   return info
 }
@@ -75,10 +77,17 @@ let nostrKey = ''
 export const belfryNostrKey = () => nostrKey
 /** belfry.json "encrypted": {"format": 3} (docs/encrypted.md §12): this device writes format 3 there,
  *  for good once seen (§17.13). Format 1 (the default): the version-1 ways. */
-let format3 = false
-export const encryptedFormat = (): 1 | 3 => (format3 ? 3 : 1)
+// the review's P1.2: mirrored in localStorage (not a secret) so a reload knows it before the kv read;
+// unknown (undefined) until either says, or belfry.json answered
+let format3 = (() => { try { return localStorage.getItem('belfry-enc-format3') === '1' } catch { return false } })()
+let formatKnown = format3
+let formatWaiters: (() => void)[] = []
+const formatDone = () => { formatKnown = true; formatWaiters.forEach((f) => f()); formatWaiters = [] }
+export const encryptedFormat = (): 1 | 3 | undefined => (format3 ? 3 : formatKnown ? 1 : undefined)
+/** Resolved once the format is known (belfry.json read or failed, or this device's memory), at most MS. */
+export const formatReady = (ms = 5000) => formatKnown ? Promise.resolve() : new Promise<void>((r) => { formatWaiters.push(r); setTimeout(r, ms) })
 /** Tests only (a local relay): as if belfry.json said format 3. */
-export const testFormat3 = () => { format3 = true }
+export const testFormat3 = () => { format3 = true; formatDone() }
 /** The belfry's groups key (belfry.json "groups_key"): it signs the relay's group events. */
 let groupsPub = ''
 export const belfryGroupsKey = () => groupsPub

@@ -19,7 +19,9 @@ import { BELFRY } from '../config'
 import { kvDel, kvDelPrefix, kvGet, kvPrefix, kvSet } from './db'
 import * as C from './sealedcore'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
-import { connectionOf, queryPaged, setPagedMainFilters, currentSigner, enqueue, enqueueSigned, flush, isLocalOnly, me, onEose, onOutbox, publishNow, queryComplete, relayAuthed, replayWraps, setBeforeFlush, setHoldBack, setExtraMainFilters, signedFetch } from './sync'
+import { connectionOf, queryPaged, setPagedMainFilters, currentSigner, enqueue as enqueueRaw, enqueueSigned as enqueueSignedRaw, flush, isLocalOnly, me, onEose, onOutbox, publishNow as publishNowRaw, queryComplete, relayAuthed, replayWraps, setBeforeFlush, setHoldBack, setExtraMainFilters, signedFetch } from './sync'
+import { encryptedFormat } from './access'
+import { setChatSessions } from './enc/runtime'
 
 type Conv = string
 
@@ -566,12 +568,20 @@ export async function mySessions(maxAgeMs = 60e3): Promise<SessionRow[] | null> 
     const d = await r.json() as { sessions?: unknown }
     if (!Array.isArray(d.sessions) || !d.sessions.every((x) => x && typeof x === 'object')) return null
     sessionsCache = { at: Date.now(), rows: d.sessions as SessionRow[] }
+    setChatSessions((d.sessions as SessionRow[]).filter((x) => x.chat === true).length) // format 3: 'full' vs 'not yet' (§17.4)
     return sessionsCache.rows
   } catch { return null }
 }
 const liveChat = (rows: SessionRow[]) => new Set(rows.filter((s) => s.chat === true && s.client_pubkey).map((s) => s.client_pubkey!))
 
 export class NotDone extends Error {}
+// docs/encrypted.md §12, §17.13 (the review's P1.5): on a belfry that writes format 3, version 1
+// writes nothing: no rosters, anchors, device requests, hand-overs, confirms, history packs. It
+// keeps reading the version-1 wraps it can open.
+const v1Writes = () => encryptedFormat() !== 3
+const publishNow: typeof publishNowRaw = (t, ev) => { if (!v1Writes()) throw new NotDone('format 3: version 1 writes nothing'); return publishNowRaw(t, ev) }
+const enqueue: typeof enqueueRaw = (t, e, files) => { if (!v1Writes()) throw new NotDone('format 3: version 1 writes nothing'); return enqueueRaw(t, e, files) }
+const enqueueSigned: typeof enqueueSignedRaw = (t, ev, dm, conv, up) => { if (!v1Writes()) throw new NotDone('format 3: version 1 writes nothing'); return enqueueSignedRaw(t, ev, dm, conv, up) }
 type RosterArgs = { n: number; prev?: string; lb: string; devices: string[]; ready?: boolean }
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

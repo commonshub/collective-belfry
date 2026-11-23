@@ -8,7 +8,7 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { cancelHeld, heldFailure, heldFor, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, LookupFailed, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, isNotes, notesConv, type Conv, type Dm } from '../core/dm'
+import { cancelHeld, heldFailure, heldFor, heldSince, heldWhy, isHeld, retryHeldNow, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, LookupFailed, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, isNotes, notesConv, type Conv, type Dm } from '../core/dm'
 import { previewOf, sendDmFiles } from '../core/dm'
 import { MAX_FILE, MAX_FILE_GUEST, bubbles, tooLarge } from '../core/dmfiles'
 import { isGuest } from '../core/invite'
@@ -23,7 +23,7 @@ import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
 import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { AddedBanner, DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
-import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow, Pictures, PictureRow } from './common'
+import { Avatar, Btn, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow, Pictures, PictureRow } from './common'
 import { placesOn } from './Places'
 import { SendingLine } from './Sending'
 import { TypingDots, TypingLine } from './Typing'
@@ -277,6 +277,8 @@ function FilesItem({ files, caption }: { files: Dm[]; caption?: Dm }) {
         {caption?.text && <RefText text={caption.text} className="dm-text" />}
         <div className="dm-foot">
           <time>{fmtTime(d.at)}</time>
+          {d.clear && <span className="dm-state">Not encrypted</span>}
+          {d.mine && d.notTo?.length ? <span className="dm-state">{d.notTo.map((p) => displayName(p)).join(', ')} won’t get this</span> : null}
           {d.mine && (state.failed
             ? <span className="dm-state failed">Not sent: {state.failed} · <button className="link" onClick={() => { for (const x of all) if (x.failed) void retryDm(x) }}>Retry</button></span>
             : <DmState d={state} />)}
@@ -304,7 +306,8 @@ function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttrib
       {og && <OgCard url={og} />}
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>
-        {notSealed(d.conv, d) && <NotSealedMark />}
+        {d.clear ? <span className="dm-state">Not encrypted</span> : notSealed(d.conv, d) && <NotSealedMark />}
+        {d.mine && d.notTo?.length ? <span className="dm-state">{d.notTo.map((p) => displayName(p)).join(', ')} won’t get this</span> : null}
         {d.kind === 1301 && !d.mine && !d.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
         {d.mine && <DmState d={d} r={r} />}
       </div>
@@ -334,8 +337,10 @@ function HeldState({ d }: { d: Dm }) {
   const long = now * 1000 - heldSince(d.rid) > 60_000 // useNow: seconds
   const [sent, setSent] = useState(false)
   // canvas v98 messages/encryption-held: one grey line under the faded bubble, never a technical reason
-  const failed = heldFailure(d.rid), who = heldFor(d.rid)
+  const failed = heldFailure(d.rid), who = heldFor(d.rid), why = heldWhy(d.rid)
+  // format 3 (encrypted/state-held): why it couldn't be encrypted, with Try again
   const line = failed ? `Not sent: ${failed}`
+    : why ? why
     : who ? `Not sent yet: ${displayName(who)}’s new device isn’t ready.`
     : long ? 'Not sent yet: this device can’t reach the belfry to check how to lock it.'
     : 'Saved · waiting for the connection'
@@ -343,6 +348,7 @@ function HeldState({ d }: { d: Dm }) {
   return (
     <span className="dm-state queued">
       {line}{' · '}
+      {why && !failed && <><Btn className="link" onClick={() => retryHeldNow()}>Try again</Btn>{' · '}</>}
       <button className="link" onClick={async () => {
         const text = await cancelHeld(d.rid)
         if (text === null) { setSent(true); setTimeout(() => setSent(false), 2000); return } // the send won: "Already sent" for two seconds

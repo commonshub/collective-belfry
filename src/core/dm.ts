@@ -13,8 +13,9 @@ import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOn
 import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
-import { Held as EncHeld, encOn, encryptFor, heldText, onEncKeys, openEnc, setEncPartners } from './enc/runtime'
-import { MSG as ENC_MSG } from './enc/core'
+import { Held as EncHeld, encFirstAt, encryptFor, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, writesFormat3 } from './enc/runtime'
+import { formatReady } from './access'
+import { KEY as ENC_KEY, MSG as ENC_MSG } from './enc/core'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
 // e-mail as Nostr Mail (kind 1301 in gift wraps, nogringo/nostr-mail). The belfry is the e-mail
@@ -39,6 +40,10 @@ export interface Dm {
   tags?: string[][]
   /** it came, or went, sealed (docs/sealed.md): only these are shared with a new device (§8) */
   sealed?: boolean
+  /** format 3 (§17.2): an unencrypted message in an encrypted conversation, after its first key: shown marked, never acting */
+  clear?: boolean
+  /** format 3 (§17.5): the people it couldn't reach (no device), "‹name› won't get this" */
+  notTo?: string[]
   /** my e-mail's rumor tags, while it may still be sealed again (§9) */
   mailTags?: string[][]
   /** a kind 15: its tags (what opens its file, dmfiles.ts); FILE undefined when they are unusable */
@@ -123,6 +128,9 @@ const channelSends = new Set<string>() // email-ids sent as a shared inbox, stil
 /** Answer an e-mail card as the shared inbox CHANNEL (only its admins can: the bridge checks).
  *  Resolves with the email-id; `report(id)` then follows its delivery. */
 export async function sendAsChannel(m: { channel: string; /** the channel's address before the @: its plain alias when it has one (model.mailLocal), else its id */ local: string; channelName: string; to: string; subject: string; text: string; inReplyTo?: string; /** the thread's Message-IDs before In-Reply-To, oldest first */ references?: string; cardId: string }): Promise<string> {
+  // format 3: e-mail out waits for the mail server's format-3 build (the review's P1.5)
+  if (!isLocalOnly()) await formatReady()
+  if (writesFormat3()) throw new Error(heldText(new EncHeld('mail'), displayName))
   const b = await bridge()
   if (!b) throw new Error('This belfry does not send e-mail yet.')
   // envelope (mail-from) and From header alike: the bridge checks they match (mail.outgoing)
@@ -329,8 +337,13 @@ async function process() {
             // reaction or take-back is ignored, an old-style message never replaces one held
             const c = convOf(rumor, await bridge())
             const after = isSealedConv(c) && rumor.created_at * 1000 >= (firstSeenOf(c) ?? Infinity)
-            if (rumor.kind === 7 || rumor.kind === 5) { if (!after) reactionRumor(rumor) }
-            else { d = await fromRumor(rumor); if (d && items.has(d.rid) && after) d = null }
+            // format 3 (§17.2, the review's P1.4): after the conversation's first key, a clear event
+            // never acts (no reaction, no take-back) and a clear message shows marked
+            const people = [rumor.pubkey, ...rumor.tags.filter((t) => t[0] === 'p').map((t) => t[1])]
+            const first = isEncConv(people) ? encFirstAt(people) : undefined
+            const late = first !== undefined && rumor.created_at > first
+            if (rumor.kind === 7 || rumor.kind === 5) { if (!after && !late) reactionRumor(rumor) }
+            else { d = await fromRumor(rumor); if (d && items.has(d.rid) && (after || late)) d = null; else if (d && late) d.clear = true }
           }
         } else if (e.pubkey === self || e.tags.some((t) => t[0] === 'p' && t[1] === self)) {
           const peer = e.pubkey === self ? tag(e, 'p') ?? self : e.pubkey
@@ -358,7 +371,10 @@ export function startDms() {
   watchOutbox()
   // §9: a queued sealed wrap is sealed again to a new head from the rumor kept here until it is out
   setRumorSource((rid) => outRumors.get(rid))
-  onOutbox((item) => { if (item.dm) setTimeout(() => outSent(item.dm!), 0) }, () => {})
+  onOutbox((item) => { if (item.dm) setTimeout(() => outSent(item.dm!), 0); if (item.dm && item.kind === ENC_MSG) encOut.delete(item.dm) },
+    // format 3: a copy or envelope refused for good (its date too old for the relay, §18.1): the
+    // message is held again and rebuilt with fresh dates (the review's P2.4)
+    (item) => { const h = item.dm ? encOut.get(item.dm) : undefined; if (h && (item.kind === ENC_MSG || item.kind === ENC_KEY)) { encOut.delete(item.dm!); hold(h) } })
   // letterbox keys arrived: wraps naming them that were marked seen are read again
   onKeysArrived((lbs) => {
     const set = new Set(lbs)
@@ -461,25 +477,18 @@ async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv
   // A file (UPLOAD: its ciphertext) goes the same way: sealed by the device in a sealed
   // conversation, held with its bytes when undecided, never the old way into a sealed one.
   // format 3 (docs/encrypted.md): a people conversation is encrypted with its conversation key;
-  // held with its text when it can't be (never sent unencrypted into an encrypted one)
-  if (encOn() && conv && conv.startsWith('n:')) {
+  // held with its text when it can't be. On a format-3 belfry an n: or m: conversation never takes
+  // the version-1 or NIP-17 way (the review's P1.1, P1.2): the format is awaited first.
+  if (!isLocalOnly()) await formatReady() // (demo: always format 1)
+  if (writesFormat3() && conv && conv.startsWith('m:')) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('mail'), displayName), upload })
+  if (writesFormat3() && conv && conv.startsWith('n:')) {
     dmStep.set(rumor.id, 'encrypting')
-    try {
-      const r = await encryptFor(rumor as unknown as Rumor, [...new Set([...to, me()])])
-      if (r) {
-        const it = items.get(rumor.id); if (it) it.sealed = true
-        if (isLocalOnly()) addEvents(r.events.filter((w) => w.tags.some((t) => t[0] === 'p' && t[1] === me())))
-        await enqueueWraps(r.events, rumor.id, to, upload)
-        return
-      }
-      // null: a conversation that starts over 100 devices: not encrypted (no lock), the NIP-17 way
-      const wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
-      await enqueueWraps(wraps, rumor.id, to, upload)
-      return
-    } catch (e) {
+    try { if (!(await sendEnc(rumor as unknown as Rumor, to, self, conv, upload))) return }
+    catch (e) {
       if (e instanceof EncHeld) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(e, displayName), upload })
       throw e
     } finally { dmStep.delete(rumor.id) }
+    return
   }
   const mode = conv ? await sendMode(conv) : 'old'
   if (mode === 'undecided') return hold({ rumor: rumor as unknown as Rumor, to, self, conv: conv!, upload })
@@ -501,6 +510,28 @@ async function enqueueWraps(wraps: NostrEvent[], rid: string, to: string[], uplo
   const q = [...new Set([...to, me()])].sort().join(',')
   for (const [i, w] of wraps.entries()) await enqueueSigned('main', w, rid, q, i === 0 ? upload : undefined)
 }
+/** format 3: RUMOR encrypted now and queued (the key's envelopes first, the file's upload on the
+ *  first message copy); kept until the relay took its copies, held again when the relay refuses one
+ *  for good (its date, §18.1). False: it went the NIP-17 way (a conversation that starts over 100 devices). */
+async function sendEnc(rumor: Rumor, to: string[], self: boolean, conv: Conv, upload?: Blob): Promise<boolean> {
+  const r = await encryptFor(rumor, [...new Set([...to, me()])])
+  if (!r) {
+    const wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor as unknown as NostrEvent, p)))
+    await enqueueWraps(wraps, rumor.id, to, upload)
+    return false
+  }
+  const it = items.get(rumor.id)
+  if (it) { it.sealed = true; if (r.missing.length) it.notTo = r.missing }
+  encOut.set(rumor.id, { rumor, to, self, conv, upload })
+  if (isLocalOnly()) addEvents(r.events.filter((w) => w.tags.some((t) => t[0] === 'p' && t[1] === me())))
+  const q = [...new Set([...to, me()])].sort().join(',')
+  const firstMsg = r.events.findIndex((e) => e.kind === ENC_MSG)
+  for (const [i, w] of r.events.entries()) await enqueueSigned('main', w, rumor.id, q, i === firstMsg ? upload : undefined)
+  return true
+}
+/** format 3 messages on their way: rid → what rebuilds them when the relay refuses a copy for good */
+const encOut = new Map<string, Held>()
+
 /** a message being signed and wrapped, before its wraps are in the outbox */
 const dmStep = new Map<string, string>()
 
@@ -520,7 +551,8 @@ const held = new Map<string, Held>()
 export const isHeld = (rid: string) => held.has(rid)
 function hold(h: Held) {
   held.set(h.rumor.id, h)
-  void kvSet(KV_HELD + h.rumor.id, h).catch(() => {})
+  // kept across a reload: written once more if the first write failed (the review's P3)
+  void kvSet(KV_HELD + h.rumor.id, h).catch(() => setTimeout(() => void kvSet(KV_HELD + h.rumor.id, h).catch(() => {}), 1000))
   const it = items.get(h.rumor.id); if (it) it.pending = true
   save()
 }
@@ -535,7 +567,7 @@ async function sendHeld(refresh = false) {
       sendAgain = false
       for (const h of [...held.values()]) {
         if (h.failed) continue // failed for good: stays held (Cancel gives the text back)
-        if (encOn() && h.conv.startsWith('n:')) { await sendHeldEnc(h); continue }
+        if (h.enc || (writesFormat3() && (h.conv.startsWith('n:') || h.conv.startsWith('m:')))) { await sendHeldEnc(h); continue } // never the version-1 way (P1.2)
         if ((await sendMode(h.conv, fresh)) === 'undecided') continue
         await withHeldLock(async () => {
           // another tab of this device may have sent or cancelled it meanwhile
@@ -566,17 +598,16 @@ async function sendHeld(refresh = false) {
 }
 /** format 3: a held message encrypted again (lists refreshed); still not possible: its reason updated. */
 async function sendHeldEnc(h: Held) {
+  if (h.conv.startsWith('m:') || !writesFormat3()) return // e-mail on format 3 waits for its build; not format 3 (yet): waits for the format
   await withHeldLock(async () => {
     if (!(await kvGet<Held>(KV_HELD + h.rumor.id).catch(() => undefined))) { held.delete(h.rumor.id); return }
     try {
-      const r = await encryptFor(h.rumor, [...new Set([...h.to, me()])])
-      const events = r ? r.events : await Promise.all([...new Set([...h.to, ...(h.self ? [me()] : [])])].map((p) => giftWrap(h.rumor as unknown as NostrEvent, p)))
-      if (r) { const it = items.get(h.rumor.id); if (it) it.sealed = true }
-      await enqueueWraps(events, h.rumor.id, h.to, h.upload)
+      await sendEnc(h.rumor, h.to, h.self, h.conv, h.upload)
       held.delete(h.rumor.id); await kvDel(KV_HELD + h.rumor.id).catch(() => {})
     } catch (e) {
-      const why = e instanceof EncHeld ? heldText(e, displayName) : undefined
-      if (why && why !== h.enc) { h.enc = why; await kvSet(KV_HELD + h.rumor.id, h).catch(() => {}) }
+      if (e instanceof EncHeld) { const why = heldText(e, displayName); if (why !== h.enc) { h.enc = why; await kvSet(KV_HELD + h.rumor.id, h).catch(() => {}) } return }
+      // P2.2: what can never go stays held with why (Cancel gives the text back); a passing failure: again later
+      if (e instanceof Error && /too long/.test(e.message)) { h.failed = 'This message is too long to encrypt.'; await kvSet(KV_HELD + h.rumor.id, h).catch(() => {}) }
     }
   })
   save()
@@ -602,6 +633,8 @@ export const heldFailure = (rid: string) => held.get(rid)?.failed
 export const heldFor = (rid: string) => held.get(rid)?.who
 /** format 3: why a held message isn't encrypted yet (state-held: "Not sent: … · Try again · Delete"). */
 export const heldWhy = (rid: string) => held.get(rid)?.enc
+/** state-held's Try again: the held messages tried now, the lists read again. */
+export const retryHeldNow = () => sendHeld(true)
 /** When it was held (ms; for "why" after a minute). */
 export const heldSince = (rid: string) => (held.has(rid) ? held.get(rid)!.rumor.created_at * 1000 : 0)
 

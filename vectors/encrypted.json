@@ -944,7 +944,8 @@
       "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
      ],
      "gaps": false,
-     "fork": true
+     "fork": true,
+     "invalidAbove": false
     }
    },
    {
@@ -1049,7 +1050,8 @@
       "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
      ],
      "gaps": false,
-     "fork": false
+     "fork": false,
+     "invalidAbove": false
     }
    },
    {
@@ -1184,7 +1186,8 @@
       "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
      ],
      "gaps": false,
-     "fork": true
+     "fork": true,
+     "invalidAbove": false
     }
    },
    {
@@ -1314,7 +1317,8 @@
      ],
      "readers": [],
      "gaps": true,
-     "fork": false
+     "fork": false,
+     "invalidAbove": false
     }
    },
    {
@@ -1396,7 +1400,8 @@
       "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
      ],
      "gaps": true,
-     "fork": false
+     "fork": false,
+     "invalidAbove": false
     }
    },
    {
@@ -1437,7 +1442,8 @@
      ],
      "readers": [],
      "gaps": false,
-     "fork": false
+     "fork": false,
+     "invalidAbove": false
     }
    },
    {
@@ -1980,7 +1986,7 @@
    {
     "device": "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
     "at": 3500,
-    "expect": false
+    "expect": null
    },
    {
     "device": "7053358eab3c60d292986bd7c6dd241243f124ad53bdd0d8636caf4ada497f95",
@@ -4366,7 +4372,7 @@
      "id": "378e09c00bc5044aeb72cb9ee95cd898e7c6c3dbb49b3c6df833fe25d97dfa0e",
      "sig": "132ac20a6aad82f7bc27d660e60d8925fd23d1d2593ebdbfe8048bb97c0e0b061f76dfb085e20778eddfcf79ee87861bd3de5a07ff0844bc6a9a08d2d094e4a9"
     },
-    "expect": "no"
+    "expect": "wait"
    },
    {
     "name": "d1: rumor dated 3500 but the outer event 3700 (after the grace): judged by the outer date (§18.2): no",
@@ -4524,7 +4530,7 @@
      "sig": "edb77a60d5bcf368af07536ff0e72e0e8a112bc7f2cd411041de5083fdcf3a546605b19687175d4485253c8eb4db600639b6258e2d34818ab9605076ad935734"
     },
     "key_people": "0f0ccddc35fac3a71811d6e04343428878d37a99ad0c912af177e86bc12c5db2,d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
-    "expect": "no"
+    "expect": "wait"
    },
    {
     "name": "the belfry key (a service key, its own device) signs as itself: ok",
@@ -5253,7 +5259,7 @@
    {
     "device": "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633",
     "at": 3500,
-    "expect": true
+    "expect": null
    },
    {
     "device": "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2",
@@ -5261,6 +5267,390 @@
     "expect": true
    }
   ]
+ },
+ "signs_at_relisted": {
+  "lists": [
+   {
+    "kind": 8570,
+    "created_at": 1000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "1"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+    "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
+   },
+   {
+    "kind": 8570,
+    "created_at": 2000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "2"
+     ],
+     [
+      "prev",
+      "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+    "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
+   },
+   {
+    "kind": 8570,
+    "created_at": 3000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "3"
+     ],
+     [
+      "prev",
+      "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+      "reader"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b",
+    "sig": "2a742c89831707e8514bf79bb25bdf96ba6d4ea82d1ae0ffbb1f15370f7b9129759500195e090e8a949ebb9e60f8c838dd27815956ad921987774bfdf0142d8d"
+   },
+   {
+    "kind": 8570,
+    "created_at": 4000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "4"
+     ],
+     [
+      "prev",
+      "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ],
+     [
+      "device",
+      "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+      "reader"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "69f732a5b0ad60e976942ff29d4d4c463ed610a2d3e08e6066846f89464d2752",
+    "sig": "3dc08009a0b185d0b2ccda527d813103cf09caced56f37ed59d3f264575abc2bbd999c85a8f980f00470bce9299a4a6d661e8a3e99b26a1e20834b6663f47ea7"
+   }
+  ],
+  "cases": [
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 3500,
+    "expect": true
+   },
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 3700,
+    "expect": false
+   },
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 4000,
+    "expect": true
+   },
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 4500,
+    "expect": true
+   }
+  ]
+ },
+ "signs_at_behind": {
+  "lists": [
+   {
+    "kind": 8570,
+    "created_at": 1000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "1"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+    "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
+   },
+   {
+    "kind": 8570,
+    "created_at": 2000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "2"
+     ],
+     [
+      "prev",
+      "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+    "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
+   },
+   {
+    "kind": 8570,
+    "created_at": 3000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "3"
+     ],
+     [
+      "prev",
+      "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+      "reader"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b",
+    "sig": "2a742c89831707e8514bf79bb25bdf96ba6d4ea82d1ae0ffbb1f15370f7b9129759500195e090e8a949ebb9e60f8c838dd27815956ad921987774bfdf0142d8d"
+   }
+  ],
+  "cases": [
+   {
+    "device": "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2",
+    "at": 3500,
+    "expect": null
+   },
+   {
+    "device": "a546ae3dc3b60320b3276eca4510db720834150f6c7a920c9e203d664e3ecee2",
+    "at": 2500,
+    "expect": false
+   },
+   {
+    "device": "7053358eab3c60d292986bd7c6dd241243f124ad53bdd0d8636caf4ada497f95",
+    "at": 3000,
+    "expect": null
+   }
+  ]
+ },
+ "invalid_above": {
+  "events": [
+   {
+    "kind": 8570,
+    "created_at": 1000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "1"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+    "sig": "fd584d96b8917f3b94aff97253256338cd62176081ecf86f22f1958a15ff2709165f2a5a96f14edd47b7e118df48f7699896cab34f92dd9aec482e3172380bbc"
+   },
+   {
+    "kind": 8570,
+    "created_at": 2000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "2"
+     ],
+     [
+      "prev",
+      "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+    "sig": "2f82c11bd2f8af0aed27cc869d361d15b69fc8c982fee2d08d777cf3cbfaf85f9cf4cebc2fed823752c14b42e3340d3a5761233dd9647982b37c90ebd65f0706"
+   },
+   {
+    "kind": 8570,
+    "created_at": 3000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "3"
+     ],
+     [
+      "prev",
+      "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ],
+     [
+      "device",
+      "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4",
+      "reader"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b",
+    "sig": "2a742c89831707e8514bf79bb25bdf96ba6d4ea82d1ae0ffbb1f15370f7b9129759500195e090e8a949ebb9e60f8c838dd27815956ad921987774bfdf0142d8d"
+   },
+   {
+    "kind": 8570,
+    "created_at": 4000,
+    "tags": [
+     [
+      "p",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c"
+     ],
+     [
+      "n",
+      "4"
+     ],
+     [
+      "prev",
+      "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b"
+     ],
+     [
+      "device",
+      "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+      "self"
+     ],
+     [
+      "device",
+      "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+     ]
+    ],
+    "content": "",
+    "pubkey": "48f2a6743d028279377142e8c106a589e183e9dbc963bce0b6a069ded02fad44",
+    "id": "6a6f91571300799e1102f48b3f02655523ec233658c9670bc02423d739701a56",
+    "sig": "9b9fce136f23e59d6785fcd3632f4c2ee6c928c1dba92c66f39b16c49f0746dfe98a19a25769abb011cf68bde7fda347c31204e24806084ce1fb1176588bd040"
+   }
+  ],
+  "expect": {
+   "lists": [
+    "ef7b125e5df0ec7d8bb5276beff41aef4201f0c140230f1f94dbaacb8ce8d9cf",
+    "7bdb7078d228cb89392e3a5bc5c2a7419b938aa7209dcf4d2f70fbcec48712af",
+    "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b"
+   ],
+   "current": "d8f6578c4bf2989f1f338d8565f9c20c0c1bbc816f2c4242a14ff4b8dcdefd3b",
+   "devices": [
+    "3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633"
+   ],
+   "readers": [
+    "3eb5ad8595c699a169b1b53ebe6b8706f44a8029caaed900d1f7026cbbf985b4"
+   ],
+   "gaps": false,
+   "fork": false,
+   "invalidAbove": true
+  },
+  "invalid_above": true
  },
  "listed_at_gap": {
   "lists": [
