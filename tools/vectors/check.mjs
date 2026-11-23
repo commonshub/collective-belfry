@@ -340,4 +340,71 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
   }
   console.log(bad ? `vectors (with sealed): ${bad} failed` : 'vectors (with sealed): all ok')
 }
+
+// encrypted.json (docs/encrypted.md with §16–§18, format 3): written by tools/vectors/gen-encrypted.mjs, checked here from the file alone
+{
+  const ef = path.join(root, 'vectors/encrypted.json')
+  let ev = null
+  try { ev = JSON.parse(readFileSync(ef, 'utf8')) } catch { /* not there */ }
+  if (ev) {
+    const eout = path.join(root, 'tools/vectors/.enccheck.mjs')
+    await build({ entryPoints: [path.join(root, 'src/core/enc/core.ts')], bundle: true, platform: 'node', format: 'esm', outfile: eout, logLevel: 'error' })
+    const E = await import(eout + '?' + Date.now())
+    const B = ev.belfry, K = ev.keys, sec = (n) => Uint8Array.from(Buffer.from(ev.secrets[n], 'hex'))
+    const chain = (events, a) => E.chainOf(events, B, a)
+    const chains = (events) => (a) => chain(events, a) ?? undefined
+    const view = (c) => c && { lists: c.lists.map((l) => l.id), current: E.current(c).id, devices: E.current(c).devices, readers: E.current(c).readers, gaps: c.gaps, fork: c.fork }
+    for (const [n, c] of Object.entries(ev.lists.valid)) check(`encrypted list valid: ${n}`, !!E.parseList(c.event, B) === c.valid, c.valid)
+    for (const c of ev.lists.chains) check(`encrypted chain: ${c.name}`, eq(view(chain(c.events, c.account)), c.expect), view(chain(c.events, c.account)))
+    check('encrypted changes', eq(E.changes(chain(ev.changes.lists, K.sam)), ev.changes.expect), E.changes(chain(ev.changes.lists, K.sam)))
+    { const c = chain(ev.listed_before.lists, K.sam); for (const x of ev.listed_before.cases) check(`encrypted listed before: ${x.older.slice(0, 6)} before ${x.device.slice(0, 6)}`, E.listedBefore(c, x.older, x.device) === x.expect, x) }
+    { const c = chain(ev.signs_at.lists, K.sam); for (const x of ev.signs_at.cases) check(`encrypted signs at: ${x.device.slice(0, 6)} @${x.at}`, E.signsAt(c, x.device, x.at) === x.expect, x) }
+    { const c = chain(ev.listed_at.lists, K.sam); for (const x of ev.listed_at.cases) check(`encrypted listed at: ${x.device.slice(0, 6)} @${x.at}`, E.listedAt(c, x.device, x.at) === x.expect, x) }
+    for (const x of ev.alias) check('encrypted alias', E.alias(x.K, x.account) === x.expect, x)
+    check('encrypted lists hash', E.listsHash(ev.lists_hash.lists) === ev.lists_hash.expect, ev.lists_hash)
+    const pk = ev.people_key
+    for (const x of pk.open) {
+      let got
+      try { const o = E.openPeopleEnvelope(sec(x.device), pk.envelopes[x.envelope]); got = o ? { rumor_id: o.rumor.id, K: o.rumor.tags.find((t) => t[0] === 'K')[1] } : null } catch { got = { error: true } }
+      check(`encrypted people envelope: ${x.device}`, eq(got, x.expect), got)
+    }
+    for (const x of pk.accept) { const got = E.acceptKeyRumor(E.withId(x.rumor), x.receiver, chains(x.lists), x.now); check(`encrypted people key: ${x.name}`, got === x.expect, got) }
+    const gk = ev.group_key
+    check('encrypted group envelopes: each under 60 000 bytes', gk.envelopes.every((e) => Buffer.byteLength(e.content) <= gk.max_content_bytes) && gk.envelopes.length === gk.expect_events, gk.envelopes.length)
+    for (const x of gk.find) {
+      let got = null
+      for (const [i, e] of gk.envelopes.entries()) { try { const g = E.openGroupEnvelope(sec(x.device in ev.secrets ? x.device : 'c1'), e, gk.group); if (g) { got = { envelope: i, K: g.K, maker: g.maker }; break } } catch { got = { error: true }; break } }
+      if (!(x.device in ev.secrets)) continue // generated devices: their secrets aren't in the file (only the count matters)
+      check(`encrypted group envelope: ${x.device}`, eq(got, x.expect), got)
+    }
+    { let got; try { E.openGroupEnvelope(sec('c1'), gk.envelopes[0], gk.wrong_group.group); got = 'opened' } catch { got = 'error' }; check('encrypted group envelope in another group: refused', got === gk.wrong_group.expect, got) }
+    { const g = E.openGroupEnvelope(sec('c1'), gk.envelopes[0], gk.group)
+      check('encrypted group entry set over every event (§18.4)', g.set === gk.expect_set && (E.deviceSet(E.entryKeys(gk.envelopes)) === g.set) === gk.expect_set_all_events && (E.deviceSet(E.entryKeys([gk.envelopes[0]])) === g.set) === gk.expect_set_first_event_only, g.set)
+      for (const x of gk.accept) { const got = E.acceptGroupKey({ ...g, maker: x.maker, at: x.at }, chain(x.lists, x.account), x.now); check(`encrypted group key: maker ${x.maker.slice(0, 6)} @${x.at}`, got === x.expect, got) } }
+    const pm = ev.people_messages
+    check('encrypted people message tags (silent on my own copy)', eq(pm.messages.map((m) => m.tags), pm.expect_tags), pm.messages.map((m) => m.tags))
+    pm.messages.forEach((m, i) => { let got; try { const o = E.openPeopleMessage(pm.k, m); got = { seal_signer: o.seal.pubkey, rumor_id: o.rumor.id } } catch { got = { error: true } }; check(`encrypted people message opens: copy ${i}`, eq(got, pm.open[i].expect), got) })
+    { let got; try { E.openPeopleMessage('11'.repeat(32), pm.messages[1]); got = 'opened' } catch { got = { error: true } }; check('encrypted people message: another key doesn’t open it', eq(got, pm.open_wrong_key), got) }
+    for (const x of pm.accept) {
+      const o = E.openPeopleMessage(pm.k, x.message)
+      const people = x.key_people ?? pm.key_people
+      const got = E.acceptPeopleMessage(x.message, o.seal, o.rumor, people, chains(ev.people_key.accept[0].lists)(o.rumor.pubkey))
+      check(`encrypted people message: ${x.name}`, got === x.expect, got)
+    }
+    const gm = ev.group_messages
+    for (const x of gm.cases) {
+      const o = E.openGroupMessage(gm.k, x.message)
+      const got = E.acceptGroupMessage(x.message, o.seal, o.rumor, gm.group, chain(ev.signs_at.lists, K.sam))
+      check(`encrypted group message: ${x.name}`, got === x.expect && (!x.expect_tags || eq(x.message.tags, x.expect_tags)), got)
+    }
+    { const c = chain(ev.packs.lists, K.sam)
+      const pv = (p) => { const o = E.openPack(sec('d4'), K.sam, p, c); return o && { from: o.from, keys: o.keys.map((k) => k.kind === 'people' ? { kind: 'people', rumor_id: k.rumor.id } : k.kind === 'group' ? { kind: 'group', K: k.K, group: k.group } : { kind: 'v1', lb: k.lb }) } }
+      for (const x of ev.packs.cases) check(`encrypted pack: ${x.name}`, eq(pv(x.pack), x.expect), pv(x.pack)) }
+    for (const x of ev.pick_key.cases) { const got = E.pickKey(ev.pick_key.held, x.conv ?? ev.pick_key.conv, x.lists ?? ev.pick_key.lists, x.now)?.K ?? null; check(`encrypted pick key: ${x.name}`, got === x.expect, got) }
+    { const c = chain(ev.asks.lists, K.sam)
+      for (const x of ev.asks.cases) { const got = x.event.kind === 8574 ? E.readAsk(x.event, K.sam, c) : E.readAnswer(x.event, K.sam, c, x.about); check(`encrypted ask/answer: ${x.name}`, eq(got, x.expect), got) } }
+    // the sha256 of the file, for the other apps to compare
+    console.log('encrypted.json sha256 ' + createHash('sha256').update(readFileSync(ef)).digest('hex'))
+  }
+}
 process.exit(bad ? 1 : 0)
