@@ -1,3 +1,4 @@
+import { encryptFile } from './dmfiles'
 import type { Relay, Subscription } from 'nostr-tools/relay'
 import { addTrace, backoffMs, onWake, sock, watchConnections, within, type Sock } from './conn'
 import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-tools'
@@ -138,6 +139,9 @@ export function onOutbox(sent: (item: OutboxItem, ev: NostrEvent) => void, faile
  *  (then beforeOut), then the 8572. Null: sent as it is. Throws "timeout: …" to be tried again. */
 type GroupWrap = (tpl: EventTemplate) => Promise<{ before: EventTemplate[]; beforeOut?: () => void; event: EventTemplate } | null>
 let groupWrap: GroupWrap | undefined
+/** enc/runtime.ts: whether a group's files are encrypted before upload (a private group, §23). */
+let encryptsFiles: ((h: string, kind: number) => boolean) | undefined
+export function setEncryptsFiles(f: (h: string, kind: number) => boolean) { encryptsFiles = f }
 export function setGroupWrap(f: GroupWrap) { groupWrap = f }
 let beforeFlushHook: (() => Promise<void>) | undefined
 /** sealedrt.ts: sealed wraps are checked against fresh heads before they go out. */
@@ -350,14 +354,21 @@ async function send(item: OutboxItem, step: (name: string) => void): Promise<Nos
   const d = await db()
   let content = item.content
   const tags = [...item.tags]
+  const h = item.target === 'groups' ? item.tags.find((t) => t[0] === 'h')?.[1] : undefined
+  const sealFiles = !localOnly && !!h && !!encryptsFiles?.(h, item.kind)
   for (const a of item.attachments) {
     const blob = await d.get('blobs', a.blobKey)
     if (!blob) continue
     const mb = (n: number) => (n / 1e6).toFixed(1)
-    step(`uploading 0.0 of ${mb(blob.size)} MB`)
-    const url = localOnly ? 'idb:' + a.blobKey : await upload(blob, a, (done) => step(`uploading ${mb(done)} of ${mb(blob.size)} MB`))
+    // §23: in a private group the file is encrypted first (AES-GCM, as kind 15); the imeta inside the
+    // rumor carries what opens it (the event itself is encrypted by the group wrap below)
+    const sealed = sealFiles ? await encryptFile(new Uint8Array(await blob.arrayBuffer())) : null
+    const body = sealed ? new Blob([sealed.cipher as BlobPart], { type: 'application/octet-stream' }) : blob
+    step(`uploading 0.0 of ${mb(body.size)} MB`)
+    const url = localOnly ? 'idb:' + a.blobKey : await upload(body, sealed ? { ...a, mime: 'application/octet-stream' } : a, (done) => step(`uploading ${mb(done)} of ${mb(body.size)} MB`))
     const x = localOnly ? '' : url.split('/').pop()!.split('.')[0]
     tags.push(['imeta', `url ${url}`, `m ${a.mime}`, `size ${a.size}`, ...(x ? [`x ${x}`] : []),
+      ...(sealed ? [`ox ${sealed.ox}`, 'encryption-algorithm aes-gcm', `decryption-key ${sealed.key}`, `decryption-nonce ${sealed.nonce}`] : []),
       ...(a.width ? [`dim ${a.width}x${a.height}`] : []), `alt ${a.name}`])
     content = content ? content + '\n' + url : url
   }

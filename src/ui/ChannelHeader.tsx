@@ -11,11 +11,12 @@ import { channelIcon, displayName, group, isInbox, isPublicChannel, mailLocal, p
 import { BELFRY } from '../config'
 import { dropOutbox, outboxItems, useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
-import { Btn, Sheet } from './common'
+import { Btn, go, Sheet } from './common'
 import { SummaryLine } from './ChannelLine'
 import { ChannelMenu, ChannelSubtitle } from './ChannelMenu'
 import { Markdown } from './markdown'
-import { ChevronDownIcon, ChevronUpIcon, PodShape } from './icons'
+import { ChevronDownIcon, ChevronUpIcon, LockIcon, PodShape } from './icons'
+import { encOn, isPrivateGroup } from '../core/enc/runtime'
 
 export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = false, initialMid = false, welcome }: {
   id: string; left: ReactNode; right: ReactNode; topic?: string; onTopic: (t?: string) => void
@@ -113,6 +114,8 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
           {g?.isPod ? <PodShape members={g.members.size} size={18} /> : g && !g.isEvent && !g.isProposal && isPublicChannel(g) ? '#' : channelIcon(g)} {g ? <GroupName g={g} /> : nameOf(id)}
           {g && !g.isEvent && <ChannelSubtitle g={g} />}
         </h1>
+        {/* encrypted/group: a private group's lock opens Who can read this */}
+        {isPrivateGroup(id) && encOn() && <button className="seal-lock" aria-label="End-to-end encrypted: see who can read it" title="End-to-end encrypted" onClick={() => go(`c/${encodeURIComponent(id)}/who`)}><LockIcon /></button>}
         <SaveFailedIcon id={id} />
         {right}
       </div>

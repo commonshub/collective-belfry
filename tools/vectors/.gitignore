@@ -1,3 +1,5 @@
 .enc.mjs
 .sc.mjs
 .enccheck.mjs
+.dmf.mjs
+.dmfcheck.mjs

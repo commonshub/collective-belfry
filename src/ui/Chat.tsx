@@ -13,7 +13,7 @@ import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postGuestMessage, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf, newTopicOf } from '../core/model'
-import { all, outboxItems, status, useVersion } from '../core/store'
+import { all, outboxItems, status, useVersion, type Ev } from '../core/store'
 import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
 import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName, SheetOrPopover, takeAnchor } from './common'
@@ -42,6 +42,7 @@ const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
 import { ArchiveIcon, AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon, PlusIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
+import { encOn, isPrivateGroup } from '../core/enc/runtime'
 import { takeMid } from '../core/cards'
 import { agentOwner, belfryGroupsKey, canAdmin, isAdmin } from '../core/access'
 import { coHostToken, guestInfo } from '../core/auth'
@@ -819,12 +820,15 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   // a shared inbox's e-mails: one row per e-mail thread, where its latest activity is (mailthreads.ts)
   const gkey = knownGroupsKey()
   const mt = mailThreads(id, gkey)
-  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'entered'; j: BelfryJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number } | { t: 'card'; m: Message; at: number }
+  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'entered'; j: BelfryJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number } | { t: 'card'; m: Message; at: number } | { t: 'member'; e: Ev; at: number }
   const items: Item[] = []
   // the groups key's "started this group from a printed card" line (core/cards.ts): a system line, never a person's message
   for (const m of list) if (!mt.of.has(m.ev.id)) items.push(isCardLine(m) ? { t: 'card', m, at: m.ev.created_at } : { t: 'msg', m, at: m.ev.created_at })
   if (!topic) for (const x of mt.list) items.push({ t: 'mail', th: x, at: x.last })
   for (const j of joins) items.push({ t: 'join', j, at: j.at })
+  // a private group in format 3 (encrypted/group-joined, -joined-others, -removed, -removed-self):
+  // who joined or was removed, and what that means for reading
+  if (isPrivateGroup(id) && encOn()) for (const e of all(me())) if ((e.kind === 9000 || e.kind === 9001) && e.tags.some((t) => t[0] === 'h' && t[1] === id) && !e.tags.some((t) => t[0] === 'reading')) items.push({ t: 'member', e, at: e.created_at })
   for (const j of entered) items.push({ t: 'entered', j, at: j.at })
   if (!topic) {
     // an old thread resurfaces where its latest reply came, once other messages followed it
@@ -917,6 +921,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           {items.map((it, i) => {
             if (it.t === 'join') return <JoinLine key={'j' + it.j.id} j={it.j} />
             if (it.t === 'card') return <CardLine key={'c' + it.m.ev.id} m={it.m} groupId={id} />
+            if (it.t === 'member') return <MemberLine key={'mb' + it.e.id} e={it.e} groupId={id} />
             if (it.t === 'entered') return <EnteredLine key={'e' + it.j.id} j={it.j} />
             if (it.t === 'mail') {
               const prevAt = items[i - 1]?.at
@@ -1627,6 +1632,30 @@ function EnteredLine({ j }: { j: BelfryJoin }) {
         ? <span>{who}, {owner ? (owner === me() ? 'your agent' : <><b>{displayName(owner)}</b>’s agent</>) : 'an agent'}, joined</span>
         : <span>{who} joined {community}</span>}
       <time>{fmtTime(j.at)}</time>
+    </div>
+  )
+}
+
+/** A private group's joined / removed line (format 3), with the (i) for a removal. */
+function MemberLine({ e, groupId }: { e: Ev; groupId: string }) {
+  const [info, setInfo] = useState(false)
+  const who = e.tags.find((t) => t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? ''))?.[1]
+  if (!who) return null
+  const by = authorOf(e), byName = by === me() ? 'You' : displayName(by).split(' ')[0]
+  const g = group(groupId), mine = who === me(), name = displayName(who)
+  if (e.kind === 9000) return (
+    <div className="join-line member-line" role="note">
+      <span><b>{mine ? `You joined ${g?.name ?? ''}` : `${name} joined`}</b> · {fmtTime(e.created_at)}<small>{mine ? 'You see messages from when you joined.' : 'They see messages from now on.'}</small></span>
+    </div>
+  )
+  return (
+    <div className="join-line member-line" role="note">
+      <span><b>{mine ? `${byName} removed you from ${g?.name ?? ''}` : `${byName} removed ${name}`}</b> · {fmtTime(e.created_at)}<small>{mine ? 'You can’t read or send new messages here. What you could read before stays on your devices.' : 'New messages no longer reach their devices.'}</small></span>
+      {!mine && <button type="button" className="icon-btn info-i" aria-label="What this means" onClick={() => setInfo(true)}>ⓘ</button>}
+      {info && <Sheet title={`${name} was removed`} onClose={() => setInfo(false)}>
+        <p>When {byName} removed {name.split(' ')[0]}, a new key was made for {g?.name ?? 'the group'}. Messages sent from now on are encrypted with it, and {name.split(' ')[0]}’s devices never get it, so they can’t read them. What {name.split(' ')[0]} could read before stays on {name.split(' ')[0]}’s devices.</p>
+        <button className="btn" onClick={() => setInfo(false)}>OK</button>
+      </Sheet>}
     </div>
   )
 }

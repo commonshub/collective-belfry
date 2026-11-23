@@ -71,6 +71,7 @@ function fileRefOf(r) {
     ...isHex(tagOf(t, "group"), 8) ? { group: tagOf(t, "group") } : {}
   };
 }
+var encryptedMedia = /* @__PURE__ */ new Map();
 async function openFile(tags, downloaded, thumb = false) {
   const key = tagOf(tags, "decryption-key"), nonce = tagOf(tags, thumb ? "thumb-nonce" : "decryption-nonce"), x = tagOf(tags, "x"), ox = tagOf(tags, "ox");
   if (tagOf(tags, "encryption-algorithm") !== "aes-gcm" || !isHex(key, 32) || !isHex(nonce, 12) || !isHex(x, 32) || !isHex(ox, 32)) return { ok: false };
@@ -124,6 +125,7 @@ export {
   bubbles,
   encryptFile,
   encryptThumb,
+  encryptedMedia,
   fileLabel,
   fileRefOf,
   fileTags,

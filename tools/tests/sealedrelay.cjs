@@ -61,7 +61,7 @@ const srv = http.createServer((q, s) => {
   // a Blossom stub (dmfiles-live.cjs): PUT /upload keeps the body under its sha256, GET /<sha256> serves it
   const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, PUT, OPTIONS" };
   if (q.method === "OPTIONS") { s.writeHead(204, cors); s.end(); return; }
-  if (q.method === "PUT" && q.url === "/upload") { const parts = []; q.on("data", (c) => parts.push(c)); q.on("end", () => { const b = Buffer.concat(parts); const x = crypto.createHash("sha256").update(b).digest("hex"); blobs.set(x, b); uploads.push({ x, type: q.headers["content-type"], size: b.length }); s.writeHead(200, { ...cors, "content-type": "application/json" }); s.end(JSON.stringify({ url: `http://${q.headers.host}/${x}`, sha256: x, size: b.length })); }); return; }
+  if (q.method === "PUT" && q.url === "/upload") { const parts = []; q.on("data", (c) => parts.push(c)); q.on("end", () => { const b = Buffer.concat(parts); const x = crypto.createHash("sha256").update(b).digest("hex"); blobs.set(x, b); uploads.push({ x, type: q.headers["content-type"], size: b.length, head: b.subarray(0, 8).toString("hex") }); s.writeHead(200, { ...cors, "content-type": "application/json" }); s.end(JSON.stringify({ url: `http://${q.headers.host}/${x}`, sha256: x, size: b.length })); }); return; }
   const bx = /^\/([0-9a-f]{64})$/.exec(q.url || "");
   if (q.method === "GET" && bx) { const b = blobs.get(bx[1]); s.writeHead(b ? 200 : 404, { ...cors, "content-type": "application/octet-stream" }); s.end(b || ""); return; }
   if (q.url === "/uploads") { s.writeHead(200, { "content-type": "application/json" }); s.end(JSON.stringify(uploads)); return; }

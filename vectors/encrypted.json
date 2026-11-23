@@ -4984,6 +4984,38 @@
    "expect_total_keys": 400
   }
  },
+ "group_file": {
+  "about": "§23: imeta tags as vectors/dm-files.json (x = sha256 of the ciphertext, ox = of the original)",
+  "group": "pod-garden-7f3a",
+  "K": "01c3124ed93c2c9e0e06779b738020f786f2db78d3b30f47bb8225e65feee87c",
+  "k": "73247b76288c466647a400e28f3cd26e91b357852995e12997d227db3d1b1f22",
+  "message": {
+   "kind": 8572,
+   "created_at": 3450,
+   "tags": [
+    [
+     "h",
+     "pod-garden-7f3a"
+    ],
+    [
+     "d",
+     "01c3124ed93c2c9e0e06779b738020f786f2db78d3b30f47bb8225e65feee87c"
+    ]
+   ],
+   "content": "{\"kind\":13,\"created_at\":3350,\"tags\":[],\"content\":\"AsPDWHfPOu1x77GTaygxvhpA9dbdoWCQaMYfSH95cg69MlibvcyKh4El5gmR+PhYaFou016movBtsHtzTqLYBadOdMATGWuGiwxtSfFd3hQD4StSUrk9j0v5fpszuTm2MeGNCib7jP2AwzGyhDlwsH37SvQfsFpWiQYYrrYJeBKA9aPV5wlzl4BitqmcT7DQq9GaIDIrT1tikpSwT9sT4esJH1GH5NLH9fny3+CHKvAL1GfOVZNMia1UJ/UN2oGFS01QS3wxYivHl5+lmyPKkDH8+8kAdjnnBqnDvlbQahGbib7aF7F/NcF5fzphRK0CHRhmiOwbxHfk7WZVg1qUmNa/WKjr/8ktMxS3UgI40y6NKfG0uxQGJPAcm/pMmxES5L82YRdAQvv6N3/OIPJyWAAYaACKfMEGuMK+HSvy5qwLNWHESQIxu5n/Fu4/bnq7IxM+06o9M+tEiNPM0hY53jQULiseppicigx7rhyvjXtD9Cv23t/1CiPNURmNAOTrebC/SbLXg52E8L4m5TdObBtRNqHeH+Hml3LTwFSzl/4bgEagfGS4QbMLsi2qxkSqFzr0BCNIxCSfnO+HrBG9xfuvyn0u3NdUvjtYJxDSs6EzhGp8ZnPqxEU1P4nmxQrYCr5LfI6CWDIEV7QJZDULAABM4tAVfyKma2u1627DyxljlOKSfQodVDEVg8uVOe/Q1h69O7uhUxfkoElxf+GugMP7M/ta9UJ7m/8Ezgm2/3zTWhLP+9bdRj/HaDDBirdhV2v2uBFPmP+Go7ib8Zlr2nOQWCaBfLFfCynA1kHpvaZke7gRn1XL5OdPXLxKNvkGqn9ZUEVTAXViAdDApcx4GluMN1KF4AojvS1tIoB5P4jxNJNk1A69TirGSp3QlyXsgs3nmU4iNTNocMV8yqrPfEgNPTaQ5HA+9eI7k7xWuS2lP9yZfEwMbrUQb/3Y8KemRhtzN4gfF3bfsAwGLPl9SC1zNvLy9QUhI9mRZ//ZP5PPRHXzEle7mo2C5IUm7EPrrh+PIDQfPvQVOwwpdcAYNAZEYoV8kX7u/tmYJr/3BgpU+wRs214WcUtsfHPrTM770w/I8/uPeEulGKrQbO1ZlyTwNw==\",\"pubkey\":\"3839b61ccb724af7063486c597032c7f0b464de70bdb24be70c7bfbf71a78633\",\"id\":\"f92b84e73445c5ecad5b584cebffdb7ab5d237664ca0ca092525f2ec75ba40e0\",\"sig\":\"298f4ae03e47f90c30a44cd192fface6ec9b14aab49d50806a191082170614479c44c10afab50a1379537039797afefbef40e1ccb1812ce3ed20c98db1e68280\"}",
+   "pubkey": "d9fc7852cdcb258b47eef8e6c5d04d6a64b118083cc8281c60e6663e949ef67c",
+   "id": "2ab822d5e75993b0fb7fd543487f2f5f513b58509137673724459471f7af1661",
+   "sig": "9c1b4ddbce0c3916d268d281887d2a7dae9836754ee36e543feafc3f724f622e35e0c66fe07d8f0d52caa503768f54fb6c8d4181bbdacf194281ffe30e7d703d"
+  },
+  "rumor_id": "39c4f7a7d50d2835f7057bd0ad97285811059265b9c2c3c71006e87bd4f44b14",
+  "ciphertext_hex": "7b6a28d4a8df16e1bc5f53d9fa9abe9575eb2f29b2fe93f6bc52b4ddfa0e590f669f28bb798fb236ba3d0640b7298b1cd71de1ad6444cb914017533610fc28cf",
+  "plain_hex": "73656564206c6973743a20746f6d61746f65732c206265616e732c2074776f206b696e6473206f66207371756173680a",
+  "expect": {
+   "opens": true,
+   "mime": "text/plain",
+   "tampered_opens": false
+  }
+ },
  "declare": [
   {
    "K": "4652196ea54e93483c30112afe2c1da4ae2a393d85de6c16923076b0f14dee01",

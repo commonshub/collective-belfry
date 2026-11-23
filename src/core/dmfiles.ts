@@ -87,6 +87,10 @@ export function fileRefOf(r: { content: string; tags: string[][] }): FileRef | n
   }
 }
 
+/** §23: a private group's files are encrypted like kind 15: url → the tags that open it (from its
+ *  imeta, filled by model.parseMedia), for useMediaUrl. */
+export const encryptedMedia = new Map<string, string[][]>()
+
 export type Opened = { ok: true; plain: Uint8Array; mime: string } | { ok: false }
 
 /** A downloaded file (THUMB: its thumbnail) opened with the rumor's TAGS: x of the download, the

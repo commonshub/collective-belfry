@@ -60,6 +60,7 @@ import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
 import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBar, TodosScreen, demoApplyStatus, placeOf, placesOn, townPath } from './Places'
 import { CardScreen } from './Card'
+import { GroupWho } from './WhoCanRead'
 import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
 import { encTest, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
 import { testFormat3 } from '../core/access'
@@ -422,6 +423,8 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
       : (b === 'info' || b === 'about') && c !== 'members' ? <ChannelView id={id} menu />
       // the first open from a card: half pulled down (cards canvas; not linked from anywhere yet)
       : b === 'mid' ? <ChannelView id={id} mid />
+      // a private group's lock (encrypted/group-who)
+      : b === 'who' ? <GroupWho id={id} />
       : b === 'info' ? <ChannelPage key="members" id={id} page="members" />
       : b && OLD_PAGES[b] ? <ChannelPage key={OLD_PAGES[b]} id={id} page={OLD_PAGES[b]} />
       : b && CHANNEL_PAGES.has(b) ? <ChannelPage key={b} id={id} page={b} />

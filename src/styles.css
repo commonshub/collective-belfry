@@ -2267,3 +2267,8 @@ form .create-where { margin-bottom: 14px; }
 .seal-new { font-size: 11px; padding: 1px 6px; border-radius: 99px; background: #E8F3EA; color: #1E5B2E; margin-left: 4px; }
 .enc-remove { display: block; margin: 18px auto 0; color: #b91c1c; font-weight: 600; background: none; border: 0; cursor: pointer; }
 .agent-access { margin: 10px 0; }
+
+/* a private group's joined / removed line (encrypted/group-joined, group-removed) */
+.member-line { align-items: flex-start; }
+.member-line small { display: block; color: var(--muted); }
+.member-line .info-i { font-size: 16px; padding: 0 4px; }

@@ -1,3 +1,4 @@
+import { encryptedMedia, openFile } from '../core/dmfiles'
 import { nameLoading } from '../core/names'
 import { isPicture, pictureBadge } from '../core/pictures'
 import { sizeLabel } from '../core/dmfiles'
@@ -113,8 +114,19 @@ export function Avatar({ pubkey, size = 36 }: { pubkey: string; size?: number })
 const objectUrls = new Map<string, string>()
 
 export function useMediaUrl(url: string) {
-  const [src, setSrc] = useState(() => (url.startsWith('idb:') ? objectUrls.get(url) : url))
+  const enc = encryptedMedia.get(url) // §23: a private group's file, encrypted: fetched, opened, shown from memory
+  const [src, setSrc] = useState(() => (url.startsWith('idb:') || enc ? objectUrls.get(url) : url))
   useEffect(() => {
+    if (enc && !objectUrls.has(url)) {
+      let live = true
+      void fetch(url).then((r) => r.arrayBuffer()).then((b) => openFile(enc, new Uint8Array(b))).then((o) => {
+        if (!o.ok || !live) return
+        const u = URL.createObjectURL(new Blob([o.plain as BlobPart], { type: o.mime }))
+        objectUrls.set(url, u)
+        setSrc(u)
+      }, () => {})
+      return () => { live = false }
+    }
     if (!url.startsWith('idb:') || objectUrls.has(url)) return
     let live = true
     db().then((d) => d.get('blobs', url.slice(4))).then((b) => {

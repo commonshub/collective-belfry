@@ -11,6 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const out = path.join(root, 'tools/vectors/.enc.mjs')
 await build({ entryPoints: [path.join(root, 'src/core/enc/core.ts')], bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'error' })
 const E = await import(out + '?' + Date.now())
+const F = await (async () => { const o = path.join(root, 'tools/vectors/.dmf.mjs'); await build({ entryPoints: [path.join(root, 'src/core/dmfiles.ts')], bundle: true, platform: 'node', format: 'esm', outfile: o, logLevel: 'error' }); return import(o + '?' + Date.now()) })()
 const { getPublicKey } = await import('nostr-tools')
 
 const h = (s) => createHash('sha256').update(s).digest()
@@ -256,13 +257,28 @@ const peopleCases = [
 const clear = [[undefined, 3000], [3000, 2999], [3000, 3000], [3000, 3001]].map(([first, at]) => ({ first_key_at: first ?? null, at, expect: E.clearAfterKey(first, at) }))
 const limits = { people: [[100, false], [101, false], [101, true], [3, true]].map(([n, ever]) => ({ devices: n, ever_encrypted: ever, expect: E.peopleLimit(n, ever) })), group: [1000, 1001].map((n) => ({ devices: n, expect: E.groupLimit(n) })) }
 
+// §23: a file in a private group, encrypted like kind 15; its imeta inside the rumor, the rumor in a group 8572
+const filePlain = Buffer.from('seed list: tomatoes, beans, two kinds of squash\n')
+const fkey = h('file-key').toString('hex'), fnonce = h('file-nonce').subarray(0, 12).toString('hex')
+const sealedFile = await F.encryptFile(new Uint8Array(filePlain), fkey, fnonce)
+const fileUrl = `https://blossom.example.org/${sealedFile.x}`
+const imeta = ['imeta', `url ${fileUrl}`, 'm text/plain', `size ${filePlain.length}`, `x ${sealedFile.x}`, `ox ${sealedFile.ox}`, 'encryption-algorithm aes-gcm', `decryption-key ${sealedFile.key}`, `decryption-nonce ${sealedFile.nonce}`, 'alt seeds.txt']
+const fr = rumor(keys.sam, 3450, [['h', 'pod-garden-7f3a'], imeta], fileUrl, 9)
+const fm = signed(A, E.groupMessage(sk('d2'), fr, gk.K, 'pod-garden-7f3a', fixed('gfile', 3450)))
+const openTags = (t) => { const f = Object.fromEntries(t.slice(1).map((p) => [p.slice(0, p.indexOf(' ')), p.slice(p.indexOf(' ') + 1)])); return [['encryption-algorithm', f['encryption-algorithm']], ['decryption-key', f['decryption-key']], ['decryption-nonce', f['decryption-nonce']], ['x', f.x], ['ox', f.ox], ['file-type', f.m]] }
+const fopen = await F.openFile(openTags(imeta), sealedFile.cipher)
+const tampered = new Uint8Array(sealedFile.cipher); tampered[0] ^= 1
+const groupFile = { about: '§23: imeta tags as vectors/dm-files.json (x = sha256 of the ciphertext, ox = of the original)', group: 'pod-garden-7f3a', K: gk.K, k: gk.k, message: fm, rumor_id: fr.id,
+  ciphertext_hex: Buffer.from(sealedFile.cipher).toString('hex'), plain_hex: filePlain.toString('hex'),
+  expect: { opens: fopen.ok && Buffer.from(fopen.plain).equals(filePlain), mime: fopen.ok ? fopen.mime : null, tampered_opens: (await F.openFile(openTags(imeta), tampered)).ok } }
+
 const doc = {
   about: 'docs/encrypted.md (collective-belfry, with §16–§21): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of "belfry-vector:<name>").',
   keys, secrets, belfry: keys.belfry,
   lists: listCases, changes: changeCases, listed_before: { lists: [L1, L2, L3, L4, L5], cases: before }, signs_at: { lists: [L1, L2, L3], cases: signsAt }, listed_at: { lists: [L1, L2, L3], cases: listedAt },
   alias: aliases, lists_hash: lh,
   people_key: peopleKey, group_key: groupKey, people_messages: peopleMsgs, group_messages: groupMsgs,
-  packs: packCases, declare: decl, people_of: peopleCases, clear_after_key: clear, limits,
+  packs: packCases, group_file: groupFile, declare: decl, people_of: peopleCases, clear_after_key: clear, limits,
   signs_at_gap: { lists: [L1, L2, L4], cases: signsAtGap }, signs_at_relisted: { lists: [L1, L2, L3, R4], cases: signsAtRelisted }, signs_at_behind: { lists: [L1, L2, L3], cases: signsAtBehind }, signs_at_slow_clock: { lists: [L1, L2, L3], cases: signsAtSlow }, group_key_slow_clock: groupKeySlow, invalid_above: invalidAbove, listed_at_gap: { lists: [L1, L2, L4], cases: listedAtGap }, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
 }
 writeFileSync(path.join(root, 'vectors/encrypted.json'), JSON.stringify(doc, null, 1) + '\n')

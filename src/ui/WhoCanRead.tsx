@@ -4,8 +4,8 @@
 // with a count of devices, never which (Xavier, 23 Nov). The header lock opens it.
 import { useEffect, useState } from 'react'
 import { BELFRY } from '../config'
-import { answerFor, devicesOf, encDevice } from '../core/enc/runtime'
-import { displayName, realName } from '../core/model'
+import { answerFor, devicesOf, encDevice, groupCantCheck } from '../core/enc/runtime'
+import { displayName, group, realName } from '../core/model'
 import { mySessions, type SessionRow } from '../core/sealedrt'
 import { useVersion } from '../core/store'
 import { me, signedFetch } from '../core/sync'
@@ -229,6 +229,76 @@ export function AgentAccess({ agent }: { agent: string }) {
         </Sheet>
       )}
       {removing && <RemoveSheet r={{ kind: 'agent', key: agent, name }} onClose={() => setRemoving(false)} onDone={() => { setRemoving(false); setPending(false) }} />}
+    </div>
+  )
+}
+
+/** Who can read this, in a private group (encrypted/group-who, group-who-cant-check): my devices,
+ *  then each other member with a count only; when the entries seen don't add up, "Can't check". */
+export function GroupWho({ id }: { id: string }) {
+  useVersion()
+  const [rows, setRows] = useState<SessionRow[] | null>(null)
+  const [removing, setRemoving] = useState<Removing | null>(null)
+  const [done, setDone] = useState('')
+  useEffect(() => { void mySessions().then(setRows) }, [])
+  const g = group(id)
+  const people = [...(g?.members ?? [])]
+  const others = people.filter((p) => p !== me()).sort((a, b) => displayName(a).localeCompare(displayName(b)))
+  const mine = devicesOf(me())
+  const here = encDevice()
+  const byKey = new Map((rows ?? []).filter((r) => r.client_pubkey).map((r) => [r.client_pubkey!, r]))
+  const cant = groupCantCheck(id)
+  const name = g?.name ?? ''
+  return (
+    <div className="screen seal-screen who-can-read">
+      <div className="topbar"><button className="icon-btn" aria-label="Back to the group" onClick={() => up('c/' + encodeURIComponent(id))}>‹</button><h1>Who can read this</h1></div>
+      <div className="scroll pad">
+        <div className="seal-hero">
+          <span className="seal-shield"><SealIcon size={28} /></span>
+          {cant
+            ? <><b>Can’t check who can read this</b><p className="who-lead">This device couldn’t confirm which devices can read {name}. It keeps trying.</p></>
+            : <p className="who-lead">Only the devices of these {people.length} people can read {name}. Someone who joins later can’t read what was said before.</p>}
+        </div>
+        <div className="place-section"><h3>{realName(me()) || 'You'} <span className="seal-you">(you)</span> <span className="seal-count">{mine ? devicesWord(mine.devices.length + mine.readers.length) : ''}</span></h3></div>
+        <div className="home-card">
+          {(mine?.devices ?? []).map((k) => {
+            const r = byKey.get(k), nm = nameOf(r), at = mine?.since?.get(k)
+            return (
+              <div key={k} className="home-row seal-dev">
+                <span className="t"><b>{nm}{k === here && <> <span className="seal-here">This device</span></>}</b>{at ? <small>Added {fmtDay(new Date(at * 1000))}</small> : null}</span>
+                {k !== here && <button type="button" className="icon-btn danger who-trash" aria-label={`Remove ${nm}`} onClick={() => setRemoving({ kind: 'device', key: k, name: nm, bunker: (r as { bunker_pubkey?: string } | undefined)?.bunker_pubkey })}><TrashIcon /></button>}
+              </div>
+            )
+          })}
+          {(mine?.readers ?? []).map((k) => (
+            <div key={k} className="home-row seal-dev">
+              <span className="t"><b>{displayName(k)}</b><small>Your agent</small></span>
+              <button type="button" className="icon-btn danger who-trash" aria-label={`Remove ${displayName(k)}’s access`} onClick={() => setRemoving({ kind: 'agent', key: k, name: displayName(k) })}><TrashIcon /></button>
+            </div>
+          ))}
+        </div>
+        {!cant && others.length > 0 && <>
+          <div className="place-section"><h3>Others</h3></div>
+          <div className="home-card">
+            {others.filter((p) => (devicesOf(p)?.devices.length ?? 0) + (devicesOf(p)?.readers.length ?? 0) > 0).map((p) => { const d = devicesOf(p); return (
+              <div key={p} className="home-row seal-person"><Avatar pubkey={p} size={32} /><span className="t"><b>{displayName(p)}</b></span><span className="seal-count">{d ? devicesWord(d.devices.length + d.readers.length) : '…'}</span></div>
+            ) })}
+          </div>
+          <p className="seal-only">You see how many devices others have, never which.</p>
+          {/* §23: a member signed in nowhere gets nothing until they are */}
+          {others.some((p) => !((devicesOf(p)?.devices.length ?? 0) + (devicesOf(p)?.readers.length ?? 0))) && <>
+            <div className="place-section"><h3>Not signed in on any device</h3></div>
+            <div className="home-card">{others.filter((p) => !((devicesOf(p)?.devices.length ?? 0) + (devicesOf(p)?.readers.length ?? 0))).map((p) => <div key={p} className="home-row seal-person"><Avatar pubkey={p} size={32} /><span className="t"><b>{displayName(p)}</b><small>Gets new messages once signed in</small></span></div>)}</div>
+          </>}
+        </>}
+        {done && <p className="hint" role="status">{done}</p>}
+        <div className="seal-facts">
+          <h3>How it works</h3>
+          <p>Each message is encrypted on the device that sends it. Only the devices above can read it. The belfry stores and delivers your messages but can’t read them, and neither can its admins. It does see who writes to whom, and when.</p>
+          <p>Each device has its own key, made when it signs in, that never leaves it. When a device is added or removed, the next message uses a new lock, so a removed device can’t read anything new.</p>
+        </div>
+      </div>
+      {removing && <RemoveSheet r={removing} onClose={() => setRemoving(null)} onDone={(t) => { setRemoving(null); setDone(t); void mySessions(0).then(setRows) }} />}
     </div>
   )
 }

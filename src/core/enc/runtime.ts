@@ -12,7 +12,7 @@ import { belfryGroupsKey, belfryNostrKey, encryptedFormat, loadAccessInfo, onAcc
 import { kvGet, kvSet } from '../db'
 import { addEvents, all, latestCreatedAt, outboxItems, setRefuse, subscribe } from '../store'
 import { allGroups, group as groupOf } from '../model'
-import { connectionOf, enqueueSigned, me, onOutbox, queryPaged, setExtraGroupsFilters, setExtraMainFilters, setGroupWrap, setPagedMainFilters } from '../sync'
+import { connectionOf, enqueueSigned, me, onOutbox, queryPaged, setEncryptsFiles, setExtraGroupsFilters, setExtraMainFilters, setGroupWrap, setPagedMainFilters } from '../sync'
 import * as E from './core'
 
 let device: { secret: Uint8Array; pub: string } | null = null
@@ -64,7 +64,7 @@ function holdKey(r: KeyRec) {
   }
   keys.set(r.K, r)
   byAlias.set(E.alias(r.K, me()), r.K)
-  if (!r.group) noteConv(r.conv, r.at)
+  noteConv(r.conv, r.at) // (a group's too, as 'g:<id>': its first key's date, §17.2)
   return true
 }
 /** How many conversation keys this device holds (tests, Diagnostics). */
@@ -216,6 +216,7 @@ async function startEncNow(clientSecret: string) {
   // part 10: private groups: their 8571/8572 on the groups relay, opened into the store; sends wrapped
   setExtraGroupsFilters(() => { const ids = myPrivateGroups(); return device && ids.length ? [{ kinds: [E.KEY, E.MSG], '#h': ids }] : [] }, 'enc')
   setGroupWrap((tpl) => wrapForGroup(tpl))
+  setEncryptsFiles((h, kind) => isPrivateGroup(h) && !clearInGroup({ kind, pubkey: me(), tags: [] }))
   setRefuse(refuseClear)
   let gt: ReturnType<typeof setTimeout> | null = null
   let groupIds = ''

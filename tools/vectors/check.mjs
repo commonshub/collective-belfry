@@ -417,6 +417,18 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     for (const x of ev.clear_after_key) check(`encrypted clear after the first key: ${x.first_key_at} / ${x.at}`, E.clearAfterKey(x.first_key_at ?? undefined, x.at) === x.expect, x)
     for (const x of ev.limits.people) check(`encrypted people limit: ${x.devices} (${x.ever_encrypted ? 'was encrypted' : 'never'})`, E.peopleLimit(x.devices, x.ever_encrypted) === x.expect, x)
     for (const x of ev.limits.group) check(`encrypted group limit: ${x.devices}`, E.groupLimit(x.devices) === x.expect, x)
+    { const gf = ev.group_file
+      const dout = path.join(root, 'tools/vectors/.dmfcheck.mjs')
+      await build({ entryPoints: [path.join(root, 'src/core/dmfiles.ts')], bundle: true, platform: 'node', format: 'esm', outfile: dout, logLevel: 'error' })
+      const F = await import(dout + '?' + Date.now())
+      const o = E.openGroupMessage(gf.k, gf.message)
+      const im = o.rumor.tags.find((t) => t[0] === 'imeta')
+      const f = Object.fromEntries(im.slice(1).map((p) => [p.slice(0, p.indexOf(' ')), p.slice(p.indexOf(' ') + 1)]))
+      const tags = [['encryption-algorithm', f['encryption-algorithm']], ['decryption-key', f['decryption-key']], ['decryption-nonce', f['decryption-nonce']], ['x', f.x], ['ox', f.ox], ['file-type', f.m]]
+      const got = await F.openFile(tags, Uint8Array.from(Buffer.from(gf.ciphertext_hex, 'hex')))
+      const bad = Uint8Array.from(Buffer.from(gf.ciphertext_hex, 'hex')); bad[0] ^= 1
+      check('encrypted group file (§23): the rumor opens, its imeta opens the file, a changed byte doesn’t', o.rumor.id === gf.rumor_id && got.ok === gf.expect.opens && got.ok && Buffer.from(got.plain).toString('hex') === gf.plain_hex && got.mime === gf.expect.mime && (await F.openFile(tags, bad)).ok === gf.expect.tampered_opens, { got: got.ok, mime: got.mime })
+    }
     // the sha256 of the file, for the other apps to compare
     console.log('encrypted.json sha256 ' + createHash('sha256').update(readFileSync(ef)).digest('hex'))
   }

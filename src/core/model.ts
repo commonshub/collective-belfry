@@ -1,3 +1,4 @@
+import { encryptedMedia } from './dmfiles'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
@@ -479,6 +480,8 @@ export function parseMedia(e: Ev): Message {
     if (!f.url || !/^(https?:|idb:)/.test(f.url)) continue
     const [w, h] = (f.dim ?? '').split('x').map(Number)
     media.push({ url: f.url, mime: f.m ?? '', name: f.alt, w: w || undefined, h: h || undefined, size: Number(f.size) || undefined })
+    // §23: encrypted (a private group): what opens it, for the viewer (dmfiles.encryptedMedia)
+    if (f['decryption-key']) encryptedMedia.set(f.url, [['encryption-algorithm', f['encryption-algorithm'] ?? ''], ['decryption-key', f['decryption-key']], ['decryption-nonce', f['decryption-nonce'] ?? ''], ['x', f.x ?? ''], ['ox', f.ox ?? ''], ['file-type', f.m ?? '']])
   }
   let text = e.content
   for (const m of media) text = text.split(m.url).join('')

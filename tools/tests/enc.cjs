@@ -206,6 +206,27 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([clear9]) });
   await sleep(3000);
   check("…a clear kind 9 after the first key shows nowhere", !(await has(S, "A clear one, after the key")));
+  // §23: a photo in the private group: encrypted before the upload; Lina's app opens it
+  const upBefore = (await (await fetch(relayHttp + "/uploads")).json()).length;
+  await S.ev(`(async () => { const c = document.createElement('canvas'); c.width = 8; c.height = 8; const x = c.getContext('2d'); x.fillStyle = '#3a7'; x.fillRect(0, 0, 8, 8);
+    const b = await new Promise((r) => c.toBlob(r, 'image/png')); const dt = new DataTransfer(); dt.items.add(new File([b], 'seeds.png', { type: 'image/png' }));
+    document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true })); await new Promise((r) => setTimeout(r, 600));
+    const s = [...document.querySelectorAll('.composer button')].find((x) => /^Send/i.test(x.getAttribute('aria-label') || '') || x.classList.contains('send')); s && s.click() })()`);
+  const ups = await until(async () => { const u = (await (await fetch(relayHttp + "/uploads")).json()).slice(upBefore); return u.length ? u : null }, 30000);
+  check("the photo went to the file server encrypted (no PNG header in what was uploaded)", !!ups && ups.every((u) => !(u.head || "").startsWith("89504e47")), ups);
+  await L.ev(`location.hash = '#/c/${gid}'`); await sleep(1500);
+  check("Lina sees the photo, opened in her app (a blob: image)", await until(() => L.ev("[...document.querySelectorAll('img')].some((i) => i.src.startsWith('blob:') && i.naturalWidth > 0)"), 30000));
+  // group screens: a joined line (from a 9000), the lock → Who can read this (encrypted/group-joined-others, group-who)
+  const j9000 = finalizeEvent({ kind: 9000, created_at: Math.floor(Date.now() / 1000), tags: [["h", gid], ["p", pkL]], content: "" }, relaySk);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([j9000]) });
+  await S.ev(`location.hash = '#/c/${gid}'`); await sleep(2500);
+  check("the joined line: '… joined · They see messages from now on.'", await until(() => has(S, "They see messages from now on."), 10000), await S.ev("document.body.innerText.slice(-400)"));
+  check("the lock in the private group's header", await S.ev("!!document.querySelector('.chead-bar .seal-lock')"));
+  await S.ev("document.querySelector('.chead-bar .seal-lock').click()"); await sleep(1500);
+  w = await S.ev("document.body.innerText");
+  check("group Who can read this: 'Only the devices of these 2 people can read Garden committee'", /Only the devices of these 2 people can read Garden committee/.test(w) && /Others/.test(w) && /How it works/.test(w), w.slice(0, 400));
+  await S.shot("group-who");
+  await S.ev("history.back()"); await sleep(800);
   await S.shot("group");
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
