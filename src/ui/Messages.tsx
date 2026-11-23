@@ -1,6 +1,7 @@
 import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
 import { ComposerPreview, OgCard } from './LinkPreview'
 import { encConvHere, encFirstAt } from '../core/enc/runtime'
+import { AddedCards, EarlierLine } from './EarlierLine'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { openProfile } from './Profile'
@@ -64,6 +65,7 @@ export function MessagesList() {
       </div>
       <div className="scroll">
         <AddedBanner />
+        <AddedCards />
         {anyLockedHere() && <LockedBanner />}
         <NotesRow last={all.find((t) => isNotes(t.conv))?.last} />
         {list.length === 0 && (
@@ -87,6 +89,8 @@ export function MessagesList() {
             </span>
           </button>
         ))}
+        {/* encrypted/new-list: at the bottom, where the oldest conversations are (Xavier, 23 Nov) */}
+        <EarlierLine where="list" />
         <div style={{ padding: 16 }}>
           <button className="btn ghost" onClick={() => setCreating(true)}>＋ New message</button>
         </div>
@@ -201,6 +205,8 @@ export function MessageThread({ conv }: { conv: Conv }) {
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
           {notes && <div className="notes-line" role="note">{sealed ? NOTES_SEALED : NOTES_OPEN}</div>}
+          {/* encrypted/new-thread, new-asked, new-arrived: above the history of an encrypted conversation */}
+          {encConvHere(conv) && <EarlierLine where="thread" />}
           {notes && list.length === 0 && !locked && <p className="notes-empty">Write anything you want to keep: ideas, lists, pictures, files.</p>}
           {list.length === 0 && !locked && !notes && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
           {(() => { notBeforeShown = false; return null })()}

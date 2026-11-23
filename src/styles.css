@@ -2249,3 +2249,15 @@ form .create-where { margin-bottom: 14px; }
 .who-can-read .who-lead { text-align: center; margin: 8px 0 0; }
 .who-can-read .who-trash { color: #b91c1c; margin-left: auto; }
 .who-can-read .seal-facts h3 { margin: 18px 0 6px; font-size: 15px; }
+
+/* encrypted/new-list, new-thread, new-asked, new-arrived, lost-all: the earlier-messages line */
+.enc-line { display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; padding: 12px 16px; margin: 8px 12px; border-radius: 14px; background: var(--surface); font-size: 14px; }
+.enc-line span { color: var(--muted); }
+.enc-line .link { margin-top: 4px; font-weight: 600; background: none; border: 0; padding: 0; cursor: pointer; }
+.enc-line.quiet { background: none; color: var(--muted); font-size: 13px; padding: 4px 16px; }
+
+/* encrypted/card: on my other devices, one card per added device */
+.enc-card { display: flex; flex-direction: column; gap: 6px; margin: 8px 12px; padding: 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
+.enc-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.enc-card .link.danger { color: #b91c1c; align-self: center; background: none; border: 0; cursor: pointer; font-weight: 600; }
+.enc-card.done { color: var(--muted); font-size: 14px; }

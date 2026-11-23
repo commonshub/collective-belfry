@@ -150,6 +150,27 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await sleep(8000);
   check("format unknown: nothing published to Lina for it (no 8572, no 1059)", (await toLina()) === beforeN, { beforeN, after: await toLina() });
   check("…held in the conversation, with words", await has(N, "Before the format is known") && await has(N, "Not sent"), await N.ev("document.body.innerText.slice(-200)"));
+  // part 6–7: a new device of Sam's (S2, listed after S): "Ask for them"; S's card shares; S2 reads the earlier messages
+  const S2 = await browser("sam2", 9494, "sam@example.org");
+  const s2 = await st(S2);
+  check("S2 is Sam's account with its own device key", (await S2.ev("window.__demoMe()")) === pkS && s2.device && s2.device !== sS.device);
+  await publishList(pkS, [sS.device, getPublicKey(sk("sam-laptop")), s2.device]);
+  await S2.ev("location.hash = '#/dm'"); await sleep(3000);
+  check("S2: 'Earlier messages are on your other devices' · Ask for them", await until(() => has(S2, "Earlier messages are on your other devices"), 20000) && await has(S2, "Ask for them"), await S2.ev("document.body.innerText.slice(-300)"));
+  await S2.shot("new-list");
+  await S2.ev("[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Ask for them').click()"); await sleep(1500);
+  check("S2: an 8574 signed by its device", (await dump()).some((e) => e.kind === 8574 && e.pubkey === s2.device), null);
+  check("S2: 'Asked your other devices'", await until(() => has(S2, "Asked your other devices"), 8000));
+  await S.ev("location.hash = '#/dm'"); await sleep(3000);
+  check("S: a card for the new device, with Share earlier messages", await until(() => has(S, "Share earlier messages"), 20000), await S.ev("document.body.innerText.slice(0, 400)"));
+  await S.shot("card");
+  await S.ev("[...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Share earlier messages').forEach((b) => b.click())"); 
+  check("S: key packs to S2 and the answer", await until(async () => { const x = await dump(); return x.some((e) => e.kind === 8573 && e.tags.some((t) => t[0] === "d" && t[1] === s2.device)) && x.some((e) => e.kind === 8575 && e.pubkey === sS.device) }, 30000));
+  check("S: 'Earlier messages shared with …'", await until(() => has(S, "Earlier messages shared with"), 10000));
+  await S2.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`);
+  check("S2 reads the earlier messages (Bread on Saturday?)", await until(() => has(S2, "Bread on Saturday?"), 30000), await S2.ev("document.body.innerText.slice(0, 300)"));
+  check("…and one quiet line says where they came from", await has(S2, "Earlier messages shared by"));
+  await S2.shot("arrived");
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
     const w = new WebSocket("ws://127.0.0.1:4481"); const out = [];
@@ -166,6 +187,6 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
 
   console.log(bad ? `== enc: ${bad} failed` : "== enc: all ok");
   for (const p of procs) try { p.kill() } catch {}
-  await sleep(500); for (const n of ["lina", "sam", "nojson"]) try { fs.rmSync(`${dir}/prof-enc-${n}`, { recursive: true, force: true }) } catch {}
+  await sleep(500); for (const n of ["lina", "sam", "nojson", "sam2"]) try { fs.rmSync(`${dir}/prof-enc-${n}`, { recursive: true, force: true }) } catch {}
   process.exit(bad ? 1 : 0);
 })();

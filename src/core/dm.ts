@@ -10,10 +10,10 @@ import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch, dropOutbox } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce, retryNow, sendStep } from './sync'
-import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
+import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource, takeV1Secrets, v1SecretsHere } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
-import { Held as EncHeld, repairKey, encCaughtUp, encDevice, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
+import { Held as EncHeld, onV1Secrets, setV1Provider, repairKey, encCaughtUp, encDevice, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
 import { encryptedFormat, formatReady, freshFormat } from './access'
 import { KEY as ENC_KEY, MSG as ENC_MSG } from './enc/core'
 
@@ -410,6 +410,8 @@ export function startDms() {
   onDecidable(() => void sendHeld())
   onAccessInfo(() => void process()) // belfry.json's key arrived: the belfry's sealed mail opens
   onEncKeys(() => void process()) // format 3: conversation keys arrived
+  onV1Secrets((list) => void takeV1Secrets(list)) // format 3: version-1 secrets from a key pack (§16.3)
+  setV1Provider(() => v1SecretsHere()) // format 3: Share hands them on
   setInterval(() => { if (held.size && navigator.onLine) void sendHeld(true) }, 15_000) // a silent relay: asked again
   // §8: a history shared with this device: its messages, marked (sealedrt keeps who shared them);
   // its reactions are not applied (not proven to be authentic)

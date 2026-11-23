@@ -447,6 +447,19 @@ function myLbs(): Set<string> | null {
   if (prev) for (const r of C.chainFromRoot(me(), prev, all().filter((e) => e.kind === C.ROSTER && e.tags.some((t) => t[0] === 'p' && t[1] === me())))?.rosters ?? []) out.add(r.lb)
   return out
 }
+/** Format 3's earlier-messages line (EarlierLine): version-1 letterboxes of mine whose wraps this
+ *  device holds but can't open (no key): what a key pack from another device brings (§16.3). */
+export function missingLetterboxes(): number {
+  const mine = myLbs()
+  return mine ? [...missingLbs].filter((lb) => mine.has(lb) && !keyOf(lb)).length : 0
+}
+/** Format 3's Share (§7.5): the version-1 letterbox secrets this device holds, handed on in key packs. */
+export const v1SecretsHere = () => Object.entries(st.keys).map(([lb, secret]) => ({ lb, secret }))
+/** Format 3: version-1 letterbox secrets that came in a key pack (enc/runtime → dm.ts). */
+export async function takeV1Secrets(list: { lb: string; secret: string }[]) {
+  const added = await addKeys(list.filter((k) => C.isKey(k.lb) && C.isKey(k.secret)))
+  if (added.length) keysArrived(added)
+}
 export function showBanner(): boolean {
   if (!active() || !chainOf(me())) return false
   if (notInHead()) return true

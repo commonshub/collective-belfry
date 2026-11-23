@@ -11,7 +11,7 @@ import { BELFRY } from '../../config'
 import { belfryGroupsKey, belfryNostrKey, encryptedFormat, loadAccessInfo, onAccessInfo } from '../access'
 import { kvGet, kvSet } from '../db'
 import { addEvents, all, latestCreatedAt, outboxItems, subscribe } from '../store'
-import { connectionOf, me, onOutbox, queryPaged, setExtraMainFilters, setPagedMainFilters } from '../sync'
+import { connectionOf, enqueueSigned, me, onOutbox, queryPaged, setExtraMainFilters, setPagedMainFilters } from '../sync'
 import * as E from './core'
 
 let device: { secret: Uint8Array; pub: string } | null = null
@@ -31,6 +31,7 @@ interface KeyRec extends E.HeldKey {
    *  the next message that uses it (the review's P2.1) */ unconfirmed?: NostrEvent[]
   /** what rebuilds those envelopes for the SAME key with fresh dates (N1): its rumor and recipients */
   made?: { rumor: E.Rumor; per: { account: string; devices: string[] }[] }
+  /** a people key's rumor as received (what a key pack hands on, §7.5) */ rumor?: E.Rumor
 }
 const keys = new Map<string, KeyRec>() // K → key
 const byAlias = new Map<string, string>() // alias(K, me) → K
@@ -179,6 +180,10 @@ async function startEncNow(clientSecret: string) {
   for (const r of (await kvGet<KeyRec[]>(KV_KEYS).catch(() => undefined)) ?? []) if (r && E.isKey(r.K) && E.isKey(r.k)) holdKey(r)
   const convs = (await kvGet<[string, number][]>(KV_CONVS).catch(() => undefined)) ?? []
   for (const [c, at] of Array.isArray(convs) ? convs : []) if (typeof c === 'string' && typeof at === 'number') noteConv(c, at)
+  asked = (await kvGet<Asked>(KV_ASKED).catch(() => undefined)) ?? null
+  firstN = (await kvGet<number>(KV_FIRST).catch(() => undefined)) ?? 0
+  for (const [d, a] of (await kvGet<[string, { by: string; answer: 'shared' | 'removed' }][]>(KV_ANSWERED).catch(() => undefined)) ?? []) answeredHere.set(d, a)
+  sharedBy = (await kvGet<{ device: string; at: number }>(KV_SHARED).catch(() => undefined)) ?? null
   setExtraMainFilters(filters, 'enc')
   // belfry.json: the belfry key (who signs lists) and the format; its filters again once known
   onAccessInfo(() => setExtraMainFilters(filters, 'enc'))
@@ -226,8 +231,11 @@ async function takeEnvelopes() {
     const mc = chainOnly(m)
     const mine = !!named && !!mc && !!E.listById(mc, named)?.devices.includes(r.pubkey)
     const lists = E.peopleLists(r.tags.filter((t) => t[0] === 'list').map((t) => ({ account: t[1], id: t[2] })))
-    if (holdKey({ K, k: r.content, conv: E.peopleId(people), people, mine, service: r.pubkey === belfry() || r.pubkey === belfryGroupsKey(), lists, at: r.created_at })) changed = true
+    if (holdKey({ K, k: r.content, conv: E.peopleId(people), people, mine, service: r.pubkey === belfry() || r.pubkey === belfryGroupsKey(), lists, at: r.created_at, rumor: r })) changed = true
   }
+  // §6.4: the first list of mine this device sees brings no card
+  if (!firstN) { const c = chainOnly(m); if (c && E.current(c).devices.includes(device.pub)) { firstN = E.current(c).n; await kvSet(KV_FIRST, firstN).catch(() => {}) } }
+  if (await takePacks()) changed = true
   if (changed) { await saveKeys(); keyListeners.forEach((l) => l()) }
 }
 const keyListeners = new Set<() => void>()
@@ -386,6 +394,139 @@ export async function repairKey(envId: string): Promise<NostrEvent[]> {
     return fresh
   }
   return []
+}
+
+// ---- §7 a new device: earlier messages (part 6) --------------------------------------------
+
+/** How many messages for me this device can't open: format-3 copies whose key it has no copy of. */
+export function unresolvedCount(): number {
+  const m = me()
+  let n = 0
+  for (const e of all(m)) if (e.kind === E.MSG && e.tags.some((t) => t[0] === 'p' && t[1] === m)) { const d = E.named(e); if (d && !byAlias.has(d)) n++ }
+  return n
+}
+/** My devices listed before this one (they hold what this device misses; §17.6). */
+export function olderDevices(): string[] {
+  const c = chainOnly(me())
+  if (!c || !device) return []
+  return E.current(c).devices.filter((d) => d !== device!.pub && E.listedBefore(c, d, device!.pub))
+}
+interface Asked { at: number; devices: string[]; id: string }
+let asked: Asked | null = null
+let sharedBy: { device: string; at: number } | null = null
+const KV_ASKED = 'enc-asked', KV_SHARED = 'enc-shared-by'
+export const askedNow = () => asked
+export const sharedByNow = () => sharedBy
+/** §7.3: ask my other devices for earlier messages (an 8574 signed by this device). Again only after
+ *  24 hours, or when another device of mine appeared on the list since (§16.12). */
+export async function askForEarlier(): Promise<boolean> {
+  if (!device) return false
+  const now = Math.floor(Date.now() / 1000)
+  const mineNow = chainOnly(me()) ? E.current(chainOnly(me())!).devices : []
+  if (asked && now - asked.at < 86400 && mineNow.every((d) => asked!.devices.includes(d))) return false
+  const ev = E.ask(device.secret, me(), now)
+  await enqueueSigned('main', ev)
+  asked = { at: now, devices: mineNow, id: ev.id }
+  await kvSet(KV_ASKED, asked).catch(() => {})
+  keyListeners.forEach((l) => l())
+  return true
+}
+const v1Listeners = new Set<(list: { lb: string; secret: string }[]) => void>()
+/** dm.ts → sealedrt: version-1 letterbox secrets that came in a key pack (§16.3). */
+export const onV1Secrets = (l: (list: { lb: string; secret: string }[]) => void) => { v1Listeners.add(l) }
+const packSeen = new Set<string>()
+/** §7.5 + §16.3 + §19: key packs to this device from an older device of mine: people and group keys
+ *  kept to read with (never adopted for sending: the ruling), version-1 secrets handed to sealedrt. */
+async function takePacks(): Promise<boolean> {
+  if (!device) return false
+  const m = me()
+  let changed = false
+  for (const e of all(m)) {
+    if (e.kind !== E.PACK || packSeen.has(e.id) || !e.tags.some((t) => t[0] === 'd' && t[1] === device!.pub)) continue
+    const c = chainOnly(m)
+    if (!c || c.gaps) continue // judged once my lists are whole (§18.3)
+    packSeen.add(e.id)
+    const o = E.openPack(device.secret, m, e, c)
+    if (!o) continue
+    const v1: { lb: string; secret: string }[] = []
+    for (const k of o.keys) {
+      if (k.kind === 'people') {
+        const people = k.rumor.tags.filter((t) => t[0] === 'p').map((t) => t[1])
+        const K = k.rumor.tags.find((t) => t[0] === 'K')![1]
+        if (holdKey({ K, k: k.rumor.content, rumor: k.rumor, conv: E.peopleId(people), people, mine: false, lists: E.peopleLists(k.rumor.tags.filter((t) => t[0] === 'list').map((t) => ({ account: t[1], id: t[2] }))), at: k.rumor.created_at })) changed = true
+      } else if (k.kind === 'group') {
+        if (holdKey({ K: k.K, k: k.k, conv: 'g:' + k.group, group: true, mine: false, lists: '', at: e.created_at })) changed = true
+      } else v1.push({ lb: k.lb, secret: k.secret })
+    }
+    if (v1.length) v1Listeners.forEach((l) => l(v1))
+    sharedBy = { device: o.from, at: e.created_at }
+    await kvSet(KV_SHARED, sharedBy).catch(() => {})
+    changed = true
+  }
+  return changed
+}
+
+// ---- §7 on my other devices: the card, Share, Remove (part 7) -------------------------------
+
+let v1Provider: () => { lb: string; secret: string }[] = () => []
+/** dm.ts: where this device's version-1 letterbox secrets come from (sealedrt), for Share. */
+export const setV1Provider = (f: typeof v1Provider) => { v1Provider = f }
+const KV_FIRST = 'enc-first-n', KV_ANSWERED = 'enc-answered'
+let firstN = 0 // the n of the first list of mine this device saw: no card for what that list already had (§6.4)
+const answeredHere = new Map<string, { by: string; answer: 'shared' | 'removed' }>() // device → an answer seen
+/** A device of mine that needs the card: added after the first list this device saw, listed after
+ *  this device (only older devices answer, §17.6), not answered by any device yet. Readers: their own card (§17.9). */
+export interface AddedDevice { device: string; at: number; reader: boolean; ask?: string }
+export function addedDevices(): AddedDevice[] {
+  const c = chainOnly(me())
+  if (!c || !device || !firstN) return []
+  const cur = E.current(c)
+  if (!cur.devices.includes(device.pub)) return []
+  const asks = new Map<string, string>()
+  for (const e of all(me())) { const a = E.readAsk(e, me(), c); if (a) asks.set(a.device, a.id) }
+  for (const e of all(me())) {
+    if (e.kind !== E.ANSWER) continue
+    const askId = e.tags.find((t) => t[0] === 'e')?.[1]
+    const about = askId ? [...asks.entries()].find(([, id]) => id === askId)?.[0] : undefined
+    const a = E.readAnswer(e, me(), c, about)
+    const d = a?.device ?? about
+    if (a && d && !answeredHere.has(d)) answeredHere.set(d, { by: a.by, answer: a.answer })
+  }
+  const out: AddedDevice[] = []
+  for (const ch of E.changes(c)) {
+    if (ch.n <= firstN) continue
+    const l = c.lists.find((x) => x.id === ch.list)!
+    for (const d of ch.added) if (d !== device.pub && cur.devices.includes(d) && E.listedBefore(c, device.pub, d) && !answeredHere.has(d)) out.push({ device: d, at: l.created_at, reader: false, ask: asks.get(d) })
+    for (const d of ch.readersAdded) if (cur.readers.includes(d) && !answeredHere.has(d)) out.push({ device: d, at: l.created_at, reader: true })
+  }
+  return out
+}
+/** An answer seen for DEVICE (by another device of mine, or this one). */
+export const answerFor = (d: string) => answeredHere.get(d)
+
+/** §7.5 Share: every key this device can open (its store, after a read of the envelopes on the relay)
+ *  and its version-1 secrets, in key packs to DEVICE; then the answer (8575). PROGRESS: packs sent. */
+export async function shareWith(to: AddedDevice, progress: (done: number, total: number) => void): Promise<void> {
+  if (!device) throw new Error('not set up')
+  const got = await queryPaged('main', [{ kinds: [E.KEY], '#p': [me()] }], 8000, 1000, 60000).catch(() => null)
+  if (got) { addEvents(got); await takeEnvelopes() }
+  const list: E.PackKey[] = []
+  for (const k of keys.values()) {
+    if (k.group) list.push({ kind: 'group', k: k.k, K: k.K, group: k.conv.replace(/^g:/, '') })
+    else if (k.people?.includes(me()) || k.conv.split(',').includes(me())) list.push({ kind: 'people', rumor: k.rumor ?? k.made?.rumor ?? E.keyRumor(device.pub, k.k, (k.people ?? k.conv.split(',')).map((a) => ({ account: a })), k.at) })
+  }
+  for (const v of v1Provider()) list.push({ kind: 'v1', secret: v.secret, lb: v.lb })
+  const packs = E.packs(device.secret, me(), to.device, list)
+  for (const [i, p] of packs.entries()) { await enqueueSigned('main', p); progress(i + 1, packs.length) }
+  await answerDevice(to, 'shared')
+}
+/** §7.7 the answer, for every device of mine at once. */
+export async function answerDevice(to: AddedDevice, what: 'shared' | 'removed') {
+  if (!device) return
+  await enqueueSigned('main', E.answer(device.secret, me(), to.ask ? { ask: to.ask } : { device: to.device }, what))
+  answeredHere.set(to.device, { by: device.pub, answer: what })
+  await kvSet(KV_ANSWERED, [...answeredHere.entries()]).catch(() => {})
+  keyListeners.forEach((l) => l())
 }
 
 // ---- for the screens (Who can read this, Me › Devices) --------------------------------------
