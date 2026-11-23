@@ -576,6 +576,40 @@ def test_a_named_guest_saves_with_an_e_mail_only_and_may_change_the_name(
         assert r.status_code == 409 and r.json()["error"] == "not_guest"
 
 
+def test_saving_a_guest_account_may_follow_its_channel_by_e_mail(
+    rsvc, published, keycast, monkeypatch
+):
+    """A topic card's "Follow by e-mail": ``summary`` with the code follows the guest's channel
+    (weekly | monthly); anything else is refused before the code is spent."""
+    link, join = _guest_link(rsvc, monkeypatch)
+    with TestClient(create_app(rsvc)) as c:
+        got = join(c, link(), PrivateKey(), "Gus")
+        me = PrivateKey()
+        p = rsvc.odoo.search_read(
+            "belfry.pass", [["keycast_pubkey", "=", got.json()["pubkey"]]], ["id", "partner_id"]
+        )[0]
+        me_pk = me.public_key_xonly.format().hex()
+        rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": me_pk})
+        assert _signed(c, me, "/guest/save", {"email": "gus@example.org"}).status_code == 202
+        code = _code()
+        time.sleep(1.1)
+        body = {"email": "gus@example.org", "code": code}
+        r = _signed(c, me, "/guest/save/verify", {**body, "summary": "hourly"})
+        assert r.status_code == 422 and r.json()["field"] == "summary"
+        time.sleep(1.1)
+        r = _signed(c, me, "/guest/save/verify", {**body, "summary": "monthly"})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"saved": True, "joined": False, "summary": "monthly"}
+        rows = rsvc.odoo.search_read(
+            "belfry.follower",
+            [["partner_id", "=", core.m2o_id(p["partner_id"])]],
+            ["channel", "frequency", "state"],
+        )
+        assert [(f["channel"], f["frequency"], f["state"]) for f in rows] == [
+            ("garden", "monthly", "active")
+        ]
+
+
 def _guest_link(rsvc, monkeypatch, channel="garden"):
     from .test_holder_invites import nip98
 

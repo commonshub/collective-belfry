@@ -294,6 +294,11 @@ required" is true for a topic that exists (someone who scans it reads it as a gu
 the chat lets them post there without an e-mail: `card` in §3). **Starting** a topic, like a
 group, still asks for an e-mail address and a code (§2.3).
 
+Following a topic by e-mail (docs/followers.md): `claim` and `claim-verify` take `summary`
+(`weekly`, the default, or `monthly`) and the person who starts a topic follows it at that
+frequency; a visitor who joins a topic with the card's guest link follows it with `summary` on
+`/guest/save/verify`.
+
 ## 6. The proxy
 
 `chat.<domain>/g/<id>` is answered by the chat's page itself (the page rule that serves the
@@ -303,7 +308,6 @@ yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the l
 
 ## 7. Not in v1
 
-- A weekly digest of a topic by e-mail.
 - Posting from a card without an e-mail address.
 - A preview of the group's recent messages before joining.
 - Deleting unused cards, moving a card to another group.

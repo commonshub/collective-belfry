@@ -1446,7 +1446,10 @@ def register_join_routes(app: FastAPI) -> None:
     async def guest_save_verify(request: Request) -> JSONResponse:
         """``{"email", "code", "name"?}``: the address (and the name) go on the guest's own
         contact → ``{"saved": true, "joined"}``. ``joined``: they were in guest mode until now;
-        the channel then gets their 9000 with the name (the join line)."""
+        the channel then gets their 9000 with the name (the join line). ``summary`` (optional):
+        ``weekly`` | ``monthly``: they also follow the channel(s) of their guest passes by e-mail
+        at that frequency (``"summary"`` in the answer when saved)."""
+        from . import followers
         from .holder_invites import ApiError
 
         s, pubkey, data = await guest_of(request, "/api/guest/save/verify", await request.body())
@@ -1456,6 +1459,8 @@ def register_join_routes(app: FastAPI) -> None:
         session_key = str(data.get("session_key") or "").lower()
         if session_key and (not SESSION_KEY.match(session_key) or session_key == pubkey):
             raise ApiError(422, "invalid", "session_key is a new key of this device, as hex.")
+        # follow the channel by e-mail too (a topic card's "Follow by e-mail"): weekly | monthly
+        summary = followers.summary_choice(data) if "summary" in data else ""
         name = " ".join(str(data.get("name") or "").split())[:100]
         if (
             not name
@@ -1498,6 +1503,12 @@ def register_join_routes(app: FastAPI) -> None:
                 if opened:
                     opened["moved"] = moved
                     opened["channel"] = reading
+                    if summary and reading:
+                        ok = await run_in_threadpool(
+                            followers.follow, s, int(out["other"]), reading, summary
+                        )
+                        if ok:
+                            opened["summary"] = summary
                     return JSONResponse(opened)
             answer: dict[str, Any] = {
                 "error": "taken",
@@ -1517,15 +1528,22 @@ def register_join_routes(app: FastAPI) -> None:
             s.odoo.search_read,
             "belfry.pass",
             [["keycast_pubkey", "=", pubkey], ["state", "=", "active"]],
-            ["guest_channel", "tier"],
+            ["guest_channel", "tier", "partner_id"],
         )
+        followed = False
         for r in rows:
             if r.get("guest_channel"):
                 if out.get("joined") and r.get("tier") == "guest":
                     # out of guest mode: the 9000 with their name, at the time they joined
                     await run_in_threadpool(admitted, s, r["id"])
                 await run_in_threadpool(saved_label, s, pubkey, r["guest_channel"])
+                if summary and (pid := m2o_id(r.get("partner_id"))):
+                    followed |= await run_in_threadpool(
+                        followers.follow, s, pid, r["guest_channel"], summary
+                    )
         answer = {"saved": True, "joined": bool(out.get("joined"))}
+        if followed:
+            answer["summary"] = summary
         # came with a member link (roles.py): a member of the belfry now, with its role
         inv = await run_in_threadpool(member_invite_of, s, pubkey)
         if inv is not None:

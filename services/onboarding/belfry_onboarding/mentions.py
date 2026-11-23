@@ -130,7 +130,9 @@ def _naddr_channel(code: str) -> str:
     return ""
 
 
-def _parts(svc: Services, e: dict[str, Any], names: dict[str, str]) -> list[tuple[str, str, str]]:
+def _parts(
+    svc: Services, e: dict[str, Any], names: dict[str, str], limit: int = 0
+) -> list[tuple[str, str, str]]:
     """The message as (kind, shown text, link) pieces: text, a link, @name, #channel, #topic.
     Markdown marks are dropped (a snippet is plain) and it stops near SNIPPET characters."""
     import re
@@ -180,7 +182,7 @@ def _parts(svc: Services, e: dict[str, Any], names: dict[str, str]) -> list[tupl
         out.append(("text", text[at:], ""))
     # at most SNIPPET characters: whole links, words of text
     kept: list[tuple[str, str, str]] = []
-    left = SNIPPET
+    left = limit or SNIPPET
     for kind, shown, href in out:
         if len(shown) <= left:
             kept.append((kind, shown, href))
@@ -199,10 +201,12 @@ def _text(svc: Services, e: dict[str, Any], names: dict[str, str]) -> str:
     return "".join(shown for _k, shown, _h in _parts(svc, e, names))
 
 
-def _html_text(svc: Services, e: dict[str, Any], names: dict[str, str], color: str) -> str:
-    """The same, as HTML: links, channels and #topics clickable."""
+def _html_text(
+    svc: Services, e: dict[str, Any], names: dict[str, str], color: str, limit: int = 0
+) -> str:
+    """The same, as HTML: links, channels and #topics clickable (at most LIMIT characters)."""
     out = []
-    for _kind, shown, href in _parts(svc, e, names):
+    for _kind, shown, href in _parts(svc, e, names, limit):
         if href:
             out.append(
                 f'<a href="{E(href)}" style="color:{color};text-decoration:none;">{E(shown)}</a>'

@@ -634,7 +634,7 @@ def test_a_topic_card_makes_a_channel_named_by_its_hashtag(land):
             assert r.status_code == 409 and r.json()["error"] == "hashtag_taken", name
         assert not land.of(9007)
         r = call(c, bob, f"/cards/{card}/claim", {**FORM, "hashtag": "bread"})
-        assert r.status_code == 200 and r.json() == {"group": "bread"}
+        assert r.status_code == 200 and r.json() == {"group": "bread", "summary": "weekly"}
         # a channel as the chat's New channel makes one (no access tags), named by its hashtag,
         # the topic in words leading its description, announced in the town square
         by = ["by", pk(bob)]
@@ -668,6 +668,44 @@ def test_a_topic_card_makes_a_channel_named_by_its_hashtag(land):
         assert r.status_code == 409 and r.json()["error"] == "hashtag_taken"
         r = call(c, key, f"/cards/{other}/claim-verify", {**body, "hashtag": "rye"})
         assert r.status_code == 200 and r.json()["group"] == "rye"
+
+
+def _follows(rsvc, group):
+    return [
+        (r["frequency"], r["state"])
+        for r in rsvc.odoo.search_read(
+            "belfry.follower", [["channel", "=", group]], ["frequency", "state"]
+        )
+    ]
+
+
+def test_whoever_starts_a_topic_follows_it_weekly_unless_they_pick_monthly(land):
+    rsvc = land.rsvc
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    cy, _ = person(rsvc, "cy@belfry.test", "Cy")
+    with TestClient(create_app(rsvc)) as c:
+        card = land.card("topic")
+        r = call(c, bob, f"/cards/{card}/claim", {**FORM, "hashtag": "bread", "summary": "daily"})
+        assert r.status_code == 422 and r.json()["field"] == "summary"
+        r = call(c, bob, f"/cards/{card}/claim", {**FORM, "hashtag": "bread"})
+        assert r.json() == {"group": "bread", "summary": "weekly"}
+        assert _follows(rsvc, "bread") == [("weekly", "active")]
+        card = land.card("topic")
+        r = call(c, cy, f"/cards/{card}/claim", {**FORM, "hashtag": "rye", "summary": "monthly"})
+        assert r.json() == {"group": "rye", "summary": "monthly"}
+        assert _follows(rsvc, "rye") == [("monthly", "active")]
+        # a visitor with a code: their proven address follows it
+        card = land.card("topic")
+        _key, r = visitor_claim(
+            c, card, "vera@example.org", **FORM, hashtag="oats", summary="monthly"
+        )
+        assert r.status_code == 200 and r.json()["summary"] == "monthly", r.text
+        assert _follows(rsvc, "oats") == [("monthly", "active")]
+        # a group card: nobody follows by e-mail
+        card = land.card()
+        r = call(c, bob, f"/cards/{card}/claim", FORM)
+        assert r.status_code == 200 and "summary" not in r.json()
+        assert not _follows(rsvc, r.json()["group"])
 
 
 # ── retiring, archiving ─────────────────────────────────────────────────────────────────────

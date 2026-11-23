@@ -89,7 +89,7 @@ FOLLOW_ASKS_PER_DAY = 3
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CHANNEL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-FREQUENCIES = ("asap", "monthly")
+FREQUENCIES = ("asap", "weekly", "monthly")  # followers.py
 TIER_NAMES = {"member": "Membership", "steward": "Membership (admin)", "agent": "Member's agent"}
 AGENTS_PER_MEMBER = 1  # how many agents of their own a member can bring (agents.py)
 FOREVER = "2099-12-31"
@@ -268,7 +268,7 @@ class Register(OdooApi):
         elif model == "belfry.follower":
             vals.setdefault("token", secrets.token_urlsafe(24))
             vals.setdefault("state", "pending")
-            vals.setdefault("frequency", "monthly")
+            vals.setdefault("frequency", "weekly")
             vals.setdefault("channel", "general")
         elif model == "res.partner":
             vals.setdefault("belfry_key_custody", "belfry")
@@ -2539,6 +2539,7 @@ class Register(OdooApi):
                             "frequency": frequency,
                             "token": f["token"],
                             "channel": f["channel"],
+                            "partner_id": f.get("partner_id") or False,
                             "since": f.get("sent_until") or 0,
                         }
                     )
@@ -2559,7 +2560,7 @@ class Register(OdooApi):
         f = self._follower(partner["id"], channel)
         if f is None:
             if choice == "stop":
-                return {"channel": channel, "state": "stopped", "frequency": "monthly"}
+                return {"channel": channel, "state": "stopped", "frequency": "weekly"}
             f = self._get(
                 "belfry.follower",
                 self._create("belfry.follower", {"partner_id": partner["id"], "channel": channel}),
@@ -2567,10 +2568,13 @@ class Register(OdooApi):
         result = self._m_belfry_follow_set(model, f["token"], choice)
         return {"channel": channel, "state": result["state"], "frequency": result["frequency"]}
 
-    def _m_belfry_follow_claim_day(self, model, day, *_a, **_k):
-        if self.param("belfry.announcements_digest_day") >= day:
-            return False
-        self.set_param("belfry.announcements_digest_day", day)
+    def _m_belfry_follow_claim_day(self, model, day, what="monthly", *_a, **_k):
+        """True once per DAY and WHAT (``monthly``: the 1st; ``weekly``: Mondays)."""
+        key = "belfry.announcements_digest_day" + ("" if what == "monthly" else f".{what}")
+        with self._lock:
+            if self.param(key) >= day:
+                return False
+            self.set_param(key, day)
         return True
 
     def _m_belfry_follow_mail(

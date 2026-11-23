@@ -11,7 +11,7 @@ from .belfry_steward import _check_service_caller
 
 _logger = logging.getLogger(__name__)
 
-FREQUENCIES = [('asap', 'As soon as possible'), ('monthly', 'Monthly')]
+FREQUENCIES = [('asap', 'As soon as possible'), ('weekly', 'Weekly'), ('monthly', 'Monthly')]
 ASKS_PER_DAY = 3  # confirmation mails to one address within 24 hours
 CHANNEL = re.compile(r'^[A-Za-z0-9_.-]{1,64}$')  # a NIP-29 group id
 EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -46,7 +46,7 @@ class BelfryFollower(models.Model):
         [('pending', 'Not confirmed'), ('active', 'Following'), ('stopped', 'Unsubscribed')],
         default='pending', required=True, readonly=True,
     )
-    frequency = fields.Selection(FREQUENCIES, default='monthly', required=True)
+    frequency = fields.Selection(FREQUENCIES, default='weekly', required=True)
     token = fields.Char(required=True, copy=False, index=True, readonly=True,
                         default=lambda self: secrets.token_urlsafe(24), groups='belfry_pass.group_admin')
     confirmed_at = fields.Datetime(readonly=True)
@@ -149,7 +149,8 @@ class BelfryFollower(models.Model):
             raise UserError("Unknown frequency.")
         rows = self.sudo().search([('state', '=', 'active'), ('frequency', '=', frequency)])
         return [{'id': f.id, 'email': f.email or '', 'frequency': f.frequency, 'token': f.token,
-                 'channel': f.channel, 'since': f.sent_until} for f in rows if f.email]
+                 'channel': f.channel, 'partner_id': f.partner_id.id, 'since': f.sent_until}
+                for f in rows if f.email]
 
     @api.model
     def belfry_follow_member_list(self, partner_id):
@@ -170,20 +171,22 @@ class BelfryFollower(models.Model):
         follower = self.sudo().search([('partner_id', '=', partner.id), ('channel', '=', channel)], limit=1)
         if not follower:
             if choice == 'stop':
-                return {'channel': channel, 'state': 'stopped', 'frequency': 'monthly'}
+                return {'channel': channel, 'state': 'stopped', 'frequency': 'weekly'}
             follower = self.sudo().create({'partner_id': partner.id, 'channel': channel})
         result = self.belfry_follow_set(follower.token, choice)
         return {'channel': channel, 'state': result['state'], 'frequency': result['frequency']}
 
     @api.model
-    def belfry_follow_claim_day(self, day):
-        """True once per DAY: the first caller sends that morning's digests."""
+    def belfry_follow_claim_day(self, day, what='monthly'):
+        """True once per DAY and WHAT (``monthly``: the 1st; ``weekly``: Mondays): the first
+        caller sends that morning's mails."""
         _check_service_caller(self.env)
         params = self.env['ir.config_parameter'].sudo()
-        self.env.cr.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", [DIGEST_DAY_PARAM])
-        if (params.get_param(DIGEST_DAY_PARAM) or '') >= day:
+        key = DIGEST_DAY_PARAM + ('' if what == 'monthly' else '.%s' % what)
+        self.env.cr.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", [key])
+        if (params.get_param(key) or '') >= day:
             return False
-        params.set_param(DIGEST_DAY_PARAM, day)
+        params.set_param(key, day)
         return True
 
     @api.model

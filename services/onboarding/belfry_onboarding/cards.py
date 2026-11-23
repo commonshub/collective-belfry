@@ -13,6 +13,8 @@ group and brings people in through the card's guest link, the same path as any g
   made): a visitor proves an e-mail address with a 6-digit code, is signed in (as the account
   that has the address, or as a new guest) and starts the group.
 - ``GET /api/cards/hashtag/<name>``: whether a topic's hashtag is free.
+- Claiming a topic takes ``summary``: ``weekly`` (also when missing) | ``monthly``: the person who
+  claims follows the new topic by e-mail at that frequency (followers.py, their proven address).
 - ``GET /api/groups/<id>/card`` and ``POST /api/cards/<id>/retire``: for the group's stewards.
 
 The group is made by the groups key, with the tags the chat's own "New group" writes (9007 and
@@ -412,9 +414,12 @@ def start(
 
 def claim(svc: Services, card_id: str, caller: str, data: dict[str, Any]) -> dict[str, Any]:
     """A signed-in account starts the card's group → ``{"group"}``."""
+    from . import followers
+
     _need_own(svc)
     card = _card(svc, card_id)
     form = form_of(card["kind"], data)
+    summary = followers.summary_choice(data)
     _refuse_taken(card)
     who = account_of_key(svc, caller)
     with _card_lock(card["id"]):
@@ -423,7 +428,19 @@ def claim(svc: Services, card_id: str, caller: str, data: dict[str, Any]) -> dic
         with _ids_lock:
             group = choose_group(svc, card, form)
             start(svc, card, form, who, group)
-    return {"group": group}
+    return {"group": group, **_follow_topic(svc, card, who, group, summary)}
+
+
+def _follow_topic(
+    svc: Services, card: dict[str, Any], who: dict[str, Any], group: str, summary: str
+) -> dict[str, Any]:
+    """The person who started a topic follows it by e-mail (``{"summary": "weekly"}``), best
+    effort: ``{}`` for a group card, or when it could not be saved."""
+    from . import followers
+
+    if card["kind"] != "topic" or not followers.follow(svc, who["partner"], group, summary):
+        return {}
+    return {"summary": summary}
 
 
 # ── a visitor: an e-mail address, a code, then the group ────────────────────────────────────
@@ -549,11 +566,12 @@ def claim_verify(svc: Services, card_id: str, key: str, data: dict[str, Any]) ->
     """The code: the visitor is signed in (the account that has the address, or a new guest whose
     first session is KEY) and starts the group → ``{"signed_in": true, "bunker_url", "pubkey",
     "npub", "nip05"?, "group"}``. The form is checked before the code is spent."""
-    from . import applyverified
+    from . import applyverified, followers
 
     _need_own(svc)
     card = _card(svc, card_id)
     form = form_of(card["kind"], data)
+    summary = followers.summary_choice(data)
     name = _text(data.get("name"))
     if not name or len(name) > NAME_MAX:
         raise _invalid("name", "Your name, please.")
@@ -577,7 +595,7 @@ def claim_verify(svc: Services, card_id: str, key: str, data: dict[str, Any]) ->
             else:
                 who, opened, pass_id = _new_guest(svc, group, name, email, key, client)
                 start(svc, card, form, who, group, pass_id)
-    return {**opened, "group": group}
+    return {**opened, "group": group, **_follow_topic(svc, card, who, group, summary)}
 
 
 # ── for the group's stewards ────────────────────────────────────────────────────────────────
