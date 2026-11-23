@@ -43,8 +43,9 @@ export function setOpening(o: Opening | null) {
 // Its reading guest may post a plain message (text, links, photos) in that topic only, before giving
 // an e-mail. The topic is the one the card screen recorded (core/cards.ts 'belfry-card-topic').
 const cardTopicNow = (): string => { try { const v = localStorage.getItem('belfry-card-topic') ?? ''; return /^[A-Za-z0-9_-]{1,120}$/.test(v) ? v : '' } catch { return '' } }
-/** Reading in GROUP, which this browser reached through a topic card. */
-export const guestTopic = (group: string) => reading() && !!group && guestInfo()?.channel === group && cardTopicNow() === group
+/** Reading in GROUP, which this browser reached through a topic card: the join answer said
+ *  "card": "topic" (Belfry c986136), or else what the card screen recorded. */
+export const guestTopic = (group: string) => { const g = guestInfo(); return reading() && !!group && g?.channel === group && (g.card ? g.card === 'topic' : cardTopicNow() === group) }
 /** The approved list, exactly: kind 9 to the groups relay whose tags are [["h", T]] plus imeta (its
  *  photos, images only), T being that topic. Nothing else a reading guest writes goes. */
 export function guestTopicPost(target: string, t: { kind: number; tags: string[][] }, files: { type: string }[] = []): boolean {

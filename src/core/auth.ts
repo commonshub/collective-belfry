@@ -107,7 +107,7 @@ export async function finishSignIn(): Promise<Session | null> {
 const GUEST_KEY = 'belfry-guest'
 const INVITE_KEY = 'belfry-invite'
 const JOIN_KEY = 'belfry-join-key'
-export interface GuestInfo { channel: string; saved: boolean; /** guest mode: only opened a link so far, no name: reads, sends nothing */ reading?: boolean; /** a member link (roles.py): joining makes them a member with this role */ member?: MemberLink }
+export interface GuestInfo { channel: string; saved: boolean; /** the link was a printed card's (Belfry c986136: "card" in the join answer) */ card?: 'group' | 'topic'; /** guest mode: only opened a link so far, no name: reads, sends nothing */ reading?: boolean; /** a member link (roles.py): joining makes them a member with this role */ member?: MemberLink }
 export interface MemberLink { role: string; label: string; membership: 'month' | 'year' | 'permanent' }
 /** What a join answer says about a member link (fixed values only). */
 export function memberLinkOf(b: { as?: unknown; member_role?: unknown; member_role_label?: unknown; membership?: unknown }): MemberLink | undefined {
@@ -173,7 +173,7 @@ export async function joinAsNew(token: string, retried = false): Promise<Session
   try {
     res = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
   } catch { throw new Error('No connection to the belfry. Try again.') }
-  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; pubkey?: string; channel?: string; error?: string; email_needed?: boolean; reading?: boolean; as?: string; member_role?: string; member_role_label?: string; membership?: string }
+  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; pubkey?: string; channel?: string; error?: string; email_needed?: boolean; reading?: boolean; card?: unknown; as?: string; member_role?: string; member_role_label?: string; membership?: string }
   if (res.status === 409 && body.error === 'session_taken') {
     // this device's key is another account's in the signer: once more with a fresh key
     try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
@@ -183,7 +183,7 @@ export async function joinAsNew(token: string, retried = false): Promise<Session
   try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   setPendingInvite('')
   const member = memberLinkOf(body)
-  setGuestInfo({ channel: body.channel ?? 'general', saved: false, reading: body.reading !== false, ...(member ? { member } : {}) })
+  setGuestInfo({ channel: body.channel ?? 'general', saved: false, reading: body.reading !== false, ...(member ? { member } : {}), ...(body.card === 'group' || body.card === 'topic' ? { card: body.card } : {}) })
   // a co-host link (an event's): a host needs a proven e-mail; after joining with it, the link again
   // (a member link needs no second use: saving the e-mail makes them a member)
   setCoHostToken(body.email_needed && !member ? token : '')
