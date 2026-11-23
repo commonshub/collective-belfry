@@ -1,7 +1,7 @@
 // Sealed conversations, the screens (canvas "Messages · encryption", approved 20 Nov). Data:
 // core/sealed.ts (demo only until the lead's docs/sealed.md). Never a key, npub or id as text;
 // only my own devices are named.
-import { encConvHere } from '../core/enc/runtime'
+import { encConvHere, encOnlyDevice } from '../core/enc/runtime'
 import { WhoCanRead } from './WhoCanRead'
 import { useEffect, useRef, useState } from 'react'
 import { convName, isMail, mailAddress, peers, type Conv } from '../core/dm'
@@ -452,13 +452,20 @@ export function OnlyDeviceAlert({ verb, onGo, onClose }: { verb: 'sign out' | 'f
   const [busy, setBusy] = useState(false)
   useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal() }, [])
   const go2 = async () => { setBusy(true); try { await onGo() } finally { setBusy(false) } }
+  const f3 = encOnlyDevice()
   return (
     <dialog ref={ref} className="seal-alert seal-only-device" role="alertdialog" aria-labelledby="seal-od-t" onCancel={(e) => { e.preventDefault(); if (!busy) onClose() }}>
       <span className="seal-dvbig"><Ico size={30}><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M11 18.5h2" /></Ico></span>
+      {f3 ? <>{/* format 3: encrypted/signout-only */}
+        <h2 id="seal-od-t">This is your only device</h2>
+        <p>If you {verb === 'forget' ? 'forget this device' : 'sign out'}, your earlier encrypted messages can’t be read anywhere, ever. New messages still reach you when you sign in again.</p>
+        <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={() => { onClose(); go('accounts/link') }}>Add another device first</button>
+      </> : <>
       <h2 id="seal-od-t">This is your only device for sealed conversations</h2>
       <p>If you {verb === 'forget' ? 'forget this device' : 'sign out'}, your sealed messages can’t be opened again, here or on a new device. Only what the people you write with share again comes back.</p>
       <p>To keep them, link another device first.</p>
       <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={() => { onClose(); go('accounts/link') }}>Link a device</button>
+      </>}
       <button className="btn seal-red" disabled={busy} aria-busy={busy || undefined} onClick={() => void go2()}>{busy ? <><Spin /> {verb === 'forget' ? 'Forgetting…' : 'Signing out…'}</> : verb === 'forget' ? 'Forget anyway' : 'Sign out anyway'}</button>
       <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
     </dialog>

@@ -15,6 +15,7 @@ const belfrySk = sk("belfry"), belfry = getPublicKey(belfrySk);
 const procs = [];
 const relay = spawn("node", [dir + "/sealedrelay.cjs", "4481"], { stdio: "ignore" }); procs.push(relay);
 const web = spawn("python3", ["-m", "http.server", "4482", "-d", dist], { stdio: "ignore" }); procs.push(web);
+const removedFor = {}; // browser name → the /sessions/removed answer (faked here: nothing reaches a real belfry)
 const counters = {}, lastIds = {};
 async function publishList(account, devices, prevId = lastIds[account]) {
   counters[account] = (counters[account] || 0) + 1
@@ -36,10 +37,11 @@ async function browser(name, port, email, noJson = false) {
   const send = (method, params = {}) => new Promise((r) => { const i = ++id; wait[i] = r; ws.send(JSON.stringify({ id: i, method, params })); });
   const ev = async (e) => (await send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true })).result?.value;
   await send("Network.enable"); await send("Network.setBypassServiceWorker", { bypass: true });
-  if (noJson) { // belfry.json never answers 200: the format stays unknown
-    ws.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.method === "Fetch.requestPaused") send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 404, responseHeaders: [{ name: "Content-Type", value: "application/json" }], body: Buffer.from("{}").toString("base64") }) });
-    await send("Fetch.enable", { patterns: [{ urlPattern: "*belfry.json*" }] });
-  }
+  ws.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.method !== "Fetch.requestPaused") return
+    const u = d.params.request.url, cors = [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" }, { name: "Access-Control-Allow-Headers", value: "*" }]
+    if (/belfry\.json/.test(u)) send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 404, responseHeaders: cors, body: Buffer.from("{}").toString("base64") }) // noJson: the format stays unknown
+    else send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 200, responseHeaders: cors, body: Buffer.from(JSON.stringify(removedFor[name] || { removed: false })).toString("base64") }) });
+  await send("Fetch.enable", { patterns: [{ urlPattern: "*sessions/removed*" }, ...(noJson ? [{ urlPattern: "*belfry.json*" }] : [])] });
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await send("Page.navigate", { url: base + "?backend=demo" }); await sleep(2500);
   await ev(`(() => { const i = document.querySelector('input[type=email]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, ${JSON.stringify(email)}); i.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('form').requestSubmit() })()`)
@@ -171,6 +173,12 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   check("S2 reads the earlier messages (Bread on Saturday?)", await until(() => has(S2, "Bread on Saturday?"), 30000), await S2.ev("document.body.innerText.slice(0, 300)"));
   check("…and one quiet line says where they came from", await has(S2, "Earlier messages shared by"));
   await S2.shot("arrived");
+  // encrypted/removed-device: another device removed S2: its data goes, one screen
+  removedFor.sam2 = { removed: true, at: Math.floor(Date.now() / 1000) - 60, by_name: "Safari on Mac" };
+  await S2.ev("location.reload()"); await sleep(5000);
+  check("S2 removed: 'This device was removed · Safari on Mac removed it …' · Sign in again", await until(() => has(S2, "This device was removed"), 15000) && await has(S2, "Safari on Mac removed it") && await has(S2, "Sign in again"), await S2.ev("document.body.innerText.slice(0, 300)"));
+  check("…and this device's data is gone (no belfry keys in its localStorage but the device-wide ones)", await S2.ev("Object.keys(localStorage).filter((k) => /^belfry[-:]/.test(k) && !/^belfry-(accounts?|accounts-ls:|other-belfries|community-name|enc-format|enc-seen)/.test(k)).length === 0"), await S2.ev("JSON.stringify(Object.keys(localStorage))"));
+  await S2.shot("removed");
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {
     const w = new WebSocket("ws://127.0.0.1:4481"); const out = [];

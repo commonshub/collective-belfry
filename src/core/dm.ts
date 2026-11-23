@@ -301,6 +301,16 @@ async function unwrap(wrap: NostrEvent): Promise<NostrEvent | null> {
   return rumor.pubkey === seal.pubkey ? rumor : null // no one writes in someone else's name
 }
 
+/** Keys arrived (a pack, an envelope): clear messages already shown in a conversation now known
+ *  encrypted and dated after its first key are marked "Not encrypted"; clear reactions there stop counting (§17.2). */
+function rejudgeClear() {
+  let changed = false
+  const lateIn = (conv: Conv, at: number) => { if (!conv.startsWith('n:')) return false; const people = [...peers(conv), me()]; const f = isEncConv(people) ? encFirstAt(people) : undefined; return f !== undefined && at > f }
+  for (const d of items.values()) if (!d.sealed && !d.clear && !d.opening && d.kind !== 1301 && lateIn(d.conv, d.at)) { d.clear = true; changed = true }
+  for (const [id, r] of dmReacts) { const t = items.get(r.target); if (r.clear && t && lateIn(t.conv, r.at)) { dmReacts.delete(id); changed = true } }
+  if (changed) save()
+}
+
 let busy = false
 let oldWaitSince: number | null = null
 async function process() {
@@ -409,7 +419,7 @@ export function startDms() {
   // a complete answer arrived: held messages are decided (§6)
   onDecidable(() => void sendHeld())
   onAccessInfo(() => void process()) // belfry.json's key arrived: the belfry's sealed mail opens
-  onEncKeys(() => void process()) // format 3: conversation keys arrived
+  onEncKeys(() => { rejudgeClear(); void process() }) // format 3: conversation keys arrived (clear ones re-judged)
   onV1Secrets((list) => void takeV1Secrets(list)) // format 3: version-1 secrets from a key pack (§16.3)
   setV1Provider(() => v1SecretsHere()) // format 3: Share hands them on
   setInterval(() => { if (held.size && navigator.onLine) void sendHeld(true) }, 15_000) // a silent relay: asked again

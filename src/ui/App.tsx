@@ -54,14 +54,14 @@ import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, lastChannelMail, setMyAddress, startDms } from '../core/dm'
 import { startReadState } from '../core/readstate'
 import { demoInboxChannel, demoInboxMail, demoMailPost } from './MailPost'
-import { Avatar, back, Btn, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
+import { Avatar, back, Btn, devMode, fmtDay, fmtTime, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
 import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBar, TodosScreen, demoApplyStatus, placeOf, placesOn, townPath } from './Places'
 import { CardScreen } from './Card'
 import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
-import { encTest, startEnc } from '../core/enc/runtime'
+import { encTest, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
 import { testFormat3 } from '../core/access'
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 
@@ -78,8 +78,26 @@ if (getBackend() === 'demo') setDemoMake(async (kind, f) => {
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
+/** encrypted/removed-device: one full screen; this device's messages and keys are already gone. */
+function RemovedScreen({ r }: { r: { at: number; by?: string } }) {
+  const when = r.at ? `${fmtDay(new Date(r.at * 1000)).toLowerCase()} at ${fmtTime(r.at)}` : ''
+  return (
+    <div className="screen login removed-device" role="alert">
+      <h2>This device was removed</h2>
+      <p>{r.by ? `${r.by} removed it` : 'Another of your devices removed it'}{when ? ` ${when}` : ''}. Your messages were deleted from this device. They’re still on your other devices.</p>
+      <button className="btn" onClick={() => { location.hash = ''; location.reload() }}>Sign in again</button>
+    </div>
+  )
+}
+
 export function App() {
   const [phase, setPhase] = useState<Phase>({ p: 'loading' })
+  // another of my devices removed this one (§16.6): its data goes at once, then one screen
+  const [removedHere, setRemovedHere] = useState(removedNow())
+  useEffect(() => onRemoved(() => void (async () => {
+    stop(); await clearSession(); await wipe(); forgetDevice()
+    setRemovedHere(removedNow())
+  })()), [])
   const backend = getBackend()
   const [signInFirst, setSignInFirst] = useState(false)
   const [, setCardTick] = useState(0)
@@ -168,6 +186,7 @@ export function App() {
   // element over whatever comes under it), so nothing blinks in between.
   const op = openingNow()
   const veil = op ? <OpeningScreen name={op.name} /> : null
+  if (removedHere) return <RemovedScreen r={removedHere} />
   if (phase.p === 'loading') return veil
   // a printed card opened by someone who isn't signed in: start its group, or its guest link
   if (phase.p === 'out' && cardNow() && !signInFirst && !phase.error)

@@ -9,7 +9,7 @@
 //
 // Rules from the boards: never a key, npub or id as text; only MY devices are named, other
 // people's are a count (and a "changed in the last 30 days" line); channels never have a lock.
-import { encConvHere } from './enc/runtime'
+import { encConvHere, encOnlyDevice } from './enc/runtime'
 import { thread, type Conv } from './dm'
 import * as R from './sealedrt'
 import * as SC from './sealedcore'
@@ -134,7 +134,7 @@ export const myDevices = () => (real() ? realMine() : state.mine)
 export const hasDevices = () => myDevices().length > 0
 /** canvas v117: this browser is my only device for sealed conversations (never for a guest; not
  *  before a letterbox exists: then there is nothing to lose) */
-export const onlyDevice = () => !isGuest(me()) && (real() ? R.onlyDeviceHere() : state.mine.length === 1 && !!state.mine[0].here)
+export const onlyDevice = () => encOnlyDevice() || (!isGuest(me()) && (real() ? R.onlyDeviceHere() : state.mine.length === 1 && !!state.mine[0].here))
 export const theirDevices = (pk: string): TheirDevices | undefined => (real() ? realTheirs(pk) : state.people.get(pk))
 export const deviceLines = (conv: Conv) => (real() ? realLines(conv) : state.lines.get(conv) ?? [])
 /** §5.5: in my head without the head key: the composer of a sealed conversation waits. */

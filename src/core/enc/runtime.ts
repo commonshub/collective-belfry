@@ -6,7 +6,7 @@
 //
 // Keys live in this account's own database (kv 'enc-keys'), never localStorage, never logged.
 import { hexToBytes } from '@noble/hashes/utils'
-import { getPublicKey, type Filter, type NostrEvent } from 'nostr-tools'
+import { finalizeEvent, getPublicKey, type Filter, type NostrEvent } from 'nostr-tools'
 import { BELFRY } from '../../config'
 import { belfryGroupsKey, belfryNostrKey, encryptedFormat, loadAccessInfo, onAccessInfo } from '../access'
 import { kvGet, kvSet } from '../db'
@@ -204,6 +204,10 @@ async function startEncNow(clientSecret: string) {
   }, () => {})
   let t: ReturnType<typeof setTimeout> | null = null
   subscribe(() => { t ??= setTimeout(() => { t = null; void takeEnvelopes() }, 150) })
+  // removed by another device? at start, every 5 minutes, and back in the foreground (§16.6)
+  void checkRemoved()
+  setInterval(() => void checkRemoved(), 5 * 60e3)
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void checkRemoved() })
 }
 
 // ---- receiving -------------------------------------------------------------------------------
@@ -542,6 +546,36 @@ export function devicesOf(account: string): { devices: string[]; readers: string
   const since = new Map<string, number>()
   for (const l of c.lists) for (const d of [...l.devices, ...l.readers]) if (!since.has(d)) since.set(d, l.created_at)
   return { devices: cur.devices, readers: cur.readers, since }
+}
+// ---- encrypted/removed-device: this device was removed (§16.6) ----------------------------------
+
+export interface Removed { at: number; by?: string }
+let removed: Removed | null = null
+const removedListeners = new Set<() => void>()
+export const removedNow = () => removed
+export const onRemoved = (l: () => void) => { removedListeners.add(l) }
+/** GET /api/v1/sessions/removed, NIP-98 signed by this DEVICE's key (a revoked session can't sign
+ *  through the signer any more): {removed: false} | {removed: true, at, by_name?} | 404. */
+export async function checkRemoved(): Promise<void> {
+  if (!device || removed) return
+  const url = `${BELFRY.api}/sessions/removed`
+  const auth = finalizeEvent({ kind: 27235, content: '', created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', 'GET']] }, device.secret)
+  let d: { removed?: unknown; at?: unknown; by_name?: unknown }
+  try {
+    const r = await fetch(url, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } })
+    if (!r.ok) return
+    d = await r.json()
+  } catch { return }
+  if (d.removed !== true) return
+  const at = typeof d.at === 'number' ? d.at : typeof d.at === 'string' ? Math.floor(Date.parse(d.at) / 1000) || 0 : 0
+  removed = { at, ...(typeof d.by_name === 'string' && d.by_name.trim() ? { by: d.by_name.trim().slice(0, 80) } : {}) }
+  removedListeners.forEach((l) => l())
+}
+
+/** encrypted/signout-only: this device is alone on my list and holds keys (its earlier messages go with it). */
+export function encOnlyDevice(): boolean {
+  const c = chainOnly(me())
+  return !!device && !!c && E.current(c).devices.length === 1 && E.current(c).devices[0] === device.pub && keys.size > 0
 }
 /** Is CONV (n:…) a format-3 conversation here (keys or messages seen for it, §18.6). */
 export const encConvHere = (conv: string) => conv.startsWith('n:') && isEncConv([...conv.slice(2).split(','), me()])
