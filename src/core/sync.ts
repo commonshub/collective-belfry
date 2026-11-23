@@ -227,7 +227,11 @@ async function sendOne(item: OutboxItem): Promise<'sent' | 'failed' | 'retry'> {
     // again: fail this one message instead of holding back every later one to that relay.
     // 401, 408 and 429 can pass on a later try.
     const refusedUpload = /^upload failed \((4\d\d)/.exec(msg)
-    const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
+    // the community relay (rnostr main, 2026-11-23): an authenticated key not on its whitelist gets
+    // "restricted: pubkey not in whitelist" (was auth-required): a member just let in is added within
+    // seconds, so that one is tried again, with the back-off, for 10 minutes before it counts
+    const notListedYet = item.target === 'main' && /^restricted\b.*whitelist/i.test(msg) && Date.now() - (item.queuedAt ?? Date.now()) < 10 * 60e3
+    const permanent = !notListedYet && (/^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg))
       || (!!refusedUpload && !['401', '408', '429'].includes(refusedUpload[1]))
     if (msg.startsWith('restricted') && item.target === 'groups') noteRefusal(msg)
     if (/^duplicate:/.test(msg)) { // the relay has it already: out
@@ -779,7 +783,8 @@ function resubscribe(target: Target) {
       // a refusal (a rate limit above all): back off, 2 s then doubling up to 2 min, so we never
       // hammer the relay into refusing again
       if (subs[target] === sub && relayOf(target) === r && r.connected && status.access !== 'denied') {
-        const refused = /rate.?limit|too many|slow down/i.test(reason) || (target === 'groups' && Date.now() - refusedAt < 5000)
+        // (the community relay's "restricted: pubkey not in whitelist" for a guest or a removed member: backed off too, never every 2 s)
+        const refused = /rate.?limit|too many|slow down/i.test(reason) || (target === 'groups' && Date.now() - refusedAt < 5000) || (target === 'main' && /^restricted\b/i.test(reason))
         const wait = refused ? (refusalBackoff = Math.min(120e3, Math.max(2000, refusalBackoff * 2))) : 2000
         setTimeout(() => { if (subs[target] === sub && relayOf(target) === r) resubscribe(target) }, wait)
       }
