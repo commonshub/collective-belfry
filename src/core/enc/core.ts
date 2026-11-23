@@ -142,13 +142,19 @@ export const receivers = (l: DeviceList) => [...l.devices, ...l.readers]
 export function signsAt(c: Chain, device: string, at: number): boolean | undefined {
   const v = listedAt(c, device, at)
   if (v !== false) return v
-  if (!c.lists.some((l) => l.devices.includes(device)) && at >= current(c).created_at) return undefined
+  // (a key on a list as a reader is known: it never signs as the account, so no)
+  if (!c.lists.some((l) => l.devices.includes(device) || l.readers.includes(device)) && at >= current(c).created_at) return undefined
   return false
 }
 
-/** §16.2 for a group: DEVICE was on the account's list that was current at AT (with the grace).
+/** §16.2 for a group: DEVICE was on the account's list that was current at AT (with the grace;
+ *  §21: the first list that has it counts from its date − 5 minutes).
  *  Undefined: the list current at AT may be missing. */
 export function listedAt(c: Chain, device: string, at: number): boolean | undefined {
+  // §21: a slow clock dates a new device's first messages (and its first group key) before the list
+  // that added it: its first list counts from that list's date − SKEW
+  const first = c.lists.find((l) => l.devices.includes(device))
+  if (first && at < first.created_at && first.created_at <= at + SKEW) at = first.created_at
   let i = -1
   c.lists.forEach((l, j) => { if (l.created_at <= at) i = j })
   if (i < 0) return c.lists[0].n === 1 ? false : undefined
@@ -369,6 +375,8 @@ function signer(outer: NostrEvent, seal: NostrEvent, rumor: Rumor, chain: Device
   if (rumor.created_at > outer.created_at + SKEW) return 'no'
   if (chain === SERVICE) return seal.pubkey === rumor.pubkey ? 'ok' : 'no'
   if (chain === undefined) return 'wait' // no list: kept and judged again, never the account key (§20)
+  // the account's own key is one of its devices only when a list says so (self): no list can be "behind" for it
+  if (seal.pubkey === rumor.pubkey && !chain.lists.some((l) => l.devices.includes(seal.pubkey))) return 'no'
   const v = signsAt(chain, seal.pubkey, outer.created_at)
   return v === undefined ? 'wait' : v ? 'ok' : 'no'
 }

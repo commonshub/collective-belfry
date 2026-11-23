@@ -80,6 +80,9 @@ const R4 = list('R4', keys.sam, 4, L3.id, [keys.d1, keys.d2], 4000, [keys.agent]
 const cRe = E.chainOf([L1, L2, L3, R4], keys.belfry, keys.sam)
 const signsAtRelisted = [[keys.d1, 3500], [keys.d1, 3700], [keys.d1, 4000], [keys.d1, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cRe, d, at)) }))
 // the review (P2.3): a device on no list known here, dated at or after the newest list: its list may be behind (wait)
+// §21: d2 first listed by L2 (2000): an outer date up to 5 minutes before it counts (a slow clock)
+const signsAtSlow = [[keys.d2, 1800], [keys.d2, 1700], [keys.d2, 1699], [keys.d2, 1600]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))
+const groupKeySlow = [1800, 1600].map((at) => ({ maker: keys.d2, account: keys.sam, at, now: 5000, lists: [L1, L2, L3], expect: E.acceptGroupKey({ k: '1'.repeat(64), K: 'a'.repeat(64), group: 'pod-garden-7f3a', maker: keys.d2, account: keys.sam, at, set: 'b'.repeat(64) }, c3, 5000) }))
 const signsAtBehind = [[keys.d4, 3500], [keys.d4, 2500], [keys.d3, 3000]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))
 // the review (P2.7): a newer list that isn't valid (self beside a device) → invalidAbove; a fork is reported
 const L4bad = signed(B, { kind: 8570, created_at: 4000, tags: [['p', keys.sam], ['n', '4'], ['prev', L3.id], ['device', keys.sam, 'self'], ['device', keys.d2]], content: '' })
@@ -254,13 +257,13 @@ const clear = [[undefined, 3000], [3000, 2999], [3000, 3000], [3000, 3001]].map(
 const limits = { people: [[100, false], [101, false], [101, true], [3, true]].map(([n, ever]) => ({ devices: n, ever_encrypted: ever, expect: E.peopleLimit(n, ever) })), group: [1000, 1001].map((n) => ({ devices: n, expect: E.groupLimit(n) })) }
 
 const doc = {
-  about: 'docs/encrypted.md (collective-belfry, with §16–§20): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of "belfry-vector:<name>").',
+  about: 'docs/encrypted.md (collective-belfry, with §16–§21): device lists 8570, keys 8571, messages 8572, packs 8573, asks 8574, answers 8575. Every secret below is a test key (sha256 of "belfry-vector:<name>").',
   keys, secrets, belfry: keys.belfry,
   lists: listCases, changes: changeCases, listed_before: { lists: [L1, L2, L3, L4, L5], cases: before }, signs_at: { lists: [L1, L2, L3], cases: signsAt }, listed_at: { lists: [L1, L2, L3], cases: listedAt },
   alias: aliases, lists_hash: lh,
   people_key: peopleKey, group_key: groupKey, people_messages: peopleMsgs, group_messages: groupMsgs,
   packs: packCases, declare: decl, people_of: peopleCases, clear_after_key: clear, limits,
-  signs_at_gap: { lists: [L1, L2, L4], cases: signsAtGap }, signs_at_relisted: { lists: [L1, L2, L3, R4], cases: signsAtRelisted }, signs_at_behind: { lists: [L1, L2, L3], cases: signsAtBehind }, invalid_above: invalidAbove, listed_at_gap: { lists: [L1, L2, L4], cases: listedAtGap }, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
+  signs_at_gap: { lists: [L1, L2, L4], cases: signsAtGap }, signs_at_relisted: { lists: [L1, L2, L3, R4], cases: signsAtRelisted }, signs_at_behind: { lists: [L1, L2, L3], cases: signsAtBehind }, signs_at_slow_clock: { lists: [L1, L2, L3], cases: signsAtSlow }, group_key_slow_clock: groupKeySlow, invalid_above: invalidAbove, listed_at_gap: { lists: [L1, L2, L4], cases: listedAtGap }, pick_key: { held, conv: conv1, lists: lines, cases: pick }, asks,
 }
 writeFileSync(path.join(root, 'vectors/encrypted.json'), JSON.stringify(doc, null, 1) + '\n')
 console.log('vectors/encrypted.json', createHash('sha256').update(JSON.stringify(doc, null, 1) + '\n').digest('hex'))
