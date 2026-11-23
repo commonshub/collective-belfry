@@ -10,7 +10,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postGuestMessage, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf, newTopicOf } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -557,6 +557,28 @@ function JoinBar({ g }: { g: Group }) {
         </Sheet>
       )}
     </>
+  )
+}
+
+/** The town-square post of a topic started from a printed card (canvas cards/townsquare-new-topic):
+ *  New topic · #hashtag · the topic · its description · Started by … · N following · Open.
+ *  The cards server writes the topic's about as "<topic> · <description>" (Belfry 7bfa781). */
+function TopicCard({ id, by, fallback }: { id: string; by: string; fallback: string }) {
+  const g = group(id)
+  // from the post itself while the topic isn't known here: "# New topic: #tag · topic · description"
+  const fromPost = (fallback.split('\n')[0] ?? '').replace(/^#\s*New topic:\s*#\S+\s*·?\s*/, '')
+  const about = g?.about ?? fromPost
+  const [topic, ...rest] = about.split(' · ')
+  const open = () => go(`c/${encodeURIComponent(id)}`)
+  return (
+    <div className="ev-card ntc" role="article" aria-label="New topic">
+      <span className="k"><svg className="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M3.5 12V4h8l9 9-8 8z" /><circle cx="8" cy="8.5" r="1.3" /></svg>New topic</span>
+      <span className="h">#{g?.name && g.name !== topic ? g.name : id}</span>
+      {topic && <span className="n">{topic}</span>}
+      {rest.length > 0 && <span className="d"><Linkify text={rest.join(' · ')} /></span>}
+      <span className="m">Started by {displayName(by)}{g ? ` · ${g.members.size} following` : ''}</span>
+      <button className="btn" onClick={(e) => { e.stopPropagation(); open() }}>Open</button>
+    </div>
   )
 }
 
@@ -1124,7 +1146,7 @@ function useHold(open: () => void, off = false) {
 function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, active = false, tag }: { /** a small tag after the name (e-mail threads: "team only") */ tag?: ReactNode; active?: boolean; todo?: Task; onOpenThread?: () => void; /** when the item above it in the feed came (a row that is not a message: an e-mail thread, a join) */ prevAt?: number; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
-  const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
+  const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE && !(t === 'new-topic' && newTopicOf(m.ev)))
   const d = new Date(m.ev.created_at * 1000)
   const newDay = !head && (prevAt !== undefined ? new Date(prevAt * 1000).toDateString() !== d.toDateString() : !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString())
   const first = head || newDay || !prev || prev.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev.ev.created_at > 300
@@ -1163,7 +1185,8 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   }
   // a reference to a channel, group, event or proposal at the very end: a preview box (Refs.tsx)
   const end = mail ? undefined : endRef(m.text)
-  const isCard = !!(legacy || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
+  const newTopic = newTopicOf(m.ev) // a topic started from a card: its card, as a group's (Xavier, 23 Nov)
+  const isCard = !!(legacy || podOf(m.ev) || proposalOf(m.ev) || newTopic) // a card always says who made it
   const frozen = !!group(groupId)?.archived // an archived group: no menu, no reacting
   // press and hold (phones) or right-click: react, reply, edit or delete your own
   const hold = useHold(() => onAct(), !!p || frozen)
@@ -1184,8 +1207,9 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
         <div className="body">
           {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(author)}><PersonName pubkey={author} name={name === fallbackName(author) ? undefined : name} /></button><AgentTag pk={author} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{tag}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
+          {newTopic && <div className="created-line">started a topic from a printed card</div>}
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
-          {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />
+          {newTopic ? <TopicCard id={newTopic} by={author} fallback={m.text} /> : legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />
             : end ? <>{end.rest && <RichText text={end.rest} groupId={groupId} onOpen={onTopic} />}<RefPreview r={end.ref} /></>
             : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
           <MessageButtons ev={m.ev} groupId={groupId} disabled={!!p || frozen} />

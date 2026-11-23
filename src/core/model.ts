@@ -216,6 +216,8 @@ export function authorOf(e: { pubkey: string; kind: number; tags: string[][] }):
   return (group && claimerOf(group)) || e.pubkey
 }
 
+/** The topic a town-square post announces (the cards server: ["t","new-topic"], ["channel", <hashtag>]). */
+export const newTopicOf = (e: Ev) => e.kind === 9 && e.tags.some((t) => t[0] === 't' && t[1] === 'new-topic') ? tag(e, 'channel') : undefined
 export const podOf = (e: Ev) => {
   const v = tag(e, 'pod')
   return v && isPodId(v) ? v : undefined

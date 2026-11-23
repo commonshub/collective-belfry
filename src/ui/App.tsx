@@ -22,7 +22,7 @@ import { roleBadge } from '../core/roles'
 import { replyRoot, archivedGroups, deletedGroup, displayName, group, groups, profiles, nameOf } from '../core/model'
 import { createChannel, createPod } from '../core/actions'
 import { addEvents, hasEvent, loadAll, outboxItems, status, useVersion } from '../core/store'
-import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
+import { enqueue, isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { AboutBelfry, AccountsScreen, Diagnostics } from './Accounts'
@@ -64,7 +64,15 @@ import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/card
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 
 // demo: a card's claim makes its group or topic here, as the belfry's groups key would
-if (getBackend() === 'demo') setDemoMake(async (kind, f) => kind === 'topic' ? createChannel(f.title.trim(), f.about.trim(), hashtagSlug(f.hashtag)) : createPod(f.title.trim(), f.about.trim(), 'general', { closed: false, prompt: '' }))
+// (as the cards server does, Belfry 7bfa781: a topic's name is its hashtag, about "<topic> · <description>",
+// and it is announced in general with ["t","new-topic"], ["channel", <hashtag>])
+if (getBackend() === 'demo') setDemoMake(async (kind, f) => {
+  if (kind !== 'topic') return createPod(f.title.trim(), f.about.trim(), 'general', { closed: false, prompt: '' })
+  const tag = hashtagSlug(f.hashtag), about = [f.title.trim(), f.about.trim()].filter(Boolean).join(' · ')
+  const id = await createChannel(tag, about, tag)
+  await enqueue('groups', { kind: 9, tags: [['h', 'general'], ['t', 'new-topic'], ['channel', tag]], content: `# New topic: #${tag} · ${about}\n${location.origin}${location.pathname}#/c/${tag}` })
+  return id
+})
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 

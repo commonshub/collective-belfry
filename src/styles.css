@@ -2202,3 +2202,13 @@ form .create-where { margin-bottom: 14px; }
 .guest-sending .link { font-size: 13px; padding: 0; background: none; border: 0; cursor: pointer; }
 .guest-save-card { margin: 8px 12px; padding: 12px 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
 .guest-save-card p { margin: 4px 0 10px; color: var(--muted); font-size: 14px; }
+
+/* a topic started from a card, in town square (canvas cards/townsquare-new-topic) */
+.ev-card.ntc { gap: 4px; cursor: default; padding: 12px 14px; border-radius: 16px; }
+.ntc .k { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; display: flex; align-items: center; gap: 5px; }
+.ntc .k .ic { width: 14px; height: 14px; }
+.ntc .h { font-size: 17px; font-weight: 700; }
+.ntc .n { font-size: 15px; font-weight: 600; }
+.ntc .d { font-size: 15px; line-height: 20px; }
+.ntc .m { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.ntc .btn { margin-top: 8px; height: 38px; font-size: 15px; }

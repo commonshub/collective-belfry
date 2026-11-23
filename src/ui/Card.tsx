@@ -102,6 +102,10 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
   const [taken, setTaken] = useState<{ group: string; invite: string } | null>(null)
   const set = (k: keyof CardForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF((o) => ({ ...o, [k]: e.target.value }))
   useEffect(() => { keepForm(id, f) }, [id, f])
+  // a topic: the hashtag is suggested from the topic's words until it's edited by hand (Xavier: ask the
+  // topic, then suggest the hashtag); taken → the next free one (-2, -3…) is offered
+  const [tagEdited, setTagEdited] = useState(() => !!f.hashtag && f.hashtag !== hashtagSlug(f.title))
+  const setTitle = (e: React.ChangeEvent<HTMLInputElement>) => { const v = e.target.value; setF((o) => ({ ...o, title: v, ...(kind === 'topic' && !tagEdited ? { hashtag: hashtagSlug(v) } : {}) })) }
   // the hashtag's live check (a topic card)
   const slug = hashtagSlug(f.hashtag)
   const asked = useRef('')
@@ -110,7 +114,19 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
     if (slug.length < 2) { setTag(f.hashtag.trim() ? 'invalid' : ''); return }
     setTag('checking')
     asked.current = slug
-    const t = setTimeout(() => { void hashtagState(slug).then((s) => { if (asked.current === slug) setTag(s) }) }, 350)
+    const t = setTimeout(() => { void hashtagState(slug).then(async (s) => {
+      if (asked.current !== slug) return
+      if (s === 'taken' && !tagEdited) { // a suggestion that's taken: the next free one
+        for (let n = 2; n <= 9; n++) {
+          const next = slug.slice(0, 30 - String(n).length - 1) + '-' + n
+          const st = await hashtagState(next)
+          if (asked.current !== slug) return
+          if (st === 'free') { setF((o) => ({ ...o, hashtag: next })); return }
+          if (st !== 'taken') break
+        }
+      }
+      setTag(s)
+    }) }, 350)
     return () => clearTimeout(t)
   }, [slug, kind, recheck]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -185,14 +201,14 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
         : `You found a new group card. You start the group and look after it; everyone who scans this card after you joins it.`}</p>
       {signedIn && <p className="card-who">Signed in as <b>{signedIn}</b></p>}
       <Form className="start-form card-form" onSubmit={start}>
-        {kind === 'topic' && <label className="field"><span>Hashtag</span>
-          <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required onChange={set('hashtag')} placeholder="sourdough" /></span>
-          <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? '✓ Available' : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : tag === 'unknown' ? <>Couldn’t check just now · <button type="button" className="link" onClick={() => setRecheck((n) => n + 1)}>Try again</button></> : ''}</small>
-        </label>}
         <label className="field"><span>{kind === 'topic' ? 'Topic' : 'Title'}</span>
-          <input className="input" value={f.title} maxLength={80} required onChange={set('title')} placeholder={kind === 'topic' ? 'What the topic is' : 'What you wrote on the card'} /></label>
-        <label className="field"><span>{kind === 'topic' ? 'About' : 'Description'} <small>(optional)</small></span>
-          <textarea className="input" rows={3} value={f.about} maxLength={500} onChange={set('about')} /></label>
+          <input className="input" value={f.title} maxLength={80} required onChange={setTitle} placeholder="What you wrote on the card" /></label>
+        {kind === 'topic' && <label className="field"><span>Hashtag</span>
+          <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required onChange={(e) => { setTagEdited(true); set('hashtag')(e) }} placeholder="gluten-free-baking" /></span>
+          <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? (tagEdited ? '✓ Available' : '✓ Available · suggested from the topic, you can change it') : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : tag === 'unknown' ? <>Couldn’t check just now · <button type="button" className="link" onClick={() => setRecheck((n) => n + 1)}>Try again</button></> : ''}</small>
+        </label>}
+        <label className="field"><span>Description <small>(optional)</small></span>
+          <textarea className="input" rows={3} value={f.about} maxLength={500} onChange={set('about')} placeholder={kind === 'topic' ? 'What people share here' : undefined} /></label>
         {!signedIn && <>
           <label className="field"><span>Your name</span>
             <input className="input" value={f.name} maxLength={100} autoComplete="name" required onChange={set('name')} /></label>
