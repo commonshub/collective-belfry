@@ -13,7 +13,7 @@ import { BELFRY, NAME } from '../config'
 import { accounts, activeId, addAccount, addOtherBelfry, otherBelfries, removeOtherBelfry, switchTo, type Account } from '../core/accounts'
 import { useVersion } from '../core/store'
 import { signerCalls, signerCallsIn } from '../core/auth'
-import { me } from '../core/sync'
+import { lastCatchUp, me } from '../core/sync'
 import { allSocks, sendTraces } from '../core/conn'
 import { Avatar, back, Btn, Form, go, Sheet } from './common'
 import { useCommunityName } from './community'
@@ -280,6 +280,7 @@ export function Diagnostics() {
             <li key={s.url}><b>{s.url.replace(/^wss?:\/\//, '').replace(/\?.*$/, '')}</b><small>{s.connected ? `Connected · last heard ${secs(s.quietFor())} ago` : 'Not connected'}{s.drops ? ` · dropped ${s.drops}× (last: ${s.lastDrop})` : ''}</small></li>
           ))}
         </ul>
+        <p className="hint diag-catchup">{lastCatchUp() ? `Caught up on return at ${new Date(lastCatchUp()).toLocaleTimeString()}` : 'Not back from the background yet'}</p>
         <div className="place-section"><h3>New devices</h3></div>
         <ul className="diag-list">
           <li className="diag-auto"><b>Last automatic add</b><small>{auto ? `${new Date(auto.at).toLocaleString()} · ${auto.name}: ${auto.result}` : 'No new device has asked in this browser.'}</small></li>

@@ -732,6 +732,19 @@ function filters(target: Target): Filter[] {
   ]
 }
 
+/** Back in the foreground (Xavier 2026-11-23): a fresh subscription on each relay from the last
+ *  event received (the catch-up mark, an hour's overlap; gift wraps three days), so what came while
+ *  the tab slept arrives even when the socket survived and the relay dropped or never delivered
+ *  the live one. A dead socket is reconnected by the check (conn.ts) and resubscribes after AUTH.
+ *  Once per 2 s (visibility, pageshow and online can come together). */
+let caughtUpAt = 0
+export const lastCatchUp = () => caughtUpAt
+function catchUp() {
+  if (localOnly || !signer || Date.now() - caughtUpAt < 2000) return
+  caughtUpAt = Date.now()
+  for (const t of ['groups', 'main'] as Target[]) if (relayOf(t)?.connected) resubscribe(t) // before AUTH: auth-required, then _onauth resubscribes
+}
+
 function resubscribe(target: Target) {
   const r = relayOf(target)
   if (!r) return
@@ -826,6 +839,7 @@ function watchNetwork() {
     void connect('groups')
     void connect('main')
     retryNow()
+    catchUp()
   })
   window.addEventListener('offline', () => setStatus({ online: false }))
   setInterval(() => {
