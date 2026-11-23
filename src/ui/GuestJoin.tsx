@@ -1,6 +1,8 @@
 // Guest mode's own pieces: the one loading screen from an invite link to its channel, the bar
 // that stands where the composer would be, and the Join sheet (name and e-mail, then the code
 // that was sent by e-mail).
+import { SummaryChoice } from './Card'
+import { guestTopic } from '../core/guestmode'
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
@@ -133,6 +135,9 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
   useEffect(() => { handOff.email = '' }, [])
   // a member link: no name (the belfry takes it from the address); a guest link asks for one
   const askName = !saveOnly && !info?.member
+  // following a topic from a card (cards/follow-channel-form): Summary by e-mail, Weekly or Monthly
+  const topic = !saveOnly && !!info?.channel && guestTopic(info.channel)
+  const [summary, setSummary] = useState<'weekly' | 'monthly'>('weekly')
   const fail = (e: unknown) => {
     const f = e instanceof JoinFailed ? e : new JoinFailed('failed')
     if (f.code === 'taken') { setMoved(f.moved); setStep('taken'); setError(''); return }
@@ -151,7 +156,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
     if (busy) return
     setBusy(true); setError(''); setNote('')
     try {
-      const r = await verifyJoinCode(sentTo.current, c, askName ? name : undefined, again)
+      const r = await verifyJoinCode(sentTo.current, c, askName ? name : undefined, again, topic ? summary : undefined)
       // the address has an account: the right code signs in as it (no second code)
       if (r) { await switchToSignedIn(r); return }
       // a co-host link waiting for a proven e-mail: now it makes them a host
@@ -193,6 +198,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
           <label className="field"><span>E-mail</span>
             <input className="input" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required autoFocus={!askName}
               placeholder="you@example.org" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+          {topic && <SummaryChoice value={summary} onChange={setSummary} />}
           {error && <div className="error" role="alert">{error}</div>}
           <button className="btn" disabled={(askName && !name.trim()) || !/^\S+@\S+\.\S+$/.test(email.trim())}>Continue</button>
           {!saveOnly && <p className="hint small">Already have an account on {BELFRY.domain}? Use its e-mail address.</p>}

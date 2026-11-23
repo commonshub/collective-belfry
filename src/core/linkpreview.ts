@@ -45,6 +45,8 @@ export function previewFrom(url: string, d: Record<string, unknown>): LinkPrevie
   if (!title && !description) return null
   let host = ''
   try { host = new URL(url).hostname.replace(/^www\./, '') } catch { return null }
+  // the page after its redirects names the site (a short link shows where it goes); the box opens what was written
+  if (typeof d.url === 'string') { try { const f = new URL(d.url); if (f.protocol === 'https:') host = f.hostname.replace(/^www\./, '') } catch { /* keep the link's */ } }
   let image: string | undefined
   if (typeof d.image === 'string') { try { const i = new URL(d.image); if (i.protocol === 'https:' && i.origin === belfryOrigin) image = i.href } catch { /* not a URL */ } }
   return { url, title, description, site: str(d.site_name, 80), host, image }
@@ -82,17 +84,20 @@ export function getPreview(url: string): Entry {
 }
 
 /** 'loading' until the belfry answers, then the preview or null (just the link). */
-export function usePreview(url: string | undefined): LinkPreview | null | 'loading' {
-  const now = url ? getPreview(url) : null
-  const [v, setV] = useState<LinkPreview | null | 'loading'>(now instanceof Promise ? 'loading' : now)
+export function usePreview(url: string | undefined, visible = true): LinkPreview | null | 'loading' {
+  // asked only once it is on screen (the server: only when visible); until then the same-size box
+  const known = url ? cache.get(url) : null
+  const now = url && !visible ? (known === undefined ? 'loading' : known) : url ? getPreview(url) : null
+  const [v, setV] = useState<LinkPreview | null | 'loading'>(now instanceof Promise ? 'loading' : (now as LinkPreview | null | 'loading'))
   useEffect(() => {
     if (!url) { setV(null); return }
+    if (!visible && cache.get(url) === undefined) { setV('loading'); return }
     const e = getPreview(url)
     if (!(e instanceof Promise)) { setV(e); return }
     setV('loading')
     let on = true
     void e.then((x) => { if (on) setV(x) })
     return () => { on = false }
-  }, [url])
+  }, [url, visible])
   return v
 }

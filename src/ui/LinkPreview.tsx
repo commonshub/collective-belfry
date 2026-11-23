@@ -1,15 +1,24 @@
 // The preview of an outside page under a message (Channels canvas v10: channels/og-message,
 // og-loading, og-no-image, og-no-preview, og-several, og-dm, og-thread, og-dark, og-laptop) and
 // above the composer before sending (og-composer, with ✕).
+import { useEffect, useRef, useState } from 'react'
 import { usePreview, type LinkPreview } from '../core/linkpreview'
 const openOut = (href: string) => window.open(href, '_blank', 'noopener')
 
 /** Under a message: loading → a grey box of the same size; nothing found → nothing (just the link). */
 export function OgCard({ url }: { url: string }) {
-  const p = usePreview(url)
+  const box = useRef<HTMLSpanElement>(null)
+  const [seen, setSeen] = useState(typeof IntersectionObserver === 'undefined')
+  useEffect(() => {
+    if (seen || !box.current) return
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setSeen(true); io.disconnect() } }, { rootMargin: '200px' })
+    io.observe(box.current)
+    return () => io.disconnect()
+  })
+  const p = usePreview(url, seen)
   if (p === null) return null
   if (p === 'loading') return (
-    <span className="og load" role="status" aria-label="Loading the preview">
+    <span ref={box} className="og load" role="status" aria-label="Loading the preview">
       <span className="og-img" />
       <span className="og-tb"><span className="bar" style={{ width: '40%' }} /><span className="bar big" style={{ width: '90%' }} /><span className="bar" style={{ width: '75%' }} /></span>
     </span>

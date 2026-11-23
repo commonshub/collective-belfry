@@ -10,7 +10,7 @@ import { choiceOf, setChoice, useNotify, type Choice } from '../core/notify'
 // (a few minutes after each one) or monthly. Belfry keeps the follows (GET/POST
 // /api/me/follows, NIP-98) and mails the member's own address; demo mode keeps them here.
 
-export type Frequency = 'asap' | 'monthly'
+export type Frequency = 'asap' | 'weekly' | 'monthly' // (weekly: the server, 23 Nov)
 interface Follows { email: string; map: Map<string, Frequency> }
 
 const KEY = 'belfry-follows-demo'
@@ -87,6 +87,7 @@ export function FollowButton({ channel }: { channel: string }) {
 
 const OPTIONS: [Frequency | 'stop', string, string][] = [
   ['asap', 'As soon as possible', 'A few minutes after each announcement'],
+  ['weekly', 'Weekly', 'Once a week, when there was something new'],
   ['monthly', 'Monthly', 'On the 1st, when there was something new'],
   ['stop', 'Not following', 'No e-mails'],
 ]
@@ -133,7 +134,7 @@ export function FollowOptions({ channel, onDone }: { channel: string; onDone?: (
 export function useFollowing(channel: string): string {
   const f = useFollows()
   const c = f?.map.get(channel)
-  return c === 'asap' ? 'As soon as possible' : c === 'monthly' ? 'Monthly' : f ? 'Off' : ''
+  return c === 'asap' ? 'As soon as possible' : c === 'weekly' ? 'Weekly' : c === 'monthly' ? 'Monthly' : f ? 'Off' : ''
 }
 
 // ---- a channel's notifications: one sheet (Xavier, 2026-11-18, canvas "Notif-C") --------------
@@ -193,7 +194,7 @@ export function NotifyOptions({ channel }: { channel: string }) {
       )}
       {n.state && !n.state.unsupported && n.state.devices === 0 && <p className="hint notify-phone">These choices are for the Belfry app on your phone.</p>}
       <label className="switch-row notify-mail">
-        <span><b>Also e-mail me its announcements</b><small>What admins mark as an announcement{follow === 'monthly' ? ' · once a month' : ''}</small></span>
+        <span><b>Also e-mail me its announcements</b><small>What admins mark as an announcement{follow === 'monthly' ? ' · once a month' : follow === 'weekly' ? ' · once a week' : ''}</small></span>
         <input type="checkbox" role="switch" aria-label="E-mail me its announcements" checked={!!follow} disabled={!f || mailBusy} onChange={(e) => void toggleMail(e.target.checked)} />
       </label>
       {failed && <p className="error">{failed}</p>}

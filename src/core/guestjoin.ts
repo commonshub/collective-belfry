@@ -78,7 +78,7 @@ export async function sendJoinCode(email: string, name?: string) {
 let demoTries = 5 // demo: the belfry allows 5 tries per code
 
 /** The code from the e-mail: the account is saved under that address (and name). */
-export async function verifyJoinCode(email: string, code: string, name?: string, again = false): Promise<SignedIn | void> {
+export async function verifyJoinCode(email: string, code: string, name?: string, again = false, summary?: 'weekly' | 'monthly'): Promise<SignedIn | void> {
   const g = guestInfo()
   if (isLocalOnly()) { // demo: what the belfry would do
     await wait(400)
@@ -97,7 +97,7 @@ export async function verifyJoinCode(email: string, code: string, name?: string,
     // address that has an account"). 422 invalid = that key was refused, the code not spent:
     // once more with another key.
     let sk = generateSecretKey()
-    const body = () => verifyBody(email, code, name, getPublicKey(sk))
+    const body = () => ({ ...verifyBody(email, code, name, getPublicKey(sk)), ...(summary ? { summary } : {}) }) // (a topic from a card: its e-mail summary, cards v45)
     try {
       try { d = await post('/guest/save/verify', body) } catch (e) {
         if (!(e instanceof JoinFailed && e.code === 'invalid' && e.status === 422)) throw e
