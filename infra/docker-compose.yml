@@ -327,6 +327,12 @@ services:
         condition: service_completed_successfully
     environment:
       IDLE_TIMEOUT: "0"
+      # Messages a second on ONE connection (the relay's default is 10). A chat page that
+      # opens asks the signer for more than that in its first second (AUTH for two relays,
+      # NIP-98 signatures, decrypts); the relay then answered "restricted: connection rate
+      # limit exceeded" and the chat took it for "not a member" (Xavier's blinking join
+      # screen, 2026-11-23).
+      RATE_LIMIT_PER_SECOND: "${BUNKER_RATE_PER_SECOND:-100}"
       # The relay's own URL as clients reach it. NIP-42 AUTH events name it in their relay tag,
       # and the relay refuses one for another URL ("Relay URL mismatch", the calendar's
       # volunteered AUTH). Default was ws://localhost:8080, the container port.
