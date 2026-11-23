@@ -23,6 +23,7 @@ from belfry_onboarding import (
     cardspdf,
     checkin,
     events,
+    followers,
     guests,
     mail,
     mailer,
@@ -634,17 +635,23 @@ def test_a_topic_card_makes_a_channel_named_by_its_hashtag(land):
         assert not land.of(9007)
         r = call(c, bob, f"/cards/{card}/claim", {**FORM, "hashtag": "bread"})
         assert r.status_code == 200 and r.json() == {"group": "bread"}
-        # a channel as the chat's New channel makes one: no access tags, no post in general
+        # a channel as the chat's New channel makes one (no access tags), named by its hashtag,
+        # the topic in words leading its description, announced in the town square
         by = ["by", pk(bob)]
         assert land.of(9007, "bread")[0]["tags"] == [["h", "bread"], by]
         assert land.of(9002, "bread")[0]["tags"] == [
             ["h", "bread"],
-            ["name", "Sourdough starters"],
-            ["about", "Swap and feed"],
+            ["name", "bread"],
+            ["about", "Sourdough starters · Swap and feed"],
             by,
         ]
         assert by in land.of(9, "bread")[0]["tags"]
-        assert not land.of(9, "general")
+        said = land.of(9, "general")
+        assert len(said) == 1 and ["channel", "bread"] in said[0]["tags"] and by in said[0]["tags"]
+        head = "# New topic: #bread · Sourdough starters · Swap and feed"
+        assert said[0]["content"].startswith(head)
+        link = followers.chat_link(rsvc, "bread")
+        assert not link or link in said[0]["content"]
         assert [e["content"] for e in land.of(9, "bread")] == [
             "Bob started this topic from a printed card"
         ]

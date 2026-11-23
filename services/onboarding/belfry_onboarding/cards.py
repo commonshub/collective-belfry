@@ -328,7 +328,11 @@ def make_group(
     by = ["by", who["pubkey"]]
     _publish(svc, 9007, [["h", group], *access, by])
     try:
-        _publish(svc, 9002, [["h", group], ["name", title], ["about", about], *access, by])
+        # a topic is named by its hashtag (#bread), as every channel is; the topic in words leads
+        # its description
+        name = form["hashtag"] if topic else title
+        desc = about if not topic else (f"{title} · {about}" if about else title)
+        _publish(svc, 9002, [["h", group], ["name", name], ["about", desc], *access, by])
         tags = [["h", group], ["p", who["pubkey"], "admin"], ["role", "admin"]]
         tags.append(["by", who["pubkey"]])
         if who["name"]:
@@ -340,7 +344,17 @@ def make_group(
         events.publish(svc, 9008, [["h", group]])  # best effort: no half-made group stays
         raise
     # the rest is a courtesy: the group exists and has its steward
-    if not topic:
+    # announced in the town square, groups as the chat's New group does, topics with a link
+    # that the apps show as the channel's card
+    if topic:
+        from .followers import chat_link
+
+        text = f"# New topic: #{group} · {title}{' · ' + about if about else ''}"
+        link = chat_link(svc, group)
+        tags = [["h", PARENT], ["t", "new-topic"], ["channel", group], by]
+        if not events.publish(svc, 9, tags, f"{text}\n{link}" if link else text):
+            log.warning("cards: %s not announced in #%s", group, PARENT)
+    else:
         text = f"⬡ New group: {title}{' · ' + about if about else ''}"
         if not events.publish(svc, 9, [["h", PARENT], ["pod", group], by], text):
             log.warning("cards: %s not announced in #%s", group, PARENT)
