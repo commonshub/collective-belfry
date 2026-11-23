@@ -62,7 +62,7 @@ import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBa
 import { CardScreen } from './Card'
 import { GroupWho } from './WhoCanRead'
 import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
-import { encTest, encWhy, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
+import { encProbe, encTest, encWhy, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
 import { testFormat3 } from '../core/access'
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 
@@ -238,7 +238,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         // (never for a guest's session: guests aren't on the community relay's whitelist; the lead, 2026-11-23)
         if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret && !guestInfo()) {
           void startEnc(session.clientSecret)
-          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy } })
+          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy, probe: encProbe } })
         }
         if (sealedOn) expectSealed()
         startDms()

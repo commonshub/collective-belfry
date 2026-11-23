@@ -12,7 +12,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postGuestMessage, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf, newTopicOf } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf, newTopicOf, noExtrasHere } from '../core/model'
 import { all, outboxItems, status, useVersion, type Ev } from '../core/store'
 import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -971,7 +971,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {!readOnly && <RecordingBar groupId={id} />}
       {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce, np) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, [...eventTags(text), ...(np ? [NO_PREVIEW] : [])]) }} prefill={prefill}
-        onEvent={events ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
+        onEvent={events && !noExtrasHere(id) ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() && !noExtrasHere(id) ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events && !noExtrasHere(id) ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
       {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => { const url = `https://${BELFRY.domain}/events/${d}`; void postMessage(id, url, [], undefined, false, eventTags(url)) }} />} {/* SPEC 19.63: the meeting's URL is sent in the channel at once, not left in the composer */}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => { setNewTodo(false); setTodoFrom(null) }} initial={todoFrom?.text} from={todoFrom?.from} />}
@@ -1345,7 +1345,8 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
   const [text, setText] = useState('')
   // typing indicators (docs/typing.md): this conversation or this thread; not by e-mail
   const tplace = useMemo<Place | null>(() => (groupId && draft && !plain ? (draft.startsWith('t:') ? { h: groupId, root: draft.slice(2) } : { h: groupId }) : null), [groupId, draft, plain])
-  const tallowed = () => !!groupId && !group(groupId)?.archived && !reading()
+  // (never in a private group on format 3: typing isn't encrypted, the review's P3)
+  const tallowed = () => !!groupId && !group(groupId)?.archived && !reading() && !noExtrasHere(groupId)
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
   const [menu, setMenu] = useState(false)

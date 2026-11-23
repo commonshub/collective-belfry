@@ -15,7 +15,7 @@ import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealed
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
 import { Held as EncHeld, onV1Secrets, setGuestTest, setV1Provider, repairKey, encCaughtUp, encDevice, encFirstAt, encryptFor, ensureEncCaughtUp, heldText, isEncConv, onEncKeys, openEnc, setEncPartners, whenEncLoaded, writesFormat3 } from './enc/runtime'
-import { encryptedFormat, formatReady, freshFormat } from './access'
+import { encSeen, encryptedFormat, formatReady, freshFormat } from './access'
 import { KEY as ENC_KEY, MSG as ENC_MSG } from './enc/core'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
@@ -520,7 +520,8 @@ async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv
   // the format (demo: always 1): known, and a 1 read in the last 5 minutes (the third read's P1);
   // a conversation this device has seen encrypted stays encrypted whatever the cache says (§17.2)
   let f: 1 | 3 | undefined = 1
-  if (!isLocalOnly()) { await formatReady(); f = await freshFormat() }
+  // (unknown and never seen an encrypted object here: format 1 at once, no delay: the review's P3)
+  if (!isLocalOnly() && (encryptedFormat() !== undefined || encSeen())) { await formatReady(); f = await freshFormat() }
   const encConv = !!conv && conv.startsWith('n:') && isEncConv([...to, me()])
   if (f === undefined && !encConv && conv && (conv.startsWith('n:') || conv.startsWith('m:'))) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('format'), displayName), upload })
   if (f === 3 && conv && conv.startsWith('m:')) return hold({ rumor: rumor as unknown as Rumor, to, self, conv, enc: heldText(new EncHeld('mail'), displayName), upload })
@@ -675,7 +676,7 @@ async function sendHeld(refresh = false) {
 }
 /** format 3: a held message encrypted again (lists refreshed); still not possible: its reason updated. */
 async function sendHeldEnc(h: Held) {
-  const f = isLocalOnly() ? 1 : await freshFormat()
+  const f = isLocalOnly() || (encryptedFormat() === undefined && !encSeen()) ? 1 : await freshFormat()
   const encConv = h.conv.startsWith('n:') && isEncConv([...h.to, me()])
   if (h.conv.startsWith('m:') && f === 3) return // e-mail on format 3 waits for its build
   if (f === undefined && !encConv) return // the format unknown (or a stale 1): waits for a fresh read

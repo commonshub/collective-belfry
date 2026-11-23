@@ -2272,3 +2272,6 @@ form .create-where { margin-bottom: 14px; }
 .member-line { align-items: flex-start; }
 .member-line small { display: block; color: var(--muted); }
 .member-line .info-i { font-size: 16px; padding: 0 4px; }
+
+.enc-card.warn { border-color: #b91c1c; }
+.enc-card.warn b { color: #b91c1c; }

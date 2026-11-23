@@ -27,3 +27,7 @@ export const addEvents = () => {}
 export const signedFetch = async () => { throw new Error('no network') }
 export const demoRoles = () => {}
 export const setDemoRole = () => {}
+// format 3 (enc): what model.ts asks of sync / access
+export const groupWrapReady = () => false
+export const setPrivateVerdict = (_f: unknown) => {}
+export const encryptedFormat = (): 1 | 3 | undefined => 1

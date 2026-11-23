@@ -2,7 +2,7 @@
 // sending a press, and the demo hooks. The parsing and the rules are in buttoncore.ts.
 // (src/core/actions.ts is the app's write actions; this is the message buttons' part.)
 
-import { encryptFor, encryptGroupEvent, isPrivateGroup } from './enc/runtime'
+import { encryptFor, encryptGroupEvent, privateHere, writesFormat3 } from './enc/runtime'
 import { finalizeEvent, getEventHash, getPublicKey, type NostrEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -86,7 +86,7 @@ export async function press(e: NostrEvent, group: string, button: Button): Promi
   const tpl = { ...t, created_at: Math.floor(Date.now() / 1000) }
   // a private group (docs/encrypted.md §24a): the press is encrypted into the group like any group
   // event and, for a belfry: action, a copy goes to the groups key as a people conversation
-  if (!isLocalOnly() && isPrivateGroup(group)) {
+  if (!isLocalOnly() && writesFormat3() && privateHere(group)) {
     const w = await encryptGroupEvent(tpl)
     if (w) {
       for (const b of w.before) await publishNow('groups', await currentSigner().sign(b))
@@ -112,7 +112,9 @@ async function pressToGroupsKey(press: NostrEvent, e: NostrEvent, button: Button
   const gk = belfryGroupsKey() || knownGroupsKey() // belfry.json's groups_key first
   if (!gk) throw new Error('the groups key is not known')
   const bt = e.tags.find((t) => t[0] === 'button' && t[1] === button.id) ?? ['button', button.id]
-  const r = { kind: press.kind, pubkey: me(), created_at: press.created_at, content: JSON.stringify({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content }),
+  const r = { kind: press.kind, pubkey: me(), created_at: press.created_at, content: JSON.stringify({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, content: e.content,
+      // §24 (ruling): the files' decryption keys never travel to the belfry; it checks the button is there, not the id
+      tags: e.tags.map((t) => (t[0] === 'imeta' ? t.filter((x, i) => i === 0 || !/^decryption-(key|nonce) /.test(x)) : t)) }),
     tags: [...press.tags.filter((t) => t[0] !== 'p'), ['p', gk], ['e', press.id, '', 'press'], bt, ['k', String(e.kind)]] }
   const out = await encryptFor({ ...r, id: getEventHash(r as NostrEvent) }, [gk])
   if (!out) throw new Error('not encrypted')

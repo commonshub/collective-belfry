@@ -1,7 +1,7 @@
 // Encrypted conversations, format 3 (docs/encrypted.md §16–§20), over a local relay with the §18.1
 // rule on: Sam and Lina, each one device; the device lists (8570) signed here by a test belfry key.
 // Test build: VITE_TEST_RELAYS=1 VITE_MAIN_RELAY=VITE_GROUPS_RELAY=ws://127.0.0.1:4481
-// VITE_DISCOVERY=/belfry.json, with dist-enctest/belfry.json = {nostr:{pubkey: <test belfry>}, encrypted:{format:3}}.
+// VITE_GROUPS_RELAY=ws://localhost:4481 (the same relay, its own socket: the app keeps one per URL) VITE_DISCOVERY=/belfry.json, with dist-enctest/belfry.json = {nostr:{pubkey: <test belfry>}, encrypted:{format:3}}.
 //   node enc.cjs [dist folder]     (starts its own relay on 4481 and http on 4482)
 // (a copy of ~/agents/belfry/site/.shots/chat/enc.cjs; run it from that folder: profiles live there)
 const { spawn } = require("child_process"); const fs = require("fs"); const crypto = require("crypto");
@@ -149,6 +149,8 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   // the format unknown (no belfry.json answer): a message is held with words, never sent the old way
   const N = await browser("nojson", 9493, "nojson@example.org", true);
   const pkN = await N.ev("window.__demoMe()");
+  // (a device that never saw an "encrypted" object writes format 1 at once; one that saw it holds while unknown)
+  await N.ev("localStorage.setItem('belfry-enc-seen', '1'); location.reload()"); await sleep(4000);
   await N.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`); await sleep(1500);
   const toLina = async () => (await dump()).filter((e) => (e.kind === 8572 || e.kind === 1059) && e.tags.some((t) => t[0] === "p" && t[1] === pkL)).length;
   const beforeN = await toLina();
@@ -179,6 +181,7 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await S2.shot("arrived");
   // encrypted/removed-device: another device removed S2: its data goes, one screen
   removedFor.sam2 = { removed: true, at: Math.floor(Date.now() / 1000) - 60, by_name: "Safari on Mac" };
+  await publishList(pkS, [sS.device, getPublicKey(sk("sam-laptop"))]); // (the ruling: a wipe only once it's gone from the list too)
   await S2.ev("location.reload()"); await sleep(5000);
   check("S2 removed: 'This device was removed · Safari on Mac removed it …' · Sign in again", await until(() => has(S2, "This device was removed"), 15000) && await has(S2, "Safari on Mac removed it") && await has(S2, "Sign in again"), await S2.ev("document.body.innerText.slice(0, 300)"));
   check("…and this device's data is gone (no belfry keys in its localStorage but the device-wide ones)", await S2.ev("Object.keys(localStorage).filter((k) => /^belfry[-:]/.test(k) && !/^belfry-(accounts?|accounts-ls:|other-belfries|community-name|enc-format|enc-seen)/.test(k)).length === 0"), await S2.ev("JSON.stringify(Object.keys(localStorage))"));
@@ -186,7 +189,7 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   // part 8: Me › Devices on Sam's first device (encrypted/devices, device)
   await S.ev("location.hash = '#/me/devices'"); await sleep(2500);
   w = await S.ev("document.body.innerText");
-  check("Me › Devices: the line, This device, and a trash icon on each other device", /These devices can read your encrypted messages/.test(w) && /This device/.test(w) && (await S.ev("document.querySelectorAll('.who-trash').length")) === 2, [w.slice(0, 300), await S.ev("document.querySelectorAll('.who-trash').length")]);
+  check("Me › Devices: the line, This device, and a trash icon on each other device", /These devices can read your encrypted messages/.test(w) && /This device/.test(w) && (await S.ev("document.querySelectorAll('.who-trash').length")) === 1, [w.slice(0, 300), await S.ev("document.querySelectorAll('.who-trash').length")]);
   await S.shot("devices");
   await S.ev("[...document.querySelectorAll('.enc-devices .row-btn')].at(-1).click()"); await sleep(800);
   w = await S.ev("document.body.innerText");
@@ -199,6 +202,7 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await S.ev(`location.hash = '#/c/${gid}'`); await sleep(4000);
   await S.ev(`(async () => { const i = document.querySelector('.composer textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(i, 'Garden plans, members only'); i.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const b = [...document.querySelectorAll('.composer button')].find((x) => /^Send/i.test(x.getAttribute('aria-label') || '') || x.classList.contains('send')); b && b.click() })()`);
   const gsent = await until(async () => { const x = await dump(); return x.some((e) => e.kind === 8572 && e.tags.some((t) => t[0] === "h" && t[1] === gid)) }, 30000);
+  if (!gsent && false) console.log("debug group outbox:", await S.ev(`(async () => { const dbs = await indexedDB.databases(); const out = []; for (const x of dbs) { const db = await new Promise((r) => { const q = indexedDB.open(x.name); q.onsuccess = () => r(q.result) }); if (![...db.objectStoreNames].includes('outbox')) continue; const all = await new Promise((r) => { const q = db.transaction('outbox').objectStore('outbox').getAll(); q.onsuccess = () => r(q.result) }); for (const o of all) out.push([o.kind, o.status, o.error, o.tries]) } return JSON.stringify(out) })()`));
   d = await dump();
   check("private group: an envelope (h, d = K, maker) and an 8572, signed by Sam's account", !!gsent && d.some((e) => e.kind === 8571 && e.pubkey === pkS && e.tags.some((t) => t[0] === "h" && t[1] === gid) && e.tags.some((t) => t[0] === "maker")) && d.some((e) => e.kind === 8572 && e.pubkey === pkS && e.tags.some((t) => t[0] === "h" && t[1] === gid)), d.filter((e) => e.tags.some((t) => t[0] === "h" && t[1] === gid)).map((e) => e.kind));
   check("…no clear kind 9 in the group, the text nowhere on the relay", !d.some((e) => e.kind === 9 && e.tags.some((t) => t[0] === "h" && t[1] === gid)) && !JSON.stringify(d).includes("Garden plans"));
@@ -258,6 +262,11 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   const ans = EC.withId({ kind: 1985, pubkey: gkPub, created_at: Math.floor(Date.now() / 1000), tags: [["L", "belfry/action-result"], ["l", "ok", "belfry/action-result"], ["e", bmsg.id], ["press", pressId || ""], ["p", pkS], ["h", gid], ["closed", "1"]], content: "Closed by the belfry." });
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent(EC.groupMessage(gkSk, ans, gkKey.K, gid), gkSk)]) });
   check("the groups key's answer opens: 'Closed by the belfry.'", await until(() => has(S, "Closed by the belfry."), 20000), await S.ev("document.body.innerText.slice(-300)"));
+  // the review's P1.1: an 8572 holding a 9002 "open" (metadata from inside an encrypted event) is dropped: still private
+  const evil = EC.withId({ kind: 9002, pubkey: gkPub, created_at: Math.floor(Date.now() / 1000), tags: [["h", gid], ["name", "Garden committee"], ["open"], ["public"]], content: "" });
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent(EC.groupMessage(gkSk, evil, gkKey.K, gid), gkSk)]) });
+  await sleep(3000);
+  check("a 9002 'open' inside an 8572 is dropped: the group stays private (its lock stays)", await S.ev("!!document.querySelector('.chead-bar .seal-lock')"));
   await S.shot("group");
   // guests, for now (the lead): a people conversation with a guest stays unencrypted; a guest member of
   // a private group gets no entry in its keys

@@ -498,3 +498,11 @@ export const clearAfterKey = (firstKeyAt: number | undefined, at: number) => fir
  *  never was, held when it was. A private group: refused over 1000. */
 export const peopleLimit = (n: number, everEncrypted: boolean): 'encrypt' | 'clear' | 'held' => (n <= MAX_PEOPLE_DEVICES ? 'encrypt' : everEncrypted ? 'held' : 'clear')
 export const groupLimit = (n: number): 'encrypt' | 'refuse' => (n <= MAX_GROUP_DEVICES ? 'encrypt' : 'refuse')
+
+// ---- §16.9: what stays in clear in a private group (the relay or the belfry reads it) ----------
+export function clearInGroup(e: { kind: number; pubkey: string; tags: string[][] }, groupsKey: string): boolean {
+  if ([9000, 9001, 9002, 9005, 9007, 9008, 9021, 9022, 39000, 39001, 39002, 39003].includes(e.kind)) return true
+  if (e.kind === 1985) return (!!groupsKey && e.pubkey === groupsKey) || e.tags.some((t) => t[0] === 'L' && t[1] === 'belfry/vouch')
+  if (e.kind === 30078) { const d = e.tags.find((t) => t[0] === 'd')?.[1] ?? ''; return d.startsWith('belfry:inbox:') || d.startsWith('seen:') }
+  return false
+}

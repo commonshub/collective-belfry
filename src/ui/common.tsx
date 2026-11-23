@@ -121,7 +121,9 @@ export function useMediaUrl(url: string) {
       let live = true
       void fetch(url).then((r) => r.arrayBuffer()).then((b) => openFile(enc, new Uint8Array(b))).then((o) => {
         if (!o.ok || !live) return
-        const u = URL.createObjectURL(new Blob([o.plain as BlobPart], { type: o.mime }))
+        // (only what a page shows safely by its type; anything else as a plain download, never text/html: P3)
+        const safe = /^(image|video|audio)\//.test(o.mime) || o.mime === 'application/pdf' ? o.mime : 'application/octet-stream'
+        const u = URL.createObjectURL(new Blob([o.plain as BlobPart], { type: safe }))
         objectUrls.set(url, u)
         setSrc(u)
       }, () => {})

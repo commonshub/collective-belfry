@@ -3,7 +3,7 @@ import { archiveGroupMeta, editGroupMeta } from './checkin'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, inboxD, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable, nameOf } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, inboxD, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable, nameOf, NO_EXTRAS, noExtrasHere } from './model'
 import { enqueue, me, newId } from './sync'
 import { all } from './store'
 import { reading } from './guestmode'
@@ -281,6 +281,7 @@ export function meetingLabel(url: string) {
 // relay, linked both ways to its own NIP-29 group (session-<x> ↔ ws-<x>), and a post in the
 // parent channel that links to it (`a` tag), shown there as the event's card.
 export async function createEvent(n: NewEvent, channel = 'general') {
+  if (noExtrasHere(channel)) throw new Error(NO_EXTRAS)
   const x = newId(4)
   const d = 'session-' + x
   const groupId = 'ws-' + x
@@ -341,6 +342,7 @@ const proposalTags = (d: string, groupId: string, n: NewProposal, version: numbe
 /** A proposal: its own chat `prop-…` (for feedback), its text (NIP-23, version 1) and a card in
  *  the parent channel or pod. */
 export async function createProposal(n: NewProposal, parent = 'general') {
+  if (noExtrasHere(parent)) throw new Error(NO_EXTRAS)
   const x = newId(3)
   const groupId = addressFor(n.title, 'prop-')
   const d = 'proposal-' + x

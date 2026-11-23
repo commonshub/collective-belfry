@@ -97,6 +97,8 @@ function setFormat(f: 1 | 3) {
   formatWaiters.forEach((w) => w()); formatWaiters = []
 }
 export const encryptedFormat = (): 1 | 3 | undefined => format
+/** This device has seen an "encrypted" object in this belfry's belfry.json (then an unknown format holds). */
+export const encSeen = () => { try { return localStorage.getItem('belfry-enc-seen') === '1' } catch { return false } }
 // the third read: a format read more than 5 minutes ago may be stale (the belfry may have switched)
 let lastRead = 0 // ms of the last successful belfry.json read in this page
 /** The format to write now: 3 (kept for good), or 1 from a read in the last 5 minutes (read again

@@ -1,10 +1,11 @@
+import { clearInGroup } from './enc/core'
 import { encryptedMedia } from './dmfiles'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
-import { me, setWriteGuard, groupWrapReady } from './sync'
+import { me, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
 import { plainName, plainOf } from './refs'
 import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat } from './access'
 import { CHARTER_ID, placeName } from './places'
@@ -439,6 +440,20 @@ export const group = (id: string): Group | undefined => groupSets().byId.get(id)
 
 // nothing is posted or changed in an archived group (the relay would take it: this is the app's
 // own rule, whatever screen asks): only unarchiving it, leaving it, or deleting it
+// the review's P1.2 (sync.ts): a group write on format 3 is encrypted when its group is private here
+// (its metadata, or a key of it already seen: enc/runtime adds that), and waits while the group isn't known
+let encryptedHere: (h: string) => boolean = () => false
+export const setEncryptedHere = (f: (h: string) => boolean) => { encryptedHere = f }
+/** The review's P1.4 (a ruling): events, meetings, proposals and tickets can't be made from a private group on format 3 yet. */
+export const noExtrasHere = (h: string) => { const g = group(h); return encryptedFormat() === 3 && (!!(g?.isPod && g.closed && g.inviteOnly) || encryptedHere(h)) }
+export const NO_EXTRAS = 'Not available in private groups yet.'
+setPrivateVerdict((h, t) => {
+  if (encryptedFormat() !== 3 || !h || clearInGroup({ ...t, pubkey: me() }, belfryGroupsKey())) return undefined
+  const g = group(h)
+  if ((g?.isPod && g.closed && g.inviteOnly) || encryptedHere(h)) return 'enc'
+  if (!g?.known) return 'hold'
+  return undefined
+})
 setWriteGuard((t) => {
   const of = (k: string) => t.tags.find((x) => x[0] === k)?.[1]
   const h = of('h')
