@@ -25,7 +25,9 @@ steward of that one group ("A guest as steward" there).
 
 `GET /channel-invites/<token>` (no auth) → `{"community", "channel", "channel_name", "about",
 "inviter", "state": "open"|"used"|"expired"|"revoked", "days", "role", "as": "guest"|"member"}`
-(member links add `member_role`, `member_role_label`, `membership`); 404 `not_found`.
+(member links add `member_role`, `member_role_label`, `membership`; a printed card's link adds
+`"card": "group" | "topic"`, and so does the answer of `…/join`: docs/cards.md §3); 404
+`not_found`.
 
 ## Opening it: guest mode (since 2026-11-12)
 

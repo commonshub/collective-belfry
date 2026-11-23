@@ -192,6 +192,11 @@ invite of the register (docs/guests.md), used through the existing endpoints
 (`guest_unlimited` on the invite; `expires_at` empty). Its inviter is the person who started the
 group. A guest's own access keeps the normal rule: 30 days from the day they joined.
 
+`GET /channel-invites/<token>` and the answer of `POST /channel-invites/<token>/join` carry one
+more field for such a link: `"card": "group" | "topic"` (absent on every other invite). The chat
+uses it to let a guest who gave no e-mail address post in a topic they reached by a card; the
+server changes nothing else for that.
+
 Because the link never fills up, it makes at most **100 new guest accounts per card in any 24
 hours** (`register.CARD_NEW_GUESTS_PER_DAY`; counted from the passes the link made, so a restart
 keeps the count). Over that, `POST /channel-invites/<token>/join` by a key nobody knows answers
@@ -224,17 +229,47 @@ any guest pass (a 9001 takes them out). Their other guest passes are untouched.
 
 ## 5. The console: `belfry.<domain>/cards`
 
-For the belfry's admins ("Printed cards" in the menu, under Community).
+For the belfry's admins ("Printed cards" in the menu, under Community). The page and the sheets
+follow the canvas boards `cards/print` (+ dark), `cards/print-sheet` and
+`cards/print-sheet-channels`: their layout, words and sizes.
 
-- **Make cards**: a kind, a name for the batch, 1–40 cards.
-- **Batches**: each with its cards, their state and the *name* of the group each one started.
-- **Reset** on a used card (`POST /cards/<id>/reset`, csrf, a confirmation): unclaimed again,
-  its link revoked, the group it started left exactly as it is (it just has no card any more).
-- **Print** (`/cards/print/<batch>`): sheets of four A6 cards on A4. Group cards are 105 × 148 mm
-  on an upright sheet, topic cards 148 × 105 mm on a sheet on its side (`@page` sets the size
-  and no margins; print at 100 %). Each card: the community's name and logo, one fixed line
-  ("Scan to start a group here" / "Scan to start a topic here"), the QR code (error correction
-  Q, quiet zone 4) and `chat.<domain>/g/`. Black on white.
+- **Make cards**
+  - Groups or Topics, picked from two tiles that each show the printed card: Groups ("People who
+    get to know each other. They join and say hi." · Account required · Portrait), Topics
+    ("People come and go, share what they know and follow by e-mail." · No account needed to
+    post · Landscape). Field `kind` = `group` | `topic`.
+  - Cards per page: 1 (A4), 2 (A5) or 4 (A6). Field `per_page` = `1` | `2` | `4`.
+  - Pages: 1 to 50 (`pages`), with the total next to it ("= 8 cards · 4 A6 on each A4").
+  - Batch name (`batch`, up to 60 characters): "Batch N" unless typed, N = every batch this
+    belfry made so far, plus one.
+  - **Generate PDF** (`POST /cards/make`, csrf): makes `pages × per_page` cards and opens the
+    batch's sheets in a new tab, where the browser's print dialog opens by itself (Save as PDF).
+    The service ships no PDF library, so the PDF is the browser's; the print CSS gives exact A4
+    pages with no margins.
+- **Cards made · N**: Card (its id) · For (Group / Topic) · Batch · State (Not scanned yet /
+  Claimed / Retired) · Name (a group's name; a topic's `#hashtag`) · Started by (the person's
+  name, with "(guest steward)" for a guest) · **Reset** on a used card (`POST
+  /cards/<id>/reset`, csrf, a confirmation): unclaimed again, its link revoked, the group it
+  started left exactly as it is. A batch's name opens its sheets again (not on the board: there
+  is no other way to print a batch a second time).
+- **The sheets** (`/cards/print/<batch>`, admins only): the board's card, black on white, Inter.
+  - A group card (upright, 105 × 148.5 mm): the community's logo and name; "**Group** · people
+    you get to know. Join and say hi."; a box "Group name:" with two lines to write on; a box
+    "Description:" with four; the QR code (bottom left) with "Scan to join this group".
+  - A topic card (on its side, 148.5 × 105 mm): logo and name; "**Topic** · come and go, share
+    what you know."; a box "#" with a line; a box "About:" with three; on the right the QR code,
+    "Scan to contribute to this topic" and "No account required".
+  - 4 per page: the boards' sheets (group cards on an upright A4, topic cards on an A4 on its
+    side), a dashed cut line down and across the middle. 2 per page: the same card enlarged
+    × √2 to A5 (two upright cards side by side on an A4 on its side; two lying cards one above
+    the other on an upright A4), one cut line. 1 per page: enlarged × 2 to A4, no cut line.
+  - The card's id and address are in the QR code only (error correction Q; the white card is
+    its quiet zone). Cards made before `per_page` existed print four to a sheet.
+
+What the cards promise and what v1 does: "Scan to contribute to this topic · No account
+required" is true for a topic that exists (someone who scans it reads it as a guest at once, and
+the chat lets them post there without an e-mail: `card` in §3). **Starting** a topic, like a
+group, still asks for an e-mail address and a code (§2.3).
 
 ## 6. The proxy
 
@@ -247,7 +282,7 @@ yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the l
 
 - A weekly digest of a topic by e-mail.
 - Posting from a card without an e-mail address.
-- A PDF export of a batch (the browser's Print makes one).
+- A PDF made by the server (the browser's print dialog makes it).
 - A preview of the group's recent messages before joining.
 - Deleting unused cards, moving a card to another group.
 - The phone apps (no `/g/*` in apple-app-site-association or assetlinks).

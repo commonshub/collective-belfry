@@ -1,12 +1,19 @@
-"""``belfry.<domain>/cards``: printed cards, for the belfry's admins (docs/cards.md).
+"""``belfry.<domain>/cards``: printed cards, for the belfry's admins (docs/cards.md §5).
 
-- Make 1–40 cards of a kind (group or topic) in a named batch.
-- The batches and their cards: state and the name of the group each one started.
-- Reset a card: unclaimed again, its link revoked, the group it started left as it is.
-- A print view per batch (``/cards/print/<batch>``): four A6 cards on each A4 sheet, group cards
-  upright, topic cards on their side, black on white. Each card has the community's name and
-  logo, one fixed line, the QR code of ``https://chat.<domain>/g/<id>`` and the address without
-  the id.
+The page and the sheets follow the canvas "Belfry · Group cards" (boards cards/print,
+cards/print-sheet, cards/print-sheet-channels): their layout, words and sizes are copied here.
+
+- **Make cards**: Groups or Topics, picked from two tiles that each show the printed card;
+  cards per page (1 on A4, 2 A5, 4 A6); how many pages, with the number of cards that makes; a
+  batch name ("Batch N" unless typed); **Generate PDF**. No PDF library ships with the service,
+  so the button opens the batch's sheets in a new tab and the browser's print dialog there
+  (Save as PDF): the print CSS gives exact A4 pages.
+- **Cards made**: Card · For · Batch · State · Name · Started by, and Reset on a used card
+  (unclaimed again, its link revoked, the group it started left as it is). A batch's name opens
+  its sheets again.
+- The sheets (``/cards/print/<batch>``): the boards' card at its drawn size for four A6 on an
+  A4, and the same card enlarged for two A5 (× √2) or one A4 (× 2). Group cards are upright,
+  topic cards on their side. The card's id is in the QR code only.
 
 Every form carries the console's csrf and answers with a fixed message (flash.py). A batch is
 found by the number in its address (the second it was made); nothing from the address is shown.
@@ -14,7 +21,6 @@ found by the number in its address (the second it was made); nothing from the ad
 
 from __future__ import annotations
 
-import datetime as dt
 import html
 import logging
 import secrets as pysecrets
@@ -26,78 +32,144 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import cards, console, flash, salesconsole
+from . import cards, console, flash
 from .core import Services
 
 log = logging.getLogger(__name__)
 E = html.escape
 PATH = "/cards"
-MAX = 40
+PER_PAGE = (1, 2, 4)
+PAGES_MAX = 50
 BATCH_MAX = 60
-PER_SHEET = 4
-LINE = {"group": "Scan to start a group here", "topic": "Scan to start a topic here"}
+SIZE = {1: "A4", 2: "A5", 4: "A6"}
 KIND_NAME = {"group": "Group", "topic": "Topic"}
-STATE_NAME = {"unclaimed": "Not used yet", "claimed": "In use", "retired": "Retired"}
+STATE = {
+    "unclaimed": ("Not scanned yet", ""),
+    "claimed": ("Claimed", " on"),
+    "retired": ("Retired", " off"),
+}
+# the words on the printed cards (the boards' own)
+KIND_LINE = {
+    "group": "people you get to know. Join and say hi.",
+    "topic": "come and go, share what you know.",
+}
+SCAN = {"group": "Scan to join this group", "topic": "Scan to contribute to this topic"}
+FINE = {"group": "", "topic": "No account required"}
 
 MSG = {
-    "made": "The cards are made. Print them from the batch below.",
     "reset": "The card is free again. The group it started stays as it is.",
-    "count": f"Make 1 to {MAX} cards at a time.",
+    "pages": f"Make 1 to {PAGES_MAX} pages at a time.",
+    "per_page": "Choose 1, 2 or 4 cards per page.",
     "kind": "Choose group cards or topic cards.",
     "nothing": "That card was not in use.",
     "unsupported": "Printed cards need the belfry's own register.",
     "expired": "The form expired; try again.",
 }
 
+
+def on_each(per_page: int) -> str:
+    """ "4 A6 on each A4", as the board says it under the total."""
+    return "1 on each A4" if per_page == 1 else f"{per_page} {SIZE[per_page]} on each A4"
+
+
+# The console page, after the board cards/print (and -dark): its sizes and radii, in the
+# theme's colours (the board's black and white are the base theme's own).
 STYLE = """<style>
-.cardsp .batch{border:1px solid var(--border);border-radius:14px;padding:6px 16px 14px;margin:14px 0}
-.cardsp .batch h3{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0 4px}
-.cardsp .batch h3 a{margin-left:auto;font-size:15px;font-weight:500}
-.cardsp code{font-size:14px;letter-spacing:.06em}
-.cardsp td form{display:inline}
+.pc{font-size:15px;line-height:21px}
+.pc h1{font-size:28px;line-height:34px;margin:0 0 6px}
+.pc .lead{font-size:16px;line-height:22px;color:var(--fg-muted);margin:0 0 20px;max-width:720px}
+.pc .cpanel{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:20px 22px;margin-bottom:18px}
+.pc .cpanel h2{font-size:17px;margin:0 0 12px}
+.pc .sr{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.pc .pick{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
+.pc .opt{display:flex;gap:18px;align-items:center;padding:16px 18px;border-radius:16px;border:2px solid var(--border);background:var(--surface);position:relative;cursor:pointer}
+.pc .opt:has(input:checked){border-color:var(--fg)}
+.pc .opt:has(input:focus-visible),.pc .ppo:has(input:focus-visible){outline:2px solid var(--fg);outline-offset:2px}
+.pc .opt .chk{position:absolute;top:12px;right:12px;width:24px;height:24px;border-radius:12px;border:2px solid var(--border-strong);box-sizing:border-box;display:flex;align-items:center;justify-content:center}
+.pc .opt .chk svg{display:none;width:14px;height:14px;stroke:var(--bg);fill:none;stroke-width:3}
+.pc .opt:has(input:checked) .chk{background:var(--fg);border-color:var(--fg)}
+.pc .opt:has(input:checked) .chk svg{display:block}
+.pc .opt .ot{display:flex;flex-direction:column;gap:4px;min-width:0}
+.pc .opt .ot b{font-size:19px;line-height:24px}
+.pc .opt .ot span{font-size:15px;line-height:20px;color:var(--fg-muted)}
+.pc .opt .ot .acct{font-size:14px;line-height:19px;font-weight:600;margin-top:4px}
+.pc .opt .ot em{font-style:normal;font-size:13px;color:var(--fg-faint)}
+.pc .prev{flex:none;overflow:hidden;background:#fff;border:1px solid #D1D1D6;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.08);padding:9px;box-sizing:border-box;display:flex;color:#000;letter-spacing:0}
+.pc .prev.pt{width:124px;height:176px;flex-direction:column;gap:4px}
+.pc .prev.ls{width:176px;height:124px;gap:7px}
+.pc .prev span{display:block}
+.pc .prev .pb{font-size:7px;line-height:9px;font-weight:700;display:flex;align-items:center;gap:3px;white-space:nowrap;overflow:hidden}
+.pc .prev .pb i{width:7px;height:8px;background:#000;border-radius:1px;display:block;flex:none}
+.pc .prev .pk{font-size:6.5px;line-height:8px;color:#3A3A3C}
+.pc .prev .pk b{color:#000}
+.pc .prev .bx{border:1px solid #000;border-radius:4px;padding:2px 4px;min-height:0;overflow:hidden;font-size:6.5px;line-height:9px;font-weight:700}
+.pc .prev .bx i{display:block;border-bottom:.5px solid #C7C7CC;height:6px}
+.pc .prev .pq{width:30px;height:30px;flex:none;background:repeating-conic-gradient(#000 0 25%,#fff 0 50%) 0 0/8px 8px;border:2px solid #000;box-sizing:border-box}
+.pc .prev .pl{font-size:6px;line-height:7px;font-weight:700}
+.pc .prev .pf{font-size:5.5px;line-height:7px;color:#6C6C70}
+.pc .mk2{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.pc .fl{display:flex;flex-direction:column;gap:6px;margin:0;width:260px;max-width:100%}
+.pc .fl>label,.pc .fl>.lb{font-size:15px;font-weight:600}
+.pc .fl .in{height:50px;border-radius:14px;background:var(--surface-deep);border:0;padding:0 16px;font:inherit;font-size:17px;color:var(--fg);box-sizing:border-box;width:100%}
+.pc .fl .help{font-size:13px;color:var(--fg-faint)}
+.pc .ppg{display:flex;gap:8px;flex-wrap:wrap}
+.pc .ppo{display:flex;align-items:center;gap:10px;height:50px;padding:0 14px 0 10px;border-radius:14px;border:2px solid var(--border);background:var(--surface);font-size:15px;font-weight:600;white-space:nowrap;cursor:pointer;box-sizing:border-box;position:relative}
+.pc .ppo:has(input:checked){border-color:var(--fg)}
+.pc .ppo .pgi{width:22px;height:31px;border:1.5px solid currentColor;border-radius:2px;display:grid;box-sizing:border-box;gap:1.5px;padding:1.5px}
+.pc .ppo .pgi i{background:var(--border-strong);border-radius:1px}
+.pc .ppo:has(input:checked) .pgi i{background:var(--fg)}
+.pc .ppo small{font-size:13px;font-weight:500;color:var(--fg-faint)}
+.pc .tot{display:flex;flex-direction:column;margin-top:30px;gap:2px}
+.pc .tot b{font-size:19px;line-height:24px}
+.pc .tot span{font-size:13px;color:var(--fg-faint)}
+.pc button.gen{height:50px;border-radius:25px;border:0;background:var(--accent);color:var(--on-accent);font:inherit;font-size:17px;font-weight:600;display:flex;align-items:center;justify-content:center;white-space:nowrap;flex:none;padding:0 24px;margin-top:27px;width:auto;cursor:pointer}
+.pc table{width:100%;border-collapse:collapse;font-size:15px}
+.pc th{text-align:left;font-size:13px;font-weight:600;color:var(--fg-faint);padding:8px 10px;border-bottom:1px solid var(--border-strong)}
+.pc td{padding:11px 10px;border-bottom:1px solid var(--border)}
+.pc .cid{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-weight:600;letter-spacing:.06em}
+.pc .kindp{display:inline-flex;align-items:center;gap:5px;font-size:14px}
+.pc .kindp i{display:block;border:1.5px solid currentColor;border-radius:2px}
+.pc .pill{display:inline-flex;height:24px;align-items:center;padding:0 10px;border-radius:12px;font-size:13px;font-weight:600;background:#EFEFF4;color:#3A3A3C;white-space:nowrap}
+.pc .pill.on{background:#EAF4EC;color:#14532D}
+.pc .pill.off{background:#F2F2F7;color:#6C6C70}
+.pc td form{display:inline;margin:0}
+.pc .tlk,.pc button.tlk{color:#0A5FC4;font:inherit;font-weight:500;background:none;border:0;padding:0;margin:0;cursor:pointer;text-decoration:none;box-shadow:none}
+.pc td a.bn{color:inherit;text-decoration:none}
+.pc td a.bn:hover{text-decoration:underline}
+.pc .tw{overflow-x:auto}
+@media (prefers-color-scheme:dark){
+.pc .pill{background:#2C2C2E;color:#D1D1D6}
+.pc .pill.on{background:#0F2E1A;color:#BFE6CB}
+.pc .pill.off{background:#1C1C1E;color:#98989F}
+.pc .tlk,.pc button.tlk{color:#5AA9FF}
+}
+@media (max-width:760px){.pc .pick{grid-template-columns:1fr}.pc button.gen{margin-top:6px}.pc .tot{margin-top:6px}.pc .cpanel{padding:16px 14px}}
 </style>"""
 
-PRINT_STYLE = """
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;background:#fff;color:#000;font-family:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
-.bar{padding:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #000}
-.bar button{font:inherit;font-size:16px;padding:8px 16px;border:1px solid #000;border-radius:8px;background:#000;color:#fff}
-.bar a{color:#000}
-.sheet{display:grid;overflow:hidden;break-after:page;page-break-after:always;margin:0 auto}
-.sheet:last-child{break-after:auto;page-break-after:auto}
-.card{display:flex;align-items:center;justify-content:space-between;text-align:center;overflow:hidden;outline:.2mm dashed #999;outline-offset:-.1mm}
-.card .who{display:flex;align-items:center;justify-content:center;gap:3mm;font-weight:700;font-size:13pt}
-.card .who img{height:11mm;max-width:30mm;object-fit:contain;filter:grayscale(1)}
-.card .line{font-size:17pt;font-weight:700;line-height:1.2;margin:0}
-.card .qr svg{display:block;width:100%;height:100%}
-.card .url{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10pt;margin:0}
-.portrait .sheet{width:210mm;height:296mm;grid-template-columns:105mm 105mm;grid-template-rows:148mm 148mm}
-.portrait .card{width:105mm;height:148mm;padding:11mm 10mm;flex-direction:column}
-.portrait .card .qr{width:68mm;height:68mm}
-.landscape .sheet{width:296mm;height:210mm;grid-template-columns:148mm 148mm;grid-template-rows:105mm 105mm}
-.landscape .card{width:148mm;height:105mm;padding:10mm 11mm;flex-direction:row;gap:8mm}
-.landscape .card .qr{width:66mm;height:66mm;flex:none}
-.landscape .card .text{display:flex;flex-direction:column;justify-content:space-between;align-self:stretch;flex:1}
-.landscape .card .who{flex-direction:column}
-@media print{.bar{display:none}.sheet{margin:0}}
-@media screen{body{background:#eee}.sheet{background:#fff;margin:16px auto;box-shadow:0 0 0 1px #ccc}}
-"""
+SCRIPT = """<script>
+(function(){var f=document.getElementById('pc-make');if(!f)return;
+var t=document.getElementById('pc-total'),e=document.getElementById('pc-each'),b=document.getElementById('pc-btn');
+var S={1:'1 on each A4',2:'2 A5 on each A4',4:'4 A6 on each A4'};
+function up(){var p=+(f.querySelector('input[name=per_page]:checked')||{}).value||4,
+n=Math.max(1,Math.min(%d,parseInt(f.pages.value,10)||0)),c=p*n;
+t.textContent='= '+c+(c===1?' card':' cards');e.textContent=S[p];}
+f.addEventListener('input',up);f.addEventListener('change',up);up();
+f.addEventListener('submit',function(){setTimeout(function(){location.reload()},1500)});
+})();
+</script>""".replace("%d", str(PAGES_MAX))
 
 
 def qr_svg(url: str) -> str:
-    """The QR code as inline SVG: black on white, error correction Q, its quiet zone (4)."""
+    """The QR code as inline SVG, black on white, error correction Q. No quiet zone of its own,
+    as on the board: the white card around it is the quiet zone."""
     return segno.make(url, error="q", micro=False).svg_inline(
-        scale=4, border=4, dark="#000", light="#fff", omitsize=True
+        scale=4, border=0, dark="#000", light="#fff", omitsize=True
     )
 
 
-def _when(at: int) -> str:
-    return dt.datetime.fromtimestamp(int(at), dt.UTC).strftime("%-d %b %Y")
-
-
 def batches(svc: Services) -> list[dict[str, Any]]:
-    """The batches, newest first: ``{"key", "name", "kind", "at", "cards"}`` (key: the second it
-    was made, which is what its address carries)."""
+    """The batches, newest first: ``{"key", "name", "kind", "per_page", "at", "cards"}`` (key:
+    the second it was made, which is what its address carries)."""
     out: dict[int, dict[str, Any]] = {}
     for c in svc.odoo.card_list():
         b = out.setdefault(
@@ -106,6 +178,7 @@ def batches(svc: Services) -> list[dict[str, Any]]:
                 "key": int(c["made_at"]),
                 "name": c["batch"],
                 "kind": c["kind"],
+                "per_page": int(c.get("per_page") or 4),
                 "at": c["made_at"],
                 "cards": [],
             },
@@ -114,18 +187,24 @@ def batches(svc: Services) -> list[dict[str, Any]]:
     return sorted(out.values(), key=lambda b: -b["key"])
 
 
-def make(svc: Services, kind: str, name: str, count: int, by: int) -> int:
-    """COUNT new cards of KIND in a batch called NAME; returns the batch's key."""
+def next_batch_name(svc: Services) -> str:
+    """ "Batch N": N counts every batch this belfry made, plus one."""
+    return f"Batch {len(batches(svc)) + 1}"
+
+
+def make(svc: Services, kind: str, name: str, count: int, by: int, per_page: int = 4) -> int:
+    """COUNT new cards of KIND in a batch called NAME, printed PER_PAGE to an A4; returns the
+    batch's key."""
+    name = " ".join(name.split())[:BATCH_MAX] or next_batch_name(svc)
     at = int(time.time())
     taken = {int(c["made_at"]) for c in svc.odoo.card_list()}
     while at in taken:  # a batch is the cards of one second
         at += 1
-    name = " ".join(name.split())[:BATCH_MAX] or f"{KIND_NAME[kind]} cards, {_when(at)}"
     made: list[str] = []
     for _ in range(count * 20):
         if len(made) >= count:
             break
-        made += svc.odoo.card_make([cards.new_id()], kind, name, by, at)
+        made += svc.odoo.card_make([cards.new_id()], kind, name, by, at, per_page)
     log.info("cards: %d %s cards made by partner %s", len(made), kind, by)
     return at
 
@@ -149,81 +228,210 @@ def _names(svc: Services, rows: list[dict[str, Any]]) -> dict[str, str]:
     return names
 
 
+def _starters(svc: Services, rows: list[dict[str, Any]]) -> dict[str, str]:
+    """card id → who started it, by name; a guest is said to be one ("Lou (guest steward)")."""
+    claimed = [c for c in rows if c.get("claimed_by")]
+    if not claimed:
+        return {}
+    members = {
+        p.get("keycast_pubkey")
+        for p in svc.odoo.search_read(
+            "belfry.pass", [["state", "=", "active"]], ["keycast_pubkey", "tier"]
+        )
+        if p.get("tier") != "guest"
+    }
+    out = {}
+    for c in claimed:
+        partner = svc.odoo.read_one("res.partner", int(c["claimed_by"]), ["name"]) or {}
+        name = " ".join(str(partner.get("name") or "").split())[:100] or "Somebody"
+        out[c["id"]] = name if c.get("claimed_key") in members else f"{name} (guest steward)"
+    return out
+
+
+def _tile_preview(kind: str, community: str) -> str:
+    """The small picture of the printed card on a tile (the board's own drawing)."""
+    brand = f'<span class="pb"><i></i>{E(community)}</span>'
+    if kind == "group":
+        return f"""<span class="prev pt" aria-hidden="true">{brand}<span class="pk"><b>Group</b> · people you get to know</span><span class="bx">Group name:<i></i></span><span class="bx" style="flex:1">Description:<i></i><i></i><i></i></span><span style="display:flex;gap:5px;align-items:flex-end"><span class="pq"></span><span class="pl">{E(SCAN["group"])}</span></span></span>"""
+    return f"""<span class="prev ls" aria-hidden="true"><span style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:0">{brand}<span class="pk"><b>Topic</b> · share what you know</span><span class="bx" style="font-size:11px;line-height:12px">#<i style="height:0;margin-top:-2px"></i></span><span class="bx" style="flex:1">About:<i></i></span></span><span style="width:56px;flex:none;display:flex;flex-direction:column;justify-content:flex-end;gap:3px"><span class="pq" style="width:40px;height:40px"></span><span class="pl">{E(SCAN["topic"])}</span><span class="pf">{E(FINE["topic"])}</span></span></span>"""
+
+
 def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
     csrf = E(who["csrf"])
     note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
         f'<p class="bad">{E(err)}</p>' if err else ""
     )
+    head = """<h1>Printed cards</h1><p class="lead">Print cards with a QR code and pin them up. The first person to scan a card starts it; everyone who scans it after joins or follows.</p>"""
     if not cards.own(svc):
-        body = f"""{salesconsole.STYLE}{STYLE}<div class="sales cardsp"><h1>Printed cards</h1>
-<p class="muted">{E(MSG["unsupported"])}</p></div>"""
-        return console.frame("Printed cards", PATH, who, body)
+        body = f'{STYLE}<div class="pc">{head}<div class="cpanel"><p>{E(MSG["unsupported"])}</p></div></div>'
+        return console.frame("Printed cards", PATH, who, body, panels=True)
+    _logo, community = console.brand_mark()
     found = batches(svc)
-    names = _names(svc, [c for b in found for c in b["cards"]])
-    parts = ""
+    rows = [c for b in found for c in b["cards"]]
+    names = _names(svc, rows)
+    starters = _starters(svc, rows)
+    check = '<span class="chk" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>'
+    tiles = f"""<div class="pick" role="radiogroup" aria-label="What the cards are for">
+<label class="opt"><input class="sr" type="radio" name="kind" value="group" checked>{_tile_preview("group", community)}<span class="ot"><b>Groups</b><span>People who get to know each other. They join and say hi.</span><strong class="acct">Account required</strong><em>Portrait</em></span>{check}</label>
+<label class="opt"><input class="sr" type="radio" name="kind" value="topic">{_tile_preview("topic", community)}<span class="ot"><b>Topics</b><span>People come and go, share what they know and follow by e-mail.</span><strong class="acct">No account needed to post</strong><em>Landscape</em></span>{check}</label></div>"""
+    grids = {1: "1fr/1fr", 2: "1fr 1fr/1fr", 4: "1fr 1fr/1fr 1fr"}
+    per = "".join(
+        f"""<label class="ppo"><input class="sr" type="radio" name="per_page" value="{n}"{" checked" if n == 4 else ""}><span class="pgi" style="grid-template:{grids[n]}" aria-hidden="true">{"<i></i>" * n}</span>{n} <small>{SIZE[n]}</small></label>"""
+        for n in PER_PAGE
+    )
+    batch = E(next_batch_name(svc))
+    form = f"""<form method="post" action="{PATH}/make" target="_blank" id="pc-make">
+<input type="hidden" name="csrf" value="{csrf}">{tiles}
+<div class="mk2"><div class="fl" style="width:auto;flex:none"><span class="lb" id="pc-ppl">Cards per page</span><div class="ppg" role="radiogroup" aria-labelledby="pc-ppl">{per}</div></div>
+<div class="fl" style="width:110px"><label for="pc-pages">Pages</label><input class="in" id="pc-pages" type="number" name="pages" min="1" max="{PAGES_MAX}" value="2" required inputmode="numeric"><span class="help">1 to {PAGES_MAX}</span></div>
+<div class="tot" aria-live="polite"><b id="pc-total">= 8 cards</b><span id="pc-each">{E(on_each(4))}</span></div></div>
+<div class="mk2" style="margin-top:14px"><div class="fl"><label for="pc-batch">Batch name</label><input class="in" id="pc-batch" type="text" name="batch" maxlength="{BATCH_MAX}" value="{batch}"><span class="help">To find these cards in the list</span></div>
+<button class="gen" id="pc-btn">Generate PDF</button></div></form>"""
+    trs = ""
     for b in found:
-        rows = ""
         for c in b["cards"]:
-            group = E(names.get(c.get("group") or "", "")) if c.get("group") else ""
+            label, cls = STATE.get(c["state"], ("", ""))
+            size = "width:11px;height:8px" if c["kind"] == "topic" else "width:8px;height:11px"
+            name = ""
+            if c.get("group"):
+                # a topic is known by its hashtag, a group by its name (never its id)
+                name = "#" + c["group"] if c["kind"] == "topic" else names.get(c["group"], "")
             reset = (
-                f"""<form method="post" action="{PATH}/{E(c["id"])}/reset" onsubmit="return confirm('Reset this card? It can start a new group; the group it started stays as it is.')">
-<input type="hidden" name="csrf" value="{csrf}"><button class="ghost">Reset</button></form>"""
+                f"""<form method="post" action="{PATH}/{E(c["id"])}/reset" onsubmit="return confirm('Reset this card? It can start something new; what it started stays as it is.')"><input type="hidden" name="csrf" value="{csrf}"><button class="tlk">Reset</button></form>"""
                 if c["state"] != "unclaimed"
                 else ""
             )
-            rows += (
-                f"<tr><td><code>{E(c['id'])}</code></td><td>{E(STATE_NAME.get(c['state'], ''))}</td>"
-                f"<td>{group}</td><td>{reset}</td></tr>"
+            trs += (
+                f'<tr><td class="cid">{E(c["id"])}</td>'
+                f'<td><span class="kindp"><i style="{size}"></i>{E(KIND_NAME.get(c["kind"], ""))}</span></td>'
+                f'<td><a class="bn" href="{PATH}/print/{b["key"]}" target="_blank" rel="noopener" title="Print this batch again">{E(b["name"])}</a></td>'
+                f'<td><span class="pill{cls}">{E(label)}</span></td>'
+                f"<td>{E(name)}</td><td>{E(starters.get(c['id'], ''))}</td><td>{reset}</td></tr>"
             )
-        used = sum(1 for c in b["cards"] if c["state"] != "unclaimed")
-        parts += f"""<section class="batch"><h3>{E(b["name"])}
-<a href="{PATH}/print/{b["key"]}">Print this batch</a></h3>
-<p class="hint">{E(KIND_NAME.get(b["kind"], ""))} cards · {len(b["cards"])} made on {E(_when(b["at"]))} · {used} used</p>
-<table class="list"><tr><th>Card</th><th>State</th><th>Started</th><th></th></tr>{rows}</table></section>"""
-    body = f"""{salesconsole.STYLE}{STYLE}<div class="sales cardsp"><h1>Printed cards</h1>
-<p class="muted">A6 cards with a QR code. The first person who scans one starts a group (or a topic) and looks after it; everyone after that joins it.</p>
-{note}
-<h2>Make cards</h2>
-<form method="post" action="{PATH}/make" class="f">
-<input type="hidden" name="csrf" value="{csrf}">
-<label>Kind <select name="kind"><option value="group">Group cards (upright)</option><option value="topic">Topic cards (on their side)</option></select></label>
-<label>Name of the batch <input type="text" name="batch" maxlength="{BATCH_MAX}" placeholder="Spring fair"></label>
-<label>How many <input type="number" name="count" min="1" max="{MAX}" value="8" required></label>
-<p class="hint">Four cards fit on an A4 sheet.</p>
-<div class="actions"><button>Make the cards</button></div></form>
-<h2>Batches</h2>
-{parts or '<p class="hint">No cards yet.</p>'}</div>"""
-    return console.frame("Printed cards", PATH, who, body)
+    table = (
+        f"""<div class="tw"><table><thead><tr><th>Card</th><th>For</th><th>Batch</th><th>State</th><th>Name</th><th>Started by</th><th></th></tr></thead><tbody>{trs}</tbody></table></div>"""
+        if trs
+        else '<p class="lead" style="margin:0">No cards yet.</p>'
+    )
+    body = f"""{STYLE}<div class="pc">{head}{note}
+<div class="cpanel"><h2>Make cards</h2>{form}</div>
+<div class="cpanel"><h2>Cards made · {len(rows)}</h2>{table}</div></div>{SCRIPT}"""
+    return console.frame("Printed cards", PATH, who, body, panels=True)
+
+
+# ── the sheets ──────────────────────────────────────────────────────────────────────────────
+# The boards draw an A4 as 794 × 1123 px, which is its size in CSS pixels (96 to the inch), so
+# their numbers are used as they are. One card is the board's A6 (397 × 561.5 px, or on its side);
+# for two A5 or one A4 the same card is enlarged (zoom √2 or 2), which fills the cell exactly.
+CARD_STYLE = """
+@font-face{font-family:'Inter';font-style:normal;font-display:block;font-weight:100 900;src:url(/theme/belfry/fonts/inter-latin-wght-normal.woff2) format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-display:block;font-weight:100 900;src:url(/theme/belfry/fonts/inter-latin-ext-wght-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1E00-1E9F,U+20A0-20C0,U+2C60-2C7F,U+A720-A7FF}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#fff;color:#000}
+body{font-family:Inter,-apple-system,system-ui,sans-serif;font-size:17px;line-height:22px;letter-spacing:-0.01em;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.bar{padding:14px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #D1D1D6;font-size:15px;letter-spacing:0}
+.bar button{font:inherit;font-weight:600;height:40px;padding:0 20px;border:0;border-radius:20px;background:#000;color:#fff;cursor:pointer}
+.bar a{color:#0A5FC4}
+.sheet{position:relative;display:grid;overflow:hidden;margin:0 auto;break-after:page;page-break-after:always;break-inside:avoid}
+.sheet:last-child{break-after:auto;page-break-after:auto}
+.cell{overflow:hidden;position:relative}
+.cut{position:absolute;background:none;border:0 dashed #B0B0B5}
+.cut.v{left:50%;top:0;bottom:0;border-left-width:1px}
+.cut.h{top:50%;left:0;right:0;border-top-width:1px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;color:#000}
+.brand img{flex:none;width:auto;object-fit:contain;filter:grayscale(1)}
+.kind{font-size:14px;line-height:19px;color:#3A3A3C;margin:0 0 10px}
+.kind b{color:#000}
+.topic{flex:1;border:2px solid #000;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column}
+.topic b{font-size:20px;margin-bottom:10px}
+.topic i{display:block;height:0;border-bottom:1px solid #C7C7CC;margin-top:34px}
+.qr svg{display:block;width:100%;height:100%}
+.a6{width:397px;height:561.5px;padding:30px 32px 26px;display:flex;flex-direction:column}
+.a6 .brand{font-size:16px;margin:0 0 6px}
+.a6 .brand img{height:25px;max-width:60px}
+.a6 .low{display:flex;align-items:flex-end;gap:14px;margin-top:16px}
+.a6 .qr{width:112px;height:112px;flex:none}
+.a6 .lowt{flex:1;display:flex;flex-direction:column;gap:6px}
+.a6 .line{font-size:16px;font-weight:600;color:#000}
+.a6l{width:561.5px;height:397px;padding:24px 28px;display:flex;gap:20px}
+.a6l .lft{flex:1;display:flex;flex-direction:column;min-width:0}
+.a6l .brand{font-size:15px;margin:0 0 6px}
+.a6l .brand img{height:23px;max-width:56px}
+.a6l .hash{display:flex;align-items:flex-end;gap:6px;border:2px solid #000;border-radius:14px;padding:10px 14px 14px;flex:none}
+.a6l .hash b{font-size:34px;line-height:34px}
+.a6l .hash i{flex:1;border-bottom:1px solid #C7C7CC;height:0;margin-bottom:6px}
+.a6l .topic{margin-top:10px;padding:10px 14px}
+.a6l .topic b{font-size:18px;margin-bottom:4px}
+.a6l .topic i{margin-top:28px}
+.a6l .rgt{width:150px;flex:none;display:flex;flex-direction:column;justify-content:flex-end;gap:8px}
+.a6l .rgt .qr{width:150px;height:150px}
+.a6l .line{font-size:16px;line-height:21px;font-weight:600;color:#000}
+.a6l .fine{font-size:12px;color:#6C6C70}
+@media print{.bar{display:none}.sheet{margin:0}}
+@media screen{body{background:#E5E5EA}.sheet{background:#fff;margin:16px auto;box-shadow:0 1px 4px rgba(0,0,0,.15)}}
+"""
+
+
+def layout(kind: str, per_page: int) -> dict[str, Any]:
+    """How PER_PAGE cards of KIND sit on an A4: the sheet's side, its columns and rows, and how
+    much the A6 card is enlarged. Sizes in mm; the sheet is a hair short of the page so that no
+    rounding ever pushes a blank page out."""
+    upright = kind != "topic"
+    if per_page == 4:
+        side, cols, rows, zoom = ("portrait" if upright else "landscape"), 2, 2, 1.0
+    elif per_page == 2:  # two A5: upright ones side by side, lying ones one above the other
+        side, cols, rows, zoom = (
+            ("landscape", 2, 1, 2**0.5) if upright else ("portrait", 1, 2, 2**0.5)
+        )
+    else:
+        side, cols, rows, zoom = ("portrait" if upright else "landscape"), 1, 1, 2.0
+    width, height = (210.0, 296.6) if side == "portrait" else (297.0, 209.6)
+    return {"side": side, "cols": cols, "rows": rows, "zoom": zoom, "w": width, "h": height}
+
+
+def card_html(svc: Services, kind: str, card_id: str, logo: str, community: str) -> str:
+    """One card, as the board draws it."""
+    qr = f'<div class="qr">{qr_svg(cards.card_url(svc, card_id))}</div>'
+    brand = f'<div class="brand"><img src="{E(logo)}" alt="">{E(community)}</div>'
+    if kind == "topic":
+        return f"""<div class="a6l"><div class="lft">{brand}<div class="kind"><b>Topic</b> · {E(KIND_LINE["topic"])}</div><div class="hash"><b>#</b><i></i></div><div class="topic"><b>About:</b><i></i><i></i><i></i></div></div><div class="rgt">{qr}<span class="line">{E(SCAN["topic"])}</span><span class="fine">{E(FINE["topic"])}</span></div></div>"""
+    return f"""<div class="a6">{brand}<div class="kind"><b>Group</b> · {E(KIND_LINE["group"])}</div><div class="topic" style="flex:none"><b>Group name:</b><i style="margin-top:22px"></i><i></i></div><div class="topic" style="margin-top:12px"><b>Description:</b><i style="margin-top:22px"></i><i></i><i></i><i></i></div><div class="low">{qr}<span class="lowt"><span class="line">{E(SCAN["group"])}</span></span></div></div>"""
 
 
 def print_html(svc: Services, batch: dict[str, Any]) -> str:
-    """The batch as sheets of four A6 cards. A page of its own (no menu, no theme): black on
-    white, sized in millimetres for the browser's Print."""
+    """The batch as A4 sheets. A page of its own (no menu, no theme): the boards' cards, sized
+    for the browser's Print, which opens by itself."""
     logo, community = console.brand_mark()
-    topic = batch["kind"] == "topic"
-    line = LINE["topic" if topic else "group"]
-    address = f"chat.{svc.settings.nip05_domain}/g/"
-    who = f'<div class="who"><img src="{E(logo)}" alt=""><span>{E(community)}</span></div>'
+    kind = "topic" if batch["kind"] == "topic" else "group"
+    per_page = batch.get("per_page") if batch.get("per_page") in PER_PAGE else 4
+    lay = layout(kind, per_page)
+    zoom = f"zoom:{lay['zoom']:.5f}" if lay["zoom"] != 1 else ""
+    cuts = ('<span class="cut v"></span>' if lay["cols"] == 2 else "") + (
+        '<span class="cut h"></span>' if lay["rows"] == 2 else ""
+    )
     sheets = ""
     rows = batch["cards"]
-    for i in range(0, len(rows), PER_SHEET):
-        cells = ""
-        for c in rows[i : i + PER_SHEET]:
-            qr = f'<div class="qr">{qr_svg(cards.card_url(svc, c["id"]))}</div>'
-            if topic:
-                cells += f"""<div class="card">{qr}<div class="text">{who}<p class="line">{E(line)}</p><p class="url">{E(address)}</p></div></div>"""
-            else:
-                cells += f"""<div class="card">{who}<p class="line">{E(line)}</p>{qr}<p class="url">{E(address)}</p></div>"""
-        sheets += f'<div class="sheet">{cells}</div>'
-    side = "landscape" if topic else "portrait"
+    for i in range(0, len(rows), per_page):
+        cells = "".join(
+            f'<div class="cell"><div style="{zoom}">{card_html(svc, kind, c["id"], logo, community)}</div></div>'
+            for c in rows[i : i + per_page]
+        )
+        sheets += f'<div class="sheet">{cells}{cuts}</div>'
+    grid = (
+        f".sheet{{width:{lay['w']}mm;height:{lay['h']}mm;"
+        f"grid-template-columns:repeat({lay['cols']},1fr);"
+        f"grid-template-rows:repeat({lay['rows']},1fr)}}"
+    )
+    n = len(rows)
+    what = f"{n} {kind} card" + ("" if n == 1 else "s")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>Printed cards</title>
-<style>@page{{size:A4 {side};margin:0}}{PRINT_STYLE}</style></head>
-<body class="{side}"><div class="bar"><button type="button" onclick="window.print()">Print</button>
-<span>{len(rows)} {E(KIND_NAME[batch["kind"]].lower())} cards, four on each A4 sheet ({side}). Print at 100%, without margins.</span>
-<a href="{PATH}">Back</a></div>
-{sheets}</body></html>"""
+<meta name="color-scheme" content="light"><meta name="robots" content="noindex"><title>Printed cards</title>
+<style>@page{{size:A4 {lay["side"]};margin:0}}{CARD_STYLE}{grid}</style></head>
+<body><div class="bar"><button type="button" onclick="window.print()">Print or save as PDF</button>
+<span>{E(what)}, {E(on_each(per_page))} ({lay["side"]}). Print at 100%, without margins.</span>
+<a href="{PATH}">Back to Printed cards</a></div>
+{sheets}<script>window.addEventListener('load',function(){{var go=function(){{setTimeout(function(){{window.print()}},200)}};if(document.fonts&&document.fonts.ready){{document.fonts.ready.then(go,go)}}else{{go()}}}});</script></body></html>"""
 
 
 def register(app: FastAPI) -> None:
@@ -280,8 +488,16 @@ def register(app: FastAPI) -> None:
         )
         return (me if ok else None), form
 
+    def number(form: Any, name: str) -> int:
+        try:
+            return int(str(form.get(name) or ""))
+        except ValueError:
+            return 0
+
     @app.post("/console/cards/make")
     async def cards_make(request: Request):
+        """ "Generate PDF": the batch is made and its sheets open (the form's own new tab), where
+        the browser's print dialog saves them as a PDF."""
         me, form = await admin_form(request)
         if me is None:
             return back(request, err="expired")
@@ -291,15 +507,17 @@ def register(app: FastAPI) -> None:
         kind = str(form.get("kind") or "")
         if kind not in cards.KINDS:
             return back(request, err="kind")
-        try:
-            count = int(str(form.get("count") or ""))
-        except ValueError:
-            count = 0
-        if not 1 <= count <= MAX:
-            return back(request, err="count")
+        per_page = number(form, "per_page")
+        if per_page not in PER_PAGE:
+            return back(request, err="per_page")
+        pages = number(form, "pages")
+        if not 1 <= pages <= PAGES_MAX:
+            return back(request, err="pages")
         name = str(form.get("batch") or "")
-        await run_in_threadpool(make, s, kind, name, count, int(me["partner"]))
-        return back(request, msg="made")
+        key = await run_in_threadpool(
+            make, s, kind, name, pages * per_page, int(me["partner"]), per_page
+        )
+        return RedirectResponse(f"{PATH}/print/{key}", status_code=303)
 
     @app.post("/console/cards/{card_id}/reset")
     async def cards_reset(request: Request, card_id: str):
@@ -317,4 +535,4 @@ def register(app: FastAPI) -> None:
         return back(request, msg="reset")
 
 
-__all__ = ["register", "page_html", "print_html", "batches", "make", "qr_svg"]
+__all__ = ["register", "page_html", "print_html", "batches", "make", "qr_svg", "layout"]

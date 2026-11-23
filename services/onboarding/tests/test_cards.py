@@ -720,6 +720,7 @@ def test_an_archived_group_says_so_and_takes_nobody(land):
 def test_the_console_page_is_for_admins(land):
     rsvc = land.rsvc
     _bob, bob_id = person(rsvc, "bob@belfry.test", "Bob")
+    ok = {"kind": "group", "per_page": "4", "pages": "1"}
     with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
         r = c.get("/cards", headers=H, follow_redirects=False)
         assert r.status_code == 303 and "/login" in r.headers["location"]
@@ -727,78 +728,182 @@ def test_the_console_page_is_for_admins(land):
         r = c.get("/cards", headers=H)
         assert r.status_code == 403 and 'href="/cards"' not in r.text  # not in a member's menu
         assert c.get("/cards/print/1", headers=H).status_code == 403
-        assert post(c, "/cards/make", kind="group", count="4").status_code == 303
+        assert post(c, "/cards/make", **ok).status_code == 303
         assert rsvc.odoo.card_list() == []
         signed_in(c, rsvc, land.ada_id)
         t = c.get("/cards", headers=H).text
         assert "Printed cards" in t and "No cards yet." in t and 'href="/cards"' in t
-        # without the csrf, an unknown kind, too many: nothing
-        r = c.post("/cards/make", data={"kind": "group", "count": "4"}, headers=H)
-        assert rsvc.odoo.card_list() == []
-        for bad in (
-            {"kind": "pod", "count": "4"},
-            {"kind": "group", "count": "41"},
-            {"kind": "group", "count": "0"},
-            {"kind": "group", "count": "many"},
+        # the board's form: two tiles, cards per page, pages with the total, the batch's name
+        for words in (
+            "Account required",
+            "No account needed to post",
+            "People who get to know each other. They join and say hi.",
+            "People come and go, share what they know and follow by e-mail.",
+            "Cards per page",
+            "= 8 cards",
+            "4 A6 on each A4",
+            "1 to 50",
+            "To find these cards in the list",
+            "Generate PDF",
+            "Cards made · 0",
         ):
-            assert post(c, "/cards/make", **bad).status_code == 303
+            assert words in t, words
+        for field in (
+            'name="kind" value="group" checked',
+            'name="kind" value="topic"',
+            'name="per_page" value="1"',
+            'name="per_page" value="2"',
+            'name="per_page" value="4" checked',
+            'name="pages" min="1" max="50" value="2"',
+            'name="batch" maxlength="60" value="Batch 1"',
+            'target="_blank"',
+        ):
+            assert field in t, field
+        # without the csrf, an unknown kind, a wrong number per page, too many pages: nothing
+        r = c.post("/cards/make", data=ok, headers=H, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/cards"
+        for bad in (
+            {**ok, "kind": "pod"},
+            {**ok, "per_page": "3"},
+            {**ok, "per_page": ""},
+            {**ok, "pages": "51"},
+            {**ok, "pages": "0"},
+            {**ok, "pages": "many"},
+        ):
+            r = post(c, "/cards/make", **bad)
+            assert r.status_code == 303 and r.headers["location"] == "/cards", bad
         assert rsvc.odoo.card_list() == []
-        assert "Make 1 to 40 cards at a time." in c.get("/cards", headers=H).text
+        assert "Make 1 to 50 pages at a time." in c.get("/cards", headers=H).text
 
 
-def test_batches_the_print_view_and_reset(land):
+def test_generate_makes_a_batch_and_opens_its_sheets(land):
     rsvc = land.rsvc
-    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
     with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
         signed_in(c, rsvc, land.ada_id)
-        r = post(c, "/cards/make", kind="group", count="6", batch="Spring <fair>")
-        assert r.status_code == 303 and r.headers["location"] == "/cards"
-        r = post(c, "/cards/make", kind="topic", count="5", batch="")
+        # 2 pages of 4: eight group cards, named "Batch 1" when the field is left empty
+        r = post(c, "/cards/make", kind="group", per_page="4", pages="2", batch="")
+        b1 = cardsconsole.batches(rsvc)[0]
+        assert r.status_code == 303 and r.headers["location"] == f"/cards/print/{b1['key']}"
+        assert (b1["name"], b1["kind"], b1["per_page"], len(b1["cards"])) == (
+            "Batch 1",
+            "group",
+            4,
+            8,
+        )
+        # the next one is Batch 2 by default (every batch of the belfry counts), or its own name
+        assert 'value="Batch 2"' in c.get("/cards", headers=H).text
+        post(c, "/cards/make", kind="topic", per_page="2", pages="3", batch="Market <day>")
+        post(c, "/cards/make", kind="topic", per_page="1", pages="50", batch="Batch 3")
+        found = {b["name"]: b for b in cardsconsole.batches(rsvc)}
+        assert (found["Market <day>"]["per_page"], len(found["Market <day>"]["cards"])) == (2, 6)
+        assert (found["Batch 3"]["per_page"], len(found["Batch 3"]["cards"])) == (1, 50)
         made = rsvc.odoo.card_list()
-        assert len(made) == 11 and len({m["id"] for m in made}) == 11
+        assert len(made) == 64 and len({m["id"] for m in made}) == 64
         assert all(cards.ID.fullmatch(m["id"]) and m["state"] == "unclaimed" for m in made)
         assert all(m["made_by"] == land.ada_id for m in made)
-        found = cardsconsole.batches(rsvc)
-        assert sorted((b["kind"], len(b["cards"])) for b in found) == [("group", 6), ("topic", 5)]
-        groups = next(b for b in found if b["kind"] == "group")
-        topics = next(b for b in found if b["kind"] == "topic")
         t = c.get("/cards", headers=H).text
-        assert "The cards are made." in t and "Spring &lt;fair&gt;" in t and "<fair>" not in t
-        assert "Topic cards, " in t and f"/cards/print/{groups['key']}" in t
-        # the print view: four A6 cards a sheet, upright for groups
-        r = c.get(f"/cards/print/{groups['key']}", headers=H)
-        assert r.status_code == 200
-        p = r.text
-        assert "@page{size:A4 portrait;margin:0}" in p and p.count('class="sheet"') == 2
-        assert p.count('class="card"') == 6 and p.count("<svg") == 6
-        assert "width:105mm;height:148mm" in p
-        assert p.count("Scan to start a group here") == 6
-        assert p.count("chat.belfry.test/g/</p>") == 6
-        for m in groups["cards"]:  # the id is in the QR only, never printed
-            assert m["id"] not in p
-        assert rsvc.settings.community_name in p
-        # on their side for topics
-        p = c.get(f"/cards/print/{topics['key']}", headers=H).text
-        assert "@page{size:A4 landscape;margin:0}" in p and "width:148mm;height:105mm" in p
-        assert p.count('class="sheet"') == 2 and p.count("Scan to start a topic here") == 5
+        assert "Cards made · 64" in t and 'value="Batch 4"' in t
+        assert "Market &lt;day&gt;" in t and "<day>" not in t
+        for head in ("Card", "For", "Batch", "State", "Name", "Started by"):
+            assert f"<th>{head}</th>" in t
+        assert t.count("Not scanned yet") == 64
+
+
+def test_the_sheets_are_the_boards_cards(land):
+    rsvc = land.rsvc
+    make = cardsconsole.make
+    keys = {
+        (kind, per): make(rsvc, kind, f"{kind} {per}", 6 if per == 4 else per, land.ada_id, per)
+        for kind in ("group", "topic")
+        for per in (4, 2, 1)
+    }
+    found = {b["key"]: b for b in cardsconsole.batches(rsvc)}
+    # (side of the A4, sheets, cut lines, how much the A6 card is enlarged)
+    want = {
+        ("group", 4): ("portrait", 2, ("cut v", "cut h"), ""),
+        ("group", 2): ("landscape", 1, ("cut v",), "zoom:1.41421"),
+        ("group", 1): ("portrait", 1, (), "zoom:2.00000"),
+        ("topic", 4): ("landscape", 2, ("cut v", "cut h"), ""),
+        ("topic", 2): ("portrait", 1, ("cut h",), "zoom:1.41421"),
+        ("topic", 1): ("landscape", 1, (), "zoom:2.00000"),
+    }
+    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
+        signed_in(c, rsvc, land.ada_id)
+        for (kind, per), key in keys.items():
+            r = c.get(f"/cards/print/{key}", headers=H)
+            assert r.status_code == 200, (kind, per)
+            p = r.text
+            side, sheets, cuts, zoom = want[(kind, per)]
+            n = len(found[key]["cards"])
+            assert f"@page{{size:A4 {side};margin:0}}" in p, (kind, per)
+            assert p.count('class="sheet"') == sheets and p.count("<svg") == n
+            for cut in ("cut v", "cut h"):
+                assert (f'class="{cut}"' in p) == (cut in cuts), (kind, per, cut)
+            assert (zoom in p) if zoom else ("zoom:" not in p)
+            assert rsvc.settings.community_name in p
+            assert "window.print()" in p  # the print dialog opens by itself
+            assert "chat.belfry.test" not in p  # the address is in the QR code only
+            for m in found[key]["cards"]:
+                assert m["id"] not in p  # and so is the id
+            if kind == "group":
+                assert p.count('class="a6"') == n
+                assert p.count("<b>Group</b> · people you get to know. Join and say hi.") == n
+                assert p.count("<b>Group name:</b>") == n and p.count("<b>Description:</b>") == n
+                assert p.count("Scan to join this group") == n
+                assert "width:397px;height:561.5px" in p
+            else:
+                assert p.count('class="a6l"') == n
+                assert p.count("<b>Topic</b> · come and go, share what you know.") == n
+                assert p.count('class="hash"><b>#</b>') == n and p.count("<b>About:</b>") == n
+                assert p.count("Scan to contribute to this topic") == n
+                assert p.count(">No account required<") == n
+                assert "width:561.5px;height:397px" in p
         assert c.get("/cards/print/12345", headers=H).status_code == 404
         assert c.get("/cards/print/x%3Cb%3E", headers=H).status_code in (400, 404, 422)
-        # the QR is the card's address
-        import segno
+    # the QR is the card's address, at error correction Q
+    import segno
 
-        want = segno.make(f"https://chat.belfry.test/g/{groups['cards'][0]['id']}", error="q")
-        assert cardsconsole.qr_svg(f"https://chat.belfry.test/g/{groups['cards'][0]['id']}") == (
-            want.svg_inline(scale=4, border=4, dark="#000", light="#fff", omitsize=True)
-        )
-        assert want.error in ("Q", "H") and not want.is_micro
-        # a claimed card shows its group's name; Reset frees it and leaves the group
-        card = groups["cards"][0]["id"]
+    url = f"https://chat.belfry.test/g/{found[keys[('group', 4)]]['cards'][0]['id']}"
+    code = segno.make(url, error="q")
+    assert code.error in ("Q", "H") and not code.is_micro
+    assert cardsconsole.qr_svg(url) == code.svg_inline(
+        scale=4, border=0, dark="#000", light="#fff", omitsize=True
+    )
+    # a batch made before "cards per page" existed prints four to a sheet
+    assert cardsconsole.layout("group", 4)["side"] == "portrait"
+    assert cardsconsole.make(rsvc, "group", "old", 1, land.ada_id) and all(
+        b["per_page"] in (1, 2, 4) for b in cardsconsole.batches(rsvc)
+    )
+
+
+def test_the_list_names_groups_and_starters_and_reset_frees_a_card(land):
+    rsvc = land.rsvc
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob Baker")
+    gus = saved_guest(rsvc, name="Lou")
+    key = cardsconsole.make(rsvc, "group", "", 3, land.ada_id)
+    tkey = cardsconsole.make(rsvc, "topic", "Market day", 1, land.ada_id)
+    found = {b["key"]: b for b in cardsconsole.batches(rsvc)}
+    card, card2 = (m["id"] for m in found[key]["cards"][:2])
+    topic = found[tkey]["cards"][0]["id"]
+    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
+        signed_in(c, rsvc, land.ada_id)
         group = call(c, bob, f"/cards/{card}/claim", FORM).json()["group"]
         land.mirror(group)
+        call(c, gus, f"/cards/{card2}/claim", {"title": "Bike rides"})
+        r = call(c, bob, f"/cards/{topic}/claim", {"title": "Tools", "hashtag": "tool-library"})
+        assert r.status_code == 200, r.text
         token = rsvc.odoo.card_get(card)["invite"]
         t = c.get("/cards", headers=H).text
-        assert "Sourdough starters" in t and "In use" in t and f"/cards/{card}/reset" in t
-        assert group not in t  # the name, never the id
+        assert "Sourdough starters" in t and "Bike rides" in t and "#tool-library" in t
+        assert group not in t  # a group by its name, never its id
+        assert "<td>Bob Baker</td>" in t and "<td>Lou (guest steward)</td>" in t
+        assert t.count(">Claimed<") == 3 and t.count("Not scanned yet") == 1
+        assert f'action="/cards/{card}/reset"' in t and t.count(">Reset<") == 3
+        assert f'href="/cards/print/{key}"' in t  # the batch's name opens its sheets again
+        assert call(c, bob, f"/cards/{card2}/retire", {}).status_code == 403
+        assert call(c, gus, f"/cards/{card2}/retire", {}).status_code == 200
+        t = c.get("/cards", headers=H).text
+        assert t.count(">Retired<") == 1 and t.count(">Reset<") == 3
         n = len(land.w.grp.events)
         r = c.post(f"/cards/{card}/reset", data={}, headers=H, follow_redirects=False)
         assert rsvc.odoo.card_get(card)["state"] == "claimed"  # no csrf, no reset
@@ -816,6 +921,50 @@ def test_batches_the_print_view_and_reset(land):
         assert r.status_code == 200 and r.json()["group"] != group
         assert post(c, "/cards/ABCDEF/reset").status_code == 303
         assert CSRF not in "".join(m["id"] for m in rsvc.odoo.card_list())
+
+
+def test_an_older_table_gets_the_cards_per_page_column(tmp_path, settings):
+    path = tmp_path / "old.sqlite"
+    reg = Register(path, settings)
+    reg._db.execute("DROP TABLE group_cards")
+    reg._db.execute(
+        "CREATE TABLE group_cards (id TEXT PRIMARY KEY, kind TEXT NOT NULL, batch TEXT NOT NULL,"
+        " state TEXT NOT NULL, group_id TEXT, invite TEXT, title TEXT, made_by INTEGER,"
+        " made_at INTEGER NOT NULL, claimed_by INTEGER, claimed_key TEXT, claimed_at INTEGER)"
+    )
+    reg._db.execute(
+        "INSERT INTO group_cards (id, kind, batch, state, made_by, made_at)"
+        " VALUES ('ABCDEF', 'group', 'First', 'unclaimed', 1, 5)"
+    )
+    reg._db.close()
+    reg = Register(path, settings)
+    assert reg.card_get("ABCDEF")["per_page"] == 4  # as they were printed
+    assert reg.card_make(["GHJKMN"], "topic", "B", 1, 6, 2) == ["GHJKMN"]
+    assert reg.card_get("GHJKMN")["per_page"] == 2
+
+
+def test_an_invite_says_when_it_is_a_cards(land):
+    rsvc = land.rsvc
+    bob, bob_id = person(rsvc, "bob@belfry.test", "Bob")
+    group_card, topic_card = land.card(), land.card("topic")
+    with TestClient(create_app(rsvc)) as c:
+        call(c, bob, f"/cards/{group_card}/claim", FORM)
+        call(c, bob, f"/cards/{topic_card}/claim", {**FORM, "hashtag": "bread"})
+        for card, kind in ((group_card, "group"), (topic_card, "topic")):
+            token = rsvc.odoo.card_get(card)["invite"]
+            assert c.get(f"/api/v1/channel-invites/{token}", headers=HOST).json()["card"] == kind
+            # a visitor in guest mode, someone with an account: the same field in the join answer
+            r = call(c, PrivateKey(), f"/channel-invites/{token}/join", {})
+            assert r.status_code == 200 and r.json()["card"] == kind and r.json()["reading"]
+            cy, _ = person(rsvc, f"cy-{kind}@belfry.test", "Cy")
+            r = call(c, cy, f"/channel-invites/{token}/join", {})
+            assert r.status_code == 200 and r.json()["card"] == kind
+        # an ordinary guest link says nothing about a card
+        row = rsvc.odoo.create_guest_invite(bob_id, pk(bob), "garden", 30, people=50)
+        token = row["url"].rsplit("/", 1)[1]
+        assert "card" not in c.get(f"/api/v1/channel-invites/{token}", headers=HOST).json()
+        r = call(c, PrivateKey(), f"/channel-invites/{token}/join", {})
+        assert r.status_code == 200 and "card" not in r.json()
 
 
 def test_a_hashtag_is_never_free_on_a_relay_that_fails(land, monkeypatch):

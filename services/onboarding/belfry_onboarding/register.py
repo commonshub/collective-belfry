@@ -176,6 +176,11 @@ class Register(OdooApi):
             CREATE INDEX IF NOT EXISTS group_cards_group ON group_cards (group_id);
             """
         )
+        # cards made before a batch chose how many go on a sheet: four (A6), as they were printed
+        if "per_page" not in {r[1] for r in self._db.execute("PRAGMA table_info(group_cards)")}:
+            self._db.execute(
+                "ALTER TABLE group_cards ADD COLUMN per_page INTEGER NOT NULL DEFAULT 4"
+            )
         self._card_full_told: dict[int, float] = {}  # invite → when the log last said "full"
         self._push_one_row_per_identity()
         self._profile_visibility_once()
@@ -1471,7 +1476,7 @@ class Register(OdooApi):
     # ── printed cards (cards.py): a QR that starts a group, then brings people into it ───────
     CARD_FIELDS = (
         "id, kind, batch, state, group_id, invite, title, made_by, made_at, "
-        "claimed_by, claimed_key, claimed_at"
+        "claimed_by, claimed_key, claimed_at, per_page"
     )
 
     @staticmethod
@@ -1489,18 +1494,23 @@ class Register(OdooApi):
             "claimed_by",
             "claimed_key",
             "claimed_at",
+            "per_page",
         )
         return dict(zip(keys, row, strict=True))
 
-    def card_make(self, ids: list[str], kind: str, batch: str, made_by: int, at: int) -> list[str]:
-        """New unclaimed cards; an id that exists already is left out of the answer."""
+    def card_make(
+        self, ids: list[str], kind: str, batch: str, made_by: int, at: int, per_page: int = 4
+    ) -> list[str]:
+        """New unclaimed cards; an id that exists already is left out of the answer. PER_PAGE:
+        how many of the batch are printed on an A4 sheet (1, 2 or 4)."""
         made = []
         with self._lock:
             for cid in ids:
                 cur = self._db.execute(
-                    "INSERT OR IGNORE INTO group_cards (id, kind, batch, state, made_by, made_at) "
-                    "VALUES (?, ?, ?, 'unclaimed', ?, ?)",
-                    (cid, kind, batch, int(made_by), int(at)),
+                    "INSERT OR IGNORE INTO group_cards "
+                    "(id, kind, batch, state, made_by, made_at, per_page) "
+                    "VALUES (?, ?, ?, 'unclaimed', ?, ?, ?)",
+                    (cid, kind, batch, int(made_by), int(at), int(per_page)),
                 )
                 if cur.rowcount:
                     made.append(cid)
@@ -1522,6 +1532,16 @@ class Register(OdooApi):
                 (group,),
             ).fetchone()
         return self._card_row(row) if row else None
+
+    def card_kind_of_invite(self, token: str) -> str | None:
+        """``group`` or ``topic`` when TOKEN is the guest link of a printed card, else None."""
+        if not token or len(token) < 20:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                "SELECT kind FROM group_cards WHERE invite = ?", (token,)
+            ).fetchone()
+        return str(row[0]) if row else None
 
     def card_list(self) -> list[dict[str, Any]]:
         with self._lock:

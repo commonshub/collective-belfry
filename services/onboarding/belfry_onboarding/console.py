@@ -940,13 +940,16 @@ def _scroll_tables(body: str) -> str:
     )
 
 
-def frame(title: str, current: str, who: dict[str, Any] | None, body: str) -> str:
+def frame(
+    title: str, current: str, who: dict[str, Any] | None, body: str, panels: bool = False
+) -> str:
     """A console page. Signed-in people get the side menu (a drawer on phones); visitors the bar
-    with Sign in. Fixed text, the settings and the viewer only: nothing from the URL."""
+    with Sign in. Fixed text, the settings and the viewer only: nothing from the URL. PANELS: the
+    page draws its own panels (cardsconsole.py), so it is not put inside one."""
     from . import theme
     from .claim import TEST_NOTICE
 
-    inner = body if current == "/" else f'<div class="panel">{_scroll_tables(body)}</div>'
+    inner = body if current == "/" or panels else f'<div class="panel">{_scroll_tables(body)}</div>'
     t = theme.current()
     links = "".join(f'<a href="{E(h)}">{E(text)}</a>' for h, text in t.links)
     foot = f"<footer>{theme.footer_html(t.footer)}<nav>{links}</nav></footer>"

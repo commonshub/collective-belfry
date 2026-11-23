@@ -1027,7 +1027,20 @@ def invite_info(svc: Services, token: str) -> dict[str, Any] | None:
         "days": int(inv.get("guest_days") or DAYS),
         "role": inv.get("guest_role") or None,
         **_member_info(svc, inv),
+        **card_info(svc, token),
     }
+
+
+def card_info(svc: Services, token: str) -> dict[str, str]:
+    """``{"card": "group" | "topic"}`` when the invite is a printed card's link (cards.py), else
+    nothing: the chat lets a guest who gave no e-mail post in a topic reached by a card."""
+    kind = getattr(svc.odoo, "card_kind_of_invite", None)
+    try:
+        found = kind(token) if kind else None
+    except Exception as exc:  # noqa: BLE001 — the invite works without it
+        log.info("guests: card of an invite not read: %s", type(exc).__name__)
+        found = None
+    return {"card": found} if found in ("group", "topic") else {}
 
 
 def _member_info(svc: Services, inv: dict[str, Any]) -> dict[str, Any]:
@@ -1379,6 +1392,7 @@ def register_join_routes(app: FastAPI) -> None:
         except Exception as exc:
             log.exception("guest link %s: joining failed", token[:8])
             raise ApiError(503, "failed", "Joining did not work just now. Try again.") from exc
+        out = {**out, **await run_in_threadpool(card_info, s, token)}
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     async def guest_of(
