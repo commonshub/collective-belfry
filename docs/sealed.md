@@ -419,15 +419,25 @@ whatever above says otherwise).
 
 - *Validity, more.* A join's `created_at` is not before its prev's. Its signer is in NO
   earlier roster of the path (a device the chain ever had asks, 5.2; a removed device with a
-  live session cannot walk back in). **A device that added itself changes nothing until an
-  older device has signed**: a normal roster (one that adds, removes, or only restates)
-  signed by a device that joined is invalid while no roster signed by a device that was in
-  the head BEFORE that join comes after the join on the path. So a joiner reads and writes,
-  and can neither remove my devices nor add others. (Server: `sealed.chain`, tests.)
+  live session cannot walk back in). **A device that added itself changes nothing until it is
+  endorsed**: a normal roster (one that adds, removes, or only restates) signed by a device
+  that joined is invalid, on the anchored path and in the provisional tail alike, while no
+  roster after its join carries `["endorse", <that device>]` signed by a device that was in
+  the roster BEFORE that join. So a joiner reads and writes, and can neither remove my
+  devices nor add others. (Server: `sealed._unendorsed`, tests.)
 - *"It was me" endorses.* Besides the 8563, the device that is tapped publishes roster n+1 =
-  same devices, same `lb` (and its anchor). That roster is the endorsement; from then on the
-  joiner is a device like the others. Remove needs no endorsement (it is signed by an older
-  device).
+  same devices, same `lb`, with one `["endorse", <device>]` tag per joiner it confirms (and
+  its anchor). Only that tag endorses: the rosters devices publish by themselves (`ready`,
+  a session gone, another device let in) never do, so the limits lift only when the person
+  taps. From then on the joiner is a device like the others, and on a device that saw a
+  switch it is trusted when the endorsing device is trusted there. Remove needs no
+  endorsement (it is signed by an older device). A joiner that leaves the head is no longer
+  waiting for anything.
+- *More readings* (Android's vectors, 2026-11-23). A stored pin whose path holds a join past
+  its anchored head is cut back to before that join and followed from there (`moved`).
+  "Fewer than 3 let in within 24 h", for a joiner's older keys: three OTHER devices, the
+  asking joiner not counted. A join that lost the anchor: the device joins again with a new
+  letterbox; nothing checks that the lost one is never used.
 - *An older device that lacks the new secret* is "in the head, a letterbox behind": it keeps
   everything (Remove, the notice, 8563, session checks, answering requests, writing: it
   seals to the head letterbox by its public key); only reading the newer messages waits
