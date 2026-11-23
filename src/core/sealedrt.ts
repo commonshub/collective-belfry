@@ -578,7 +578,7 @@ export class NotDone extends Error {}
 // docs/encrypted.md §12, §17.13 (the review's P1.5): on a belfry that writes format 3, version 1
 // writes nothing: no rosters, anchors, device requests, hand-overs, confirms, history packs. It
 // keeps reading the version-1 wraps it can open.
-const v1Writes = () => encryptedFormat() !== 3
+const v1Writes = () => encryptedFormat() === 1 // unknown: nothing either (the re-read's P1-5)
 const publishNow: typeof publishNowRaw = (t, ev) => { if (!v1Writes()) throw new NotDone('format 3: version 1 writes nothing'); return publishNowRaw(t, ev) }
 const enqueue: typeof enqueueRaw = (t, e, files) => { if (!v1Writes()) throw new NotDone('format 3: version 1 writes nothing'); return enqueueRaw(t, e, files) }
 const enqueueSigned: typeof enqueueSignedRaw = (t, ev, dm, conv, up) => { if (!v1Writes()) throw new NotDone('format 3: version 1 writes nothing'); return enqueueSignedRaw(t, ev, dm, conv, up) }

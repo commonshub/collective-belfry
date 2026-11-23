@@ -5397,8 +5397,18 @@
    },
    {
     "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
-    "at": 3700,
+    "at": 3650,
     "expect": false
+   },
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 3699,
+    "expect": false
+   },
+   {
+    "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",
+    "at": 3700,
+    "expect": true
    },
    {
     "device": "55c98d9472bc69ed6e92bce9f6e1424f6277a5fc0197b9e17337ffcedc641943",

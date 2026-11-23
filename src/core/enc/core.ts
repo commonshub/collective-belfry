@@ -87,10 +87,9 @@ export function chainOf(events: unknown[], belfry: string, account: string): Cha
   let badTop = 0
   for (const e of events) {
     const l = parseList(e, belfry)
-    if (!l) { // not valid: remember its n when it is the belfry's word about this account
-      const x = e as { kind?: unknown; pubkey?: unknown; tags?: unknown }
-      if (x && x.kind === LIST && x.pubkey === belfry && Array.isArray(x.tags) && (x.tags as string[][]).some((t) => t[0] === 'p' && t[1] === account)) {
-        const n = Number((x.tags as string[][]).find((t) => t[0] === 'n')?.[1]); if (Number.isInteger(n) && n > badTop) badTop = n
+    if (!l) { // not valid: remember its n when it is the belfry's signed word about this account (N4: signature checked)
+      if (validEvent(e) && e.kind === LIST && e.pubkey === belfry && e.tags.some((t) => t[0] === 'p' && t[1] === account)) {
+        const n = Number(e.tags.find((t) => t[0] === 'n')?.[1]); if (Number.isInteger(n) && n > badTop) badTop = n
       }
       continue
     }
@@ -152,9 +151,10 @@ export function signsAt(c: Chain, device: string, at: number): boolean | undefin
  *  Undefined: the list current at AT may be missing. */
 export function listedAt(c: Chain, device: string, at: number): boolean | undefined {
   // §21: a slow clock dates a new device's first messages (and its first group key) before the list
-  // that added it: its first list counts from that list's date − SKEW
-  const first = c.lists.find((l) => l.devices.includes(device))
-  if (first && at < first.created_at && first.created_at <= at + SKEW) at = first.created_at
+  // that added it: that list counts from its date − SKEW
+  // (Android: at the start of every run of lists that have it, a device listed again included)
+  const start = c.lists.find((l, i) => l.devices.includes(device) && !c.lists[i - 1]?.devices.includes(device) && at < l.created_at && l.created_at <= at + SKEW)
+  if (start) at = start.created_at
   let i = -1
   c.lists.forEach((l, j) => { if (l.created_at <= at) i = j })
   if (i < 0) return c.lists[0].n === 1 ? false : undefined

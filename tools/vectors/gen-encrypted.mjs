@@ -75,10 +75,10 @@ const nul = (v) => (v === undefined ? null : v)
 const signsAt = [[keys.d1, 2500], [keys.d1, 3600], [keys.d1, 3601], [keys.d2, 999999], [keys.agent, 3500], [keys.d3, 2500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))
 const cGap = E.chainOf([L1, L2, L4], keys.belfry, keys.sam) // list 3 missing: what dropped d1 isn't known
 const signsAtGap = [[keys.d1, 3500], [keys.d2, 3500], [keys.d4, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cGap, d, at)) }))
-// the review (P3): d1 dropped by list 3 (3000), listed again by R4 (4000): not accepted for 3601–3999
+// the review (P3): d1 dropped by list 3 (3000), listed again by R4 (4000): not accepted for 3601–3699 (from 3700 the slow-clock grace of its new run counts, §21 per run)
 const R4 = list('R4', keys.sam, 4, L3.id, [keys.d1, keys.d2], 4000, [keys.agent])
 const cRe = E.chainOf([L1, L2, L3, R4], keys.belfry, keys.sam)
-const signsAtRelisted = [[keys.d1, 3500], [keys.d1, 3700], [keys.d1, 4000], [keys.d1, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cRe, d, at)) }))
+const signsAtRelisted = [[keys.d1, 3500], [keys.d1, 3650], [keys.d1, 3699], [keys.d1, 3700], [keys.d1, 4000], [keys.d1, 4500]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(cRe, d, at)) }))
 // the review (P2.3): a device on no list known here, dated at or after the newest list: its list may be behind (wait)
 // §21: d2 first listed by L2 (2000): an outer date up to 5 minutes before it counts (a slow clock)
 const signsAtSlow = [[keys.d2, 1800], [keys.d2, 1700], [keys.d2, 1699], [keys.d2, 1600]].map(([d, at]) => ({ device: d, at, expect: nul(E.signsAt(c3, d, at)) }))

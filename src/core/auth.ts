@@ -255,7 +255,7 @@ export function forgetDevice() {
   for (const store of [localStorage, sessionStorage]) {
     try {
       // this account's keys only: the device's list of accounts and the others' saved keys stay (accounts.ts)
-      for (const k of Object.keys(store)) if (/^(belfry|osv)[-:]/.test(k) && !/^(belfry-accounts?|belfry-accounts-ls:|belfry-other-belfries|osv-backend|osv-branding|belfry-community-name|osv-dev-mode)\b/.test(k)) store.removeItem(k)
+      for (const k of Object.keys(store)) if (/^(belfry|osv)[-:]/.test(k) && !/^(belfry-accounts?|belfry-accounts-ls:|belfry-other-belfries|osv-backend|osv-branding|belfry-community-name|osv-dev-mode|belfry-enc-format)\b/.test(k)) store.removeItem(k)
     } catch { /* private mode */ }
   }
 }

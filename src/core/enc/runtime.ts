@@ -29,6 +29,8 @@ interface KeyRec extends E.HeldKey {
   /** the people of the conversation (people keys) */ people?: string[]
   /** a key this device made whose envelopes the outbox hasn't confirmed yet: sent again before
    *  the next message that uses it (the review's P2.1) */ unconfirmed?: NostrEvent[]
+  /** what rebuilds those envelopes for the SAME key with fresh dates (N1): its rumor and recipients */
+  made?: { rumor: E.Rumor; per: { account: string; devices: string[] }[] }
 }
 const keys = new Map<string, KeyRec>() // K → key
 const byAlias = new Map<string, string>() // alias(K, me) → K
@@ -142,8 +144,33 @@ function filters(): Filter[] {
 
 // ---- start -----------------------------------------------------------------------------------
 
-export async function startEnc(clientSecret: string) {
-  if (device || !/^[0-9a-f]{64}$/.test(clientSecret)) return
+let loading: Promise<void> | null = null
+/** Resolved once this device's keys and encrypted conversations are loaded (at once when the runtime doesn't run). */
+export const whenEncLoaded = () => loading ?? Promise.resolve()
+// the re-read's P1-4: old-style wraps wait until a complete read of my envelopes and messages on this connection
+let caughtUpOn = -2, catchingUp = false
+export const encCaughtUp = () => caughtUpOn === connectionOf('main')
+/** Start that read once per connection; dm.ts processes again when it completed (onEncKeys). */
+export function ensureEncCaughtUp() {
+  if (!device || catchingUp || encCaughtUp()) return
+  catchingUp = true
+  const conn = connectionOf('main')
+  void queryPaged('main', [{ kinds: [E.KEY, E.MSG], '#p': [me()] }], 8000, 100, 20000).then(async (got) => {
+    catchingUp = false
+    if (!got) return
+    addEvents(got)
+    await takeEnvelopes()
+    caughtUpOn = conn
+    keyListeners.forEach((l) => l())
+  }, () => { catchingUp = false })
+}
+
+export function startEnc(clientSecret: string): Promise<void> {
+  if (device || !/^[0-9a-f]{64}$/.test(clientSecret)) return whenEncLoaded()
+  loading = startEncNow(clientSecret)
+  return loading
+}
+async function startEncNow(clientSecret: string) {
   const secret = hexToBytes(clientSecret)
   device = { secret, pub: getPublicKey(secret) }
   startedAt = Date.now()
@@ -223,7 +250,10 @@ export async function openEnc(e: NostrEvent): Promise<Opened> {
       void queryPaged('main', [{ kinds: [E.KEY], '#p': [me()], '#d': [d] }], 5000).then((got) => {
         if (!got) return
         addEvents(got)
-        dRead.set(d, { at: Date.now(), found: got.length > 0 })
+        // N5: "unreadable" only when envelopes were found and none has an entry for this device (an
+        // entry whose key waits for lists is "opening", not unreadable)
+        const mineIn = got.some((env) => { try { return !!E.openPeopleEnvelope(device!.secret, env) } catch { return false } })
+        dRead.set(d, { at: Date.now(), found: got.length > 0 && !mineIn })
       })
     }
     // "can't be read on this device" only after a complete #d read found envelopes, none with my entry
@@ -313,23 +343,28 @@ export async function encryptFor(rumor: E.Rumor, people: string[]): Promise<{ ev
   const lists = E.peopleLists(per.filter((p) => p.list).map((p) => ({ account: p.account, id: p.list! })))
   const out: NostrEvent[] = []
   let key = E.pickKey([...keys.values()], conv, lists) as KeyRec | undefined
-  // a key whose envelopes never went out and are too old for the relay now (±5 min, §18.1): a new one
-  if (key?.unconfirmed?.some((env) => Math.floor(Date.now() / 1000) - env.created_at > 240)) {
-    const queuedIds = new Set(outboxItems().map((o) => o.signed?.id).filter(Boolean))
-    if (key.unconfirmed.some((env) => !queuedIds.has(env.id))) { keys.delete(key.K); byAlias.delete(E.alias(key.K, m)); key = undefined; await saveKeys() }
-  }
   if (!key) {
     const { k, K } = E.newKey()
     const r = E.keyRumor(device.pub, k, per.map((p) => ({ account: p.account, ...(p.list ? { list: p.list } : {}) })))
     const envs = E.peopleEnvelopes(device.secret, r, per.filter((p) => p.devices.length))
-    const rec: KeyRec = { K, k, conv, people: all, mine: true, lists, at: r.created_at, unconfirmed: envs }
+    const made = { rumor: r, per: per.filter((p) => p.devices.length).map((p) => ({ account: p.account, devices: p.devices })) }
+    const rec: KeyRec = { K, k, conv, people: all, mine: true, lists, at: r.created_at, unconfirmed: envs, made }
     holdKey(rec)
     key = rec
     await saveKeys()
   }
-  // its envelopes not confirmed out yet (a refused send, a closed tab): again, unless still queued
-  const queued = new Set(outboxItems().map((o) => o.signed?.id).filter(Boolean))
-  for (const env of key.unconfirmed ?? []) if (!queued.has(env.id)) out.push(env)
+  // its envelopes not confirmed out yet: still live in the outbox (status queued) → nothing to do;
+  // refused or lost (a failed item, a closed tab) → the SAME key's envelopes rebuilt with fresh dates,
+  // never a dropped key (messages under it may be out already: N1)
+  const live = new Set(outboxItems().filter((o) => o.status === 'queued').map((o) => o.signed?.id).filter(Boolean))
+  if (key.unconfirmed?.some((env) => !live.has(env.id))) {
+    if (key.made) {
+      const fresh = E.peopleEnvelopes(device.secret, key.made.rumor, key.made.per)
+      key.unconfirmed = fresh
+      await saveKeys()
+      out.push(...fresh)
+    } else out.push(...key.unconfirmed) // (an earlier build's record: sent as it was)
+  }
   const to = all.filter((a) => !missing.includes(a))
   out.push(...E.peopleMessage(device.secret, rumor, key.K, to, m))
   noteConv(conv, key.at)

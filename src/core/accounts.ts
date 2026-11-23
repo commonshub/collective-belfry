@@ -28,7 +28,8 @@ const OTHERS = 'belfry-other-belfries'
 const SNAP = 'belfry-accounts-ls:' // + id: the keys of an account that isn't live
 const LEGACY_DB = 'osv-village'
 /** Kept for the whole device, never swapped: which backend, the belfry's look and name, dev mode. */
-const DEVICE = new Set([REG, ACTIVE, OTHERS, 'osv-backend', 'osv-branding', 'belfry-community-name', 'osv-dev-mode'])
+// (belfry-enc-format: the belfry's encryption format belongs to the belfry, not to an account)
+const DEVICE = new Set([REG, ACTIVE, OTHERS, 'osv-backend', 'osv-branding', 'belfry-community-name', 'osv-dev-mode', 'belfry-enc-format'])
 const mine = (k: string) => /^(belfry|osv)[-:]/.test(k) && !DEVICE.has(k) && !k.startsWith(SNAP)
 
 const read = <T,>(k: string, d: T): T => { try { return JSON.parse(localStorage.getItem(k) ?? 'null') ?? d } catch { return d } }
