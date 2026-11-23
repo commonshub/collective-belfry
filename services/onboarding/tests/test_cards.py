@@ -20,6 +20,7 @@ from belfry_onboarding import (
     applyverified,
     cards,
     cardsconsole,
+    cardspdf,
     checkin,
     events,
     guests,
@@ -218,19 +219,22 @@ def test_a_member_starts_a_group_from_a_card(land):
         # by the groups key, with the tags the chat's New group writes
         made, meta = land.of(9007, group), land.of(9002, group)
         assert len(made) == 1 and made[0]["pubkey"] == pk(w.gkey)
-        assert made[0]["tags"] == [["h", group], ["open"], ["public"]]
+        # ...and `by` Bob on each: the events the belfry writes for a person say whose they are
+        by = ["by", pk(bob)]
+        assert made[0]["tags"] == [["h", group], ["open"], ["public"], by]
         assert meta[0]["tags"] == [
             ["h", group],
             ["name", "Sourdough starters"],
             ["about", "Swap and feed"],
             ["open"],
             ["public"],
+            by,
         ]
         # announced in general exactly as the chat does
         said = [e for e in land.of(9, "general") if ["pod", group] in e["tags"]]
         assert len(said) == 1
         assert said[0]["content"] == "⬡ New group: Sourdough starters · Swap and feed"
-        assert said[0]["tags"] == [["h", "general"], ["pod", group]]
+        assert said[0]["tags"] == [["h", "general"], ["pod", group], by]
         # Bob is in it, with the admin role; the first line names him, never the card
         put = land.of(9000, group)
         assert len(put) == 1 and ["p", pk(bob), "admin"] in put[0]["tags"]
@@ -240,6 +244,8 @@ def test_a_member_starts_a_group_from_a_card(land):
         assert pk(bob) in st.admins and pk(bob) in st.members
         line = land.of(9, group)
         assert [e["content"] for e in line] == ["Bob Baker started this group from a printed card"]
+        assert line[0]["tags"] == [["h", group], ["p", pk(bob)], ["card", "1"], by]
+        assert by in put[0]["tags"]
         assert not any(card in str(e) for e in w.grp.events)
         # the card is the group's guest link now: no end date, no number of people
         land.mirror(group)
@@ -629,12 +635,15 @@ def test_a_topic_card_makes_a_channel_named_by_its_hashtag(land):
         r = call(c, bob, f"/cards/{card}/claim", {**FORM, "hashtag": "bread"})
         assert r.status_code == 200 and r.json() == {"group": "bread"}
         # a channel as the chat's New channel makes one: no access tags, no post in general
-        assert land.of(9007, "bread")[0]["tags"] == [["h", "bread"]]
+        by = ["by", pk(bob)]
+        assert land.of(9007, "bread")[0]["tags"] == [["h", "bread"], by]
         assert land.of(9002, "bread")[0]["tags"] == [
             ["h", "bread"],
             ["name", "Sourdough starters"],
             ["about", "Swap and feed"],
+            by,
         ]
+        assert by in land.of(9, "bread")[0]["tags"]
         assert not land.of(9, "general")
         assert [e["content"] for e in land.of(9, "bread")] == [
             "Bob started this topic from a printed card"
@@ -727,7 +736,7 @@ def test_the_console_page_is_for_admins(land):
         signed_in(c, rsvc, bob_id)
         r = c.get("/cards", headers=H)
         assert r.status_code == 403 and 'href="/cards"' not in r.text  # not in a member's menu
-        assert c.get("/cards/print/1", headers=H).status_code == 403
+        assert c.get("/cards/batch/1.pdf", headers=H).status_code == 403
         assert post(c, "/cards/make", **ok).status_code == 303
         assert rsvc.odoo.card_list() == []
         signed_in(c, rsvc, land.ada_id)
@@ -783,7 +792,7 @@ def test_generate_makes_a_batch_and_opens_its_sheets(land):
         # 2 pages of 4: eight group cards, named "Batch 1" when the field is left empty
         r = post(c, "/cards/make", kind="group", per_page="4", pages="2", batch="")
         b1 = cardsconsole.batches(rsvc)[0]
-        assert r.status_code == 303 and r.headers["location"] == f"/cards/print/{b1['key']}"
+        assert r.status_code == 303 and r.headers["location"] == f"/cards/batch/{b1['key']}.pdf"
         assert (b1["name"], b1["kind"], b1["per_page"], len(b1["cards"])) == (
             "Batch 1",
             "group",
@@ -809,71 +818,208 @@ def test_generate_makes_a_batch_and_opens_its_sheets(land):
         assert t.count("Not scanned yet") == 64
 
 
-def test_the_sheets_are_the_boards_cards(land):
+def _inside(box, x0, y0, x1, y1, slack=0.01):
+    return (
+        box[0] >= x0 - slack
+        and box[1] >= y0 - slack
+        and box[2] <= x1 + slack
+        and box[3] <= y1 + slack
+    )
+
+
+PDF_WANT = {
+    # (kind, per page): (the page in mm, columns, rows)
+    ("group", 4): ((210.0, 297.0), 2, 2),
+    ("group", 2): ((297.0, 210.0), 2, 1),
+    ("group", 1): ((210.0, 297.0), 1, 1),
+    ("topic", 4): ((297.0, 210.0), 2, 2),
+    ("topic", 2): ((210.0, 297.0), 1, 2),
+    ("topic", 1): ((297.0, 210.0), 1, 1),
+}
+
+
+@pytest.mark.parametrize("kind,per", sorted(PDF_WANT))
+def test_the_pdf_keeps_its_margins_and_is_centred(kind, per, settings):
+    """With a ruler: nothing within 8 mm of the paper's edge, equal cells at the card's own
+    proportions, the block centred, cut lines between cells only, the QR code's quiet zone."""
+    import types
+
+    svc = types.SimpleNamespace(settings=settings)
+    name = "Maison des Égalités à Łódź · Österreich"  # accents, and long enough to need care
+    urls = [f"https://chat.belfry.brussels/g/{cards.new_id()}" for _ in range(per + 1)]
+    data, sheet, lay = cardspdf.render(svc, kind, per, urls, name, "Batch 3")
+    (pw, ph), cols, rows = PDF_WANT[(kind, per)]
+    assert data.startswith(b"%PDF-") and lay["page"] == (pw, ph)
+    assert (lay["cols"], lay["rows"]) == (cols, rows) and len(sheet.boxes) == 2  # per + 1 cards
+    # the PDF's own pages are that size, in that orientation
+    boxes = re.findall(rb"/MediaBox \[0 0 ([0-9.]+) ([0-9.]+)\]", data)
+    assert boxes and all(
+        abs(float(w) - pw * 72 / 25.4) < 0.1 and abs(float(h) - ph * 72 / 25.4) < 0.1
+        for w, h in boxes
+    )
+    m = cardspdf.MARGIN
+    assert m == 8.0
+    cw, ch = lay["cell"]
+    bw, bh = lay["block"]
+    card = cardspdf.TOPIC if kind == "topic" else cardspdf.GROUP
+    # equal cells at the card's proportions, as large as the printable area allows
+    assert abs(cw / ch - card[0] / card[1]) < 1e-6
+    assert abs(bw - cw * cols) < 1e-6 and abs(bh - ch * rows) < 1e-6
+    assert bw <= pw - 2 * m + 1e-6 and bh <= ph - 2 * m + 1e-6
+    assert abs(bw - (pw - 2 * m)) < 1e-6 or abs(bh - (ph - 2 * m)) < 1e-6
+    # the block is centred: equal left / right and top / bottom margins
+    left, top = lay["x0"], lay["y0"]
+    right, bottom = pw - (left + bw), ph - (top + bh)
+    assert abs(left - right) < 0.5 and abs(top - bottom) < 0.5
+    assert left >= m - 1e-6 and top >= m - 1e-6
+    for page, drawn in enumerate(sheet.boxes):
+        cuts = [b for b in drawn if b[4] == "cut"]
+        rest = [b for b in drawn if b[4] != "cut"]
+        on_page = per if page == 0 else 1
+        cells = [
+            (
+                left + (i % cols) * cw,
+                top + (i // cols) * ch,
+                left + (i % cols + 1) * cw,
+                top + (i // cols + 1) * ch,
+            )
+            for i in range(on_page)
+        ]
+        # nothing at all within 8 mm of a paper edge
+        for b in drawn:
+            assert _inside(b, m, m, pw - m, ph - m), (page, b)
+        # everything of a card is inside its own cell: nothing is clipped, nothing runs over
+        for b in rest:
+            assert any(_inside(b, *c) for c in cells), (page, b)
+        # cut lines: between the cells, from one printable edge to the other; none at the edge
+        assert len(cuts) == (cols - 1) + (rows - 1)
+        for b in cuts:
+            if b[3] - b[1] > b[2] - b[0]:  # down the page
+                assert abs((b[0] + b[2]) / 2 - pw / 2) < 0.01
+                assert abs(b[1] - m) < 0.01 and abs(b[3] - (ph - m)) < 0.01
+            else:
+                assert abs((b[1] + b[3]) / 2 - ph / 2) < 0.01
+                assert abs(b[0] - m) < 0.01 and abs(b[2] - (pw - m)) < 0.01
+        # every card: a logo, its QR code, and four modules of white around the code
+        codes = [b for b in rest if b[4].startswith("qr:")]
+        assert len(codes) == on_page and len([b for b in rest if b[4] == "logo"]) == on_page
+        for q in codes:
+            quiet = 4 * (q[2] - q[0]) / int(q[4][3:])
+            zone = (q[0] - quiet, q[1] - quiet, q[2] + quiet, q[3] + quiet)
+            for b in drawn:
+                if b is q:
+                    continue
+                apart = b[2] <= zone[0] or b[0] >= zone[2] or b[3] <= zone[1] or b[1] >= zone[3]
+                assert apart, (page, q, b)
+            assert any(_inside(zone, *c) for c in cells)  # the white is the card's own
+
+
+def test_the_pdfs_words_font_logo_and_file_name(settings, tmp_path):
+    import types
+
+    from fontTools.ttLib import TTFont
+
+    svc = types.SimpleNamespace(settings=settings)
+    # Inter, with the letters community names use
+    for weight in ("Regular", "SemiBold", "Bold"):
+        font = TTFont(cardspdf.FONTS / f"Inter-{weight}.ttf")
+        assert "Inter" in str(font["name"].getDebugName(1))
+        assert all(ord(ch) in font.getBestCmap() for ch in "Égalité Łódź Österreich ñ ç · # …")
+    assert (cardspdf.FONTS / "OFL.txt").read_text().count("SIL Open Font License") >= 1
+    # the board's words (uncompressed, to read them back)
+    seen: list[str] = []
+    real = cardspdf.Sheet.text
+
+    def text(self, x, baseline, words, *a, **k):
+        seen.append(words)
+        return real(self, x, baseline, words, *a, **k)
+
+    cardspdf.Sheet.text = text
+    try:
+        cardspdf.render(svc, "group", 4, ["https://chat.belfry.test/g/ABCDEF"], "Riverside Commons")
+        group, seen[:] = list(seen), []
+        cardspdf.render(svc, "topic", 4, ["https://chat.belfry.test/g/ABCDEF"], "Riverside Commons")
+        topic, seen[:] = list(seen), []
+        long = "A community with a very long name that would never fit on one line of a card"
+        _data, sheet, lay = cardspdf.render(
+            svc, "group", 4, ["https://chat.belfry.test/g/ABCDEF"], long
+        )
+        cut = seen[0]
+    finally:
+        cardspdf.Sheet.text = real
+    assert group == [
+        "Riverside Commons",
+        "Group",
+        " · people you get to know. Join and say hi.",
+        "Group name:",
+        "Description:",
+        "Scan to join this group",
+    ]
+    assert topic == [
+        "Riverside Commons",
+        "Topic",
+        " · come and go, share what you know.",
+        "#",
+        "About:",
+        "No account required",
+        "Scan to contribute",
+        "to this topic",
+    ]
+    assert cut.endswith("…") and long.startswith(cut[:-1].rstrip())  # cut, never over the edge
+    # neither the address nor the id is written on a card: they are in the QR code only
+    assert not any("chat." in w or "ABCDEF" in w for w in group + topic)
+    # the logo: the Arms unless the theme folder has its own
+    data, ratio = cardspdf.logo(svc)
+    assert data.startswith(b"<svg") and abs(ratio - 64 / 70) < 1e-9
+    from PIL import Image
+
+    Image.new("RGB", (300, 100), "#336699").save(tmp_path / "logo.png")
+    settings.theme_dir = str(tmp_path)
+    data, ratio = cardspdf.logo(svc)
+    assert data.startswith(b"\x89PNG") and abs(ratio - 3.0) < 1e-9
+    _pdf, sheet, lay = cardspdf.render(svc, "topic", 1, ["https://chat.belfry.test/g/ABCDEF"], "X")
+    mark = next(b for b in sheet.boxes[0] if b[4] == "logo")
+    assert abs((mark[2] - mark[0]) / (mark[3] - mark[1]) - 3.0) < 0.01
+    (tmp_path / "logo.png").write_bytes(b"not a picture")  # one it can't read: the Arms again
+    assert cardspdf.logo(svc)[0].startswith(b"<svg")
+    # the file's name
+    assert cardspdf.filename("Batch 3") == "Batch 3.pdf"
+    assert cardspdf.filename('Market "day" / <b>été</b>\r\n') == "Market day btb.pdf"
+    assert cardspdf.filename("../../etc") == "etc.pdf" and cardspdf.filename("…") == "cards.pdf"
+
+
+def test_generate_pdf_answers_a_pdf_for_admins(land):
     rsvc = land.rsvc
-    make = cardsconsole.make
-    keys = {
-        (kind, per): make(rsvc, kind, f"{kind} {per}", 6 if per == 4 else per, land.ada_id, per)
-        for kind in ("group", "topic")
-        for per in (4, 2, 1)
-    }
-    found = {b["key"]: b for b in cardsconsole.batches(rsvc)}
-    # (side of the A4, sheets, cut lines, how much the A6 card is enlarged)
-    want = {
-        ("group", 4): ("portrait", 2, ("cut v", "cut h"), ""),
-        ("group", 2): ("landscape", 1, ("cut v",), "zoom:1.41421"),
-        ("group", 1): ("portrait", 1, (), "zoom:2.00000"),
-        ("topic", 4): ("landscape", 2, ("cut v", "cut h"), ""),
-        ("topic", 2): ("portrait", 1, ("cut h",), "zoom:1.41421"),
-        ("topic", 1): ("landscape", 1, (), "zoom:2.00000"),
-    }
+    _bob, bob_id = person(rsvc, "bob@belfry.test", "Bob")
     with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
         signed_in(c, rsvc, land.ada_id)
-        for (kind, per), key in keys.items():
-            r = c.get(f"/cards/print/{key}", headers=H)
-            assert r.status_code == 200, (kind, per)
-            p = r.text
-            side, sheets, cuts, zoom = want[(kind, per)]
-            n = len(found[key]["cards"])
-            assert f"@page{{size:A4 {side};margin:0}}" in p, (kind, per)
-            assert p.count('class="sheet"') == sheets and p.count("<svg") == n
-            for cut in ("cut v", "cut h"):
-                assert (f'class="{cut}"' in p) == (cut in cuts), (kind, per, cut)
-            assert (zoom in p) if zoom else ("zoom:" not in p)
-            assert rsvc.settings.community_name in p
-            assert "window.print()" in p  # the print dialog opens by itself
-            assert "chat.belfry.test" not in p  # the address is in the QR code only
-            for m in found[key]["cards"]:
-                assert m["id"] not in p  # and so is the id
-            if kind == "group":
-                assert p.count('class="a6"') == n
-                assert p.count("<b>Group</b> · people you get to know. Join and say hi.") == n
-                assert p.count("<b>Group name:</b>") == n and p.count("<b>Description:</b>") == n
-                assert p.count("Scan to join this group") == n
-                assert "width:397px;height:561.5px" in p
-            else:
-                assert p.count('class="a6l"') == n
-                assert p.count("<b>Topic</b> · come and go, share what you know.") == n
-                assert p.count('class="hash"><b>#</b>') == n and p.count("<b>About:</b>") == n
-                assert p.count("Scan to contribute to this topic") == n
-                assert p.count(">No account required<") == n
-                assert "width:561.5px;height:397px" in p
-        assert c.get("/cards/print/12345", headers=H).status_code == 404
-        assert c.get("/cards/print/x%3Cb%3E", headers=H).status_code in (400, 404, 422)
-    # the QR is the card's address, at error correction Q
-    import segno
-
-    url = f"https://chat.belfry.test/g/{found[keys[('group', 4)]]['cards'][0]['id']}"
-    code = segno.make(url, error="q")
-    assert code.error in ("Q", "H") and not code.is_micro
-    assert cardsconsole.qr_svg(url) == code.svg_inline(
-        scale=4, border=0, dark="#000", light="#fff", omitsize=True
-    )
-    # a batch made before "cards per page" existed prints four to a sheet
-    assert cardsconsole.layout("group", 4)["side"] == "portrait"
-    assert cardsconsole.make(rsvc, "group", "old", 1, land.ada_id) and all(
-        b["per_page"] in (1, 2, 4) for b in cardsconsole.batches(rsvc)
-    )
+        r = post(c, "/cards/make", kind="topic", per_page="2", pages="2", batch="Market / day")
+        key = cardsconsole.batches(rsvc)[0]["key"]
+        assert r.status_code == 303 and r.headers["location"] == f"/cards/batch/{key}.pdf"
+        r = c.get(f"/cards/batch/{key}.pdf", headers=H)
+        assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+        assert r.headers["content-disposition"] == 'inline; filename="Market day.pdf"'
+        assert r.content.startswith(b"%PDF-") and r.content.rstrip().endswith(b"%%EOF")
+        # two topic cards a page: upright A4 pages, two of them for four cards
+        sizes = re.findall(rb"/MediaBox \[0 0 ([0-9.]+) ([0-9.]+)\]", r.content)
+        assert sizes and all(float(w) < float(h) for w, h in sizes)
+        assert len(re.findall(rb"/Type /Page\b(?!s)", r.content)) == 2
+        for m in cardsconsole.batches(rsvc)[0]["cards"]:
+            assert m["id"].encode() not in r.content
+        # a batch made before "cards per page" existed is four to a sheet
+        old = cardsconsole.make(rsvc, "group", "Old", 5, land.ada_id)
+        r = c.get(f"/cards/batch/{old}.pdf", headers=H)
+        assert r.status_code == 200 and len(re.findall(rb"/Type /Page\b(?!s)", r.content)) == 2
+        for bad in ("12345.pdf", f"{key}", f"{key}.html", "x%3Cb%3E.pdf"):
+            assert c.get(f"/cards/batch/{bad}", headers=H).status_code == 404, bad
+        assert (
+            c.get(f"/cards/print/{key}", headers=H).status_code == 404
+        )  # the HTML sheets are gone
+        signed_in(c, rsvc, bob_id)
+        assert c.get(f"/cards/batch/{key}.pdf", headers=H).status_code == 403
+        c.cookies.clear()
+        r = c.get(f"/cards/batch/{key}.pdf", headers=H, follow_redirects=False)
+        assert r.status_code == 303 and "/login" in r.headers["location"]
 
 
 def test_the_list_names_groups_and_starters_and_reset_frees_a_card(land):
@@ -899,7 +1045,7 @@ def test_the_list_names_groups_and_starters_and_reset_frees_a_card(land):
         assert "<td>Bob Baker</td>" in t and "<td>Lou (guest steward)</td>" in t
         assert t.count(">Claimed<") == 3 and t.count("Not scanned yet") == 1
         assert f'action="/cards/{card}/reset"' in t and t.count(">Reset<") == 3
-        assert f'href="/cards/print/{key}"' in t  # the batch's name opens its sheets again
+        assert f'href="/cards/batch/{key}.pdf"' in t  # the batch's name opens its PDF again
         assert call(c, bob, f"/cards/{card2}/retire", {}).status_code == 403
         assert call(c, gus, f"/cards/{card2}/retire", {}).status_code == 200
         t = c.get("/cards", headers=H).text

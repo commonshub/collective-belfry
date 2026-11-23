@@ -1,19 +1,15 @@
 """``belfry.<domain>/cards``: printed cards, for the belfry's admins (docs/cards.md §5).
 
-The page and the sheets follow the canvas "Belfry · Group cards" (boards cards/print,
-cards/print-sheet, cards/print-sheet-channels): their layout, words and sizes are copied here.
+The page follows the canvas "Belfry · Group cards" (board cards/print): its layout, words and
+sizes are copied here. The cards themselves are drawn into a PDF by cardspdf.py.
 
 - **Make cards**: Groups or Topics, picked from two tiles that each show the printed card;
   cards per page (1 on A4, 2 A5, 4 A6); how many pages, with the number of cards that makes; a
-  batch name ("Batch N" unless typed); **Generate PDF**. No PDF library ships with the service,
-  so the button opens the batch's sheets in a new tab and the browser's print dialog there
-  (Save as PDF): the print CSS gives exact A4 pages.
+  batch name ("Batch N" unless typed); **Generate PDF**: the batch is made and its PDF opens
+  (``/cards/batch/<batch>.pdf``) in a new tab.
 - **Cards made**: Card · For · Batch · State · Name · Started by, and Reset on a used card
   (unclaimed again, its link revoked, the group it started left as it is). A batch's name opens
-  its sheets again.
-- The sheets (``/cards/print/<batch>``): the boards' card at its drawn size for four A6 on an
-  A4, and the same card enlarged for two A5 (× √2) or one A4 (× 2). Group cards are upright,
-  topic cards on their side. The card's id is in the QR code only.
+  its PDF again.
 
 Every form carries the console's csrf and answers with a fixed message (flash.py). A batch is
 found by the number in its address (the second it was made); nothing from the address is shown.
@@ -27,12 +23,11 @@ import secrets as pysecrets
 import time
 from typing import Any
 
-import segno
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import cards, console, flash
+from . import cards, cardspdf, console, flash
 from .core import Services
 
 log = logging.getLogger(__name__)
@@ -48,11 +43,7 @@ STATE = {
     "claimed": ("Claimed", " on"),
     "retired": ("Retired", " off"),
 }
-# the words on the printed cards (the boards' own)
-KIND_LINE = {
-    "group": "people you get to know. Join and say hi.",
-    "topic": "come and go, share what you know.",
-}
+# the words on the printed cards, for the tiles' small pictures (cardspdf.py draws the cards)
 SCAN = {"group": "Scan to join this group", "topic": "Scan to contribute to this topic"}
 FINE = {"group": "", "topic": "No account required"}
 
@@ -157,14 +148,6 @@ f.addEventListener('input',up);f.addEventListener('change',up);up();
 f.addEventListener('submit',function(){setTimeout(function(){location.reload()},1500)});
 })();
 </script>""".replace("%d", str(PAGES_MAX))
-
-
-def qr_svg(url: str) -> str:
-    """The QR code as inline SVG, black on white, error correction Q. No quiet zone of its own,
-    as on the board: the white card around it is the quiet zone."""
-    return segno.make(url, error="q", micro=False).svg_inline(
-        scale=4, border=0, dark="#000", light="#fff", omitsize=True
-    )
 
 
 def batches(svc: Services) -> list[dict[str, Any]]:
@@ -304,7 +287,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
             trs += (
                 f'<tr><td class="cid">{E(c["id"])}</td>'
                 f'<td><span class="kindp"><i style="{size}"></i>{E(KIND_NAME.get(c["kind"], ""))}</span></td>'
-                f'<td><a class="bn" href="{PATH}/print/{b["key"]}" target="_blank" rel="noopener" title="Print this batch again">{E(b["name"])}</a></td>'
+                f'<td><a class="bn" href="{PATH}/batch/{b["key"]}.pdf" target="_blank" rel="noopener" title="Open the PDF of this batch again">{E(b["name"])}</a></td>'
                 f'<td><span class="pill{cls}">{E(label)}</span></td>'
                 f"<td>{E(name)}</td><td>{E(starters.get(c['id'], ''))}</td><td>{reset}</td></tr>"
             )
@@ -319,119 +302,14 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
     return console.frame("Printed cards", PATH, who, body, panels=True)
 
 
-# ── the sheets ──────────────────────────────────────────────────────────────────────────────
-# The boards draw an A4 as 794 × 1123 px, which is its size in CSS pixels (96 to the inch), so
-# their numbers are used as they are. One card is the board's A6 (397 × 561.5 px, or on its side);
-# for two A5 or one A4 the same card is enlarged (zoom √2 or 2), which fills the cell exactly.
-CARD_STYLE = """
-@font-face{font-family:'Inter';font-style:normal;font-display:block;font-weight:100 900;src:url(/theme/belfry/fonts/inter-latin-wght-normal.woff2) format('woff2')}
-@font-face{font-family:'Inter';font-style:normal;font-display:block;font-weight:100 900;src:url(/theme/belfry/fonts/inter-latin-ext-wght-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1E00-1E9F,U+20A0-20C0,U+2C60-2C7F,U+A720-A7FF}
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;background:#fff;color:#000}
-body{font-family:Inter,-apple-system,system-ui,sans-serif;font-size:17px;line-height:22px;letter-spacing:-0.01em;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.bar{padding:14px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #D1D1D6;font-size:15px;letter-spacing:0}
-.bar button{font:inherit;font-weight:600;height:40px;padding:0 20px;border:0;border-radius:20px;background:#000;color:#fff;cursor:pointer}
-.bar a{color:#0A5FC4}
-.sheet{position:relative;display:grid;overflow:hidden;margin:0 auto;break-after:page;page-break-after:always;break-inside:avoid}
-.sheet:last-child{break-after:auto;page-break-after:auto}
-.cell{overflow:hidden;position:relative}
-.cut{position:absolute;background:none;border:0 dashed #B0B0B5}
-.cut.v{left:50%;top:0;bottom:0;border-left-width:1px}
-.cut.h{top:50%;left:0;right:0;border-top-width:1px}
-.brand{display:flex;align-items:center;gap:8px;font-weight:700;color:#000}
-.brand img{flex:none;width:auto;object-fit:contain;filter:grayscale(1)}
-.kind{font-size:14px;line-height:19px;color:#3A3A3C;margin:0 0 10px}
-.kind b{color:#000}
-.topic{flex:1;border:2px solid #000;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column}
-.topic b{font-size:20px;margin-bottom:10px}
-.topic i{display:block;height:0;border-bottom:1px solid #C7C7CC;margin-top:34px}
-.qr svg{display:block;width:100%;height:100%}
-.a6{width:397px;height:561.5px;padding:30px 32px 26px;display:flex;flex-direction:column}
-.a6 .brand{font-size:16px;margin:0 0 6px}
-.a6 .brand img{height:25px;max-width:60px}
-.a6 .low{display:flex;align-items:flex-end;gap:14px;margin-top:16px}
-.a6 .qr{width:112px;height:112px;flex:none}
-.a6 .lowt{flex:1;display:flex;flex-direction:column;gap:6px}
-.a6 .line{font-size:16px;font-weight:600;color:#000}
-.a6l{width:561.5px;height:397px;padding:24px 28px;display:flex;gap:20px}
-.a6l .lft{flex:1;display:flex;flex-direction:column;min-width:0}
-.a6l .brand{font-size:15px;margin:0 0 6px}
-.a6l .brand img{height:23px;max-width:56px}
-.a6l .hash{display:flex;align-items:flex-end;gap:6px;border:2px solid #000;border-radius:14px;padding:10px 14px 14px;flex:none}
-.a6l .hash b{font-size:34px;line-height:34px}
-.a6l .hash i{flex:1;border-bottom:1px solid #C7C7CC;height:0;margin-bottom:6px}
-.a6l .topic{margin-top:10px;padding:10px 14px}
-.a6l .topic b{font-size:18px;margin-bottom:4px}
-.a6l .topic i{margin-top:28px}
-.a6l .rgt{width:150px;flex:none;display:flex;flex-direction:column;justify-content:flex-end;gap:8px}
-.a6l .rgt .qr{width:150px;height:150px}
-.a6l .line{font-size:16px;line-height:21px;font-weight:600;color:#000}
-.a6l .fine{font-size:12px;color:#6C6C70}
-@media print{.bar{display:none}.sheet{margin:0}}
-@media screen{body{background:#E5E5EA}.sheet{background:#fff;margin:16px auto;box-shadow:0 1px 4px rgba(0,0,0,.15)}}
-"""
-
-
-def layout(kind: str, per_page: int) -> dict[str, Any]:
-    """How PER_PAGE cards of KIND sit on an A4: the sheet's side, its columns and rows, and how
-    much the A6 card is enlarged. Sizes in mm; the sheet is a hair short of the page so that no
-    rounding ever pushes a blank page out."""
-    upright = kind != "topic"
-    if per_page == 4:
-        side, cols, rows, zoom = ("portrait" if upright else "landscape"), 2, 2, 1.0
-    elif per_page == 2:  # two A5: upright ones side by side, lying ones one above the other
-        side, cols, rows, zoom = (
-            ("landscape", 2, 1, 2**0.5) if upright else ("portrait", 1, 2, 2**0.5)
-        )
-    else:
-        side, cols, rows, zoom = ("portrait" if upright else "landscape"), 1, 1, 2.0
-    width, height = (210.0, 296.6) if side == "portrait" else (297.0, 209.6)
-    return {"side": side, "cols": cols, "rows": rows, "zoom": zoom, "w": width, "h": height}
-
-
-def card_html(svc: Services, kind: str, card_id: str, logo: str, community: str) -> str:
-    """One card, as the board draws it."""
-    qr = f'<div class="qr">{qr_svg(cards.card_url(svc, card_id))}</div>'
-    brand = f'<div class="brand"><img src="{E(logo)}" alt="">{E(community)}</div>'
-    if kind == "topic":
-        return f"""<div class="a6l"><div class="lft">{brand}<div class="kind"><b>Topic</b> · {E(KIND_LINE["topic"])}</div><div class="hash"><b>#</b><i></i></div><div class="topic"><b>About:</b><i></i><i></i><i></i></div></div><div class="rgt">{qr}<span class="line">{E(SCAN["topic"])}</span><span class="fine">{E(FINE["topic"])}</span></div></div>"""
-    return f"""<div class="a6">{brand}<div class="kind"><b>Group</b> · {E(KIND_LINE["group"])}</div><div class="topic" style="flex:none"><b>Group name:</b><i style="margin-top:22px"></i><i></i></div><div class="topic" style="margin-top:12px"><b>Description:</b><i style="margin-top:22px"></i><i></i><i></i><i></i></div><div class="low">{qr}<span class="lowt"><span class="line">{E(SCAN["group"])}</span></span></div></div>"""
-
-
-def print_html(svc: Services, batch: dict[str, Any]) -> str:
-    """The batch as A4 sheets. A page of its own (no menu, no theme): the boards' cards, sized
-    for the browser's Print, which opens by itself."""
-    logo, community = console.brand_mark()
-    kind = "topic" if batch["kind"] == "topic" else "group"
-    per_page = batch.get("per_page") if batch.get("per_page") in PER_PAGE else 4
-    lay = layout(kind, per_page)
-    zoom = f"zoom:{lay['zoom']:.5f}" if lay["zoom"] != 1 else ""
-    cuts = ('<span class="cut v"></span>' if lay["cols"] == 2 else "") + (
-        '<span class="cut h"></span>' if lay["rows"] == 2 else ""
+def pdf_of(svc: Services, batch: dict[str, Any]) -> bytes:
+    """The batch's cards as a PDF (cardspdf.py): one card per id, in the batch's order."""
+    _logo, community = console.brand_mark()
+    urls = [cards.card_url(svc, c["id"]) for c in batch["cards"]]
+    data, _sheet, _layout = cardspdf.render(
+        svc, batch["kind"], int(batch.get("per_page") or 4), urls, community, batch["name"]
     )
-    sheets = ""
-    rows = batch["cards"]
-    for i in range(0, len(rows), per_page):
-        cells = "".join(
-            f'<div class="cell"><div style="{zoom}">{card_html(svc, kind, c["id"], logo, community)}</div></div>'
-            for c in rows[i : i + per_page]
-        )
-        sheets += f'<div class="sheet">{cells}{cuts}</div>'
-    grid = (
-        f".sheet{{width:{lay['w']}mm;height:{lay['h']}mm;"
-        f"grid-template-columns:repeat({lay['cols']},1fr);"
-        f"grid-template-rows:repeat({lay['rows']},1fr)}}"
-    )
-    n = len(rows)
-    what = f"{n} {kind} card" + ("" if n == 1 else "s")
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light"><meta name="robots" content="noindex"><title>Printed cards</title>
-<style>@page{{size:A4 {lay["side"]};margin:0}}{CARD_STYLE}{grid}</style></head>
-<body><div class="bar"><button type="button" onclick="window.print()">Print or save as PDF</button>
-<span>{E(what)}, {E(on_each(per_page))} ({lay["side"]}). Print at 100%, without margins.</span>
-<a href="{PATH}">Back to Printed cards</a></div>
-{sheets}<script>window.addEventListener('load',function(){{var go=function(){{setTimeout(function(){{window.print()}},200)}};if(document.fonts&&document.fonts.ready){{document.fonts.ready.then(go,go)}}else{{go()}}}});</script></body></html>"""
+    return data
 
 
 def register(app: FastAPI) -> None:
@@ -464,19 +342,32 @@ def register(app: FastAPI) -> None:
         out = await run_in_threadpool(page_html, s, me, msg, err)
         return flash.clear(HTMLResponse(out, headers={"Cache-Control": "no-store"}), request)
 
-    @app.get("/console/cards/print/{key}", response_class=HTMLResponse)
-    async def cards_print(request: Request, key: int):
+    @app.get("/console/cards/batch/{name}")
+    async def cards_pdf(request: Request, name: str):
+        """A batch as a PDF (cardspdf.py): ``/cards/batch/<batch>.pdf``, for admins."""
         s = svc(request)
         me = await who(request)
         if (no := refused(me)) is not None:
             return no
+        key = name.removesuffix(".pdf")
         found = await run_in_threadpool(batches, s) if cards.own(s) else []
-        batch = next((b for b in found if b["key"] == key), None)
+        batch = next(
+            (b for b in found if name.endswith(".pdf") and key.isdigit() and b["key"] == int(key)),
+            None,
+        )
         if batch is None:
             body = "<h1>Printed cards</h1><p>No such batch.</p>"
             return HTMLResponse(console.frame("Printed cards", PATH, me, body), status_code=404)
-        out = await run_in_threadpool(print_html, s, batch)
-        return HTMLResponse(out, headers={"Cache-Control": "no-store"})
+        data = await run_in_threadpool(pdf_of, s, batch)
+        return Response(
+            data,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{cardspdf.filename(batch["name"])}"',
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     async def admin_form(request: Request) -> tuple[dict[str, Any] | None, Any]:
         form = await request.form()
@@ -496,8 +387,7 @@ def register(app: FastAPI) -> None:
 
     @app.post("/console/cards/make")
     async def cards_make(request: Request):
-        """ "Generate PDF": the batch is made and its sheets open (the form's own new tab), where
-        the browser's print dialog saves them as a PDF."""
+        """Generate PDF: the batch is made and its PDF opens (in the form's own new tab)."""
         me, form = await admin_form(request)
         if me is None:
             return back(request, err="expired")
@@ -517,7 +407,7 @@ def register(app: FastAPI) -> None:
         key = await run_in_threadpool(
             make, s, kind, name, pages * per_page, int(me["partner"]), per_page
         )
-        return RedirectResponse(f"{PATH}/print/{key}", status_code=303)
+        return RedirectResponse(f"{PATH}/batch/{key}.pdf", status_code=303)
 
     @app.post("/console/cards/{card_id}/reset")
     async def cards_reset(request: Request, card_id: str):
@@ -535,4 +425,4 @@ def register(app: FastAPI) -> None:
         return back(request, msg="reset")
 
 
-__all__ = ["register", "page_html", "print_html", "batches", "make", "qr_svg", "layout"]
+__all__ = ["register", "page_html", "pdf_of", "batches", "make"]

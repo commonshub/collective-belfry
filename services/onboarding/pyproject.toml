@@ -22,6 +22,7 @@ dependencies = [
     "pyspf>=2.0.14",
     "dnspython>=2.6",
     "webauthn>=2.0",
+    "fpdf2>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +44,7 @@ build-backend = "setuptools.build_meta"
 include = ["belfry_onboarding*"]
 
 [tool.setuptools.package-data]
-belfry_onboarding = ["themes/**/*", "static/*", "data/*"]
+belfry_onboarding = ["themes/**/*", "static/*", "data/*", "fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

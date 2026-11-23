@@ -79,11 +79,18 @@ Who may: a member, or a guest who has saved their account (a name and a proven e
    `["guest", "2099-12-31"]` (their pass of this group has no end, §4; the shape `/group-roles` and co-host links write);
 3. for a group, posts in `general` exactly what the chat posts: kind 9,
    `⬡ New group: <title> · <about>` (no ` · ` without an about), tags
-   `[["h", "general"], ["pod", <id>]]`. A topic is not announced: it is a channel in the list;
+   `[["h", "general"], ["pod", <id>], ["by", <key>]]`. A topic is not announced: it is a channel in the list;
 4. posts the first line in the group: kind 9, `<name> started this group from a printed card`
    (`… this topic …` for a topic), tags `["h", <id>]`, `["p", <key>]`, `["card", "1"]`. Never the
    card's id;
 5. makes the card's guest link (§3) and marks the card claimed.
+
+**Who created it.** The relay only takes these events from the groups key, so the belfry writes
+them for the person, and each says whose it is: `["by", <the claimer's public key>]` on the
+`9007`, the `9002`, the "⬡ New group" post in `general` and the first line in the group (which
+keeps its `["p", <key>]` and `["card", "1"]`), as on the `9000`s the belfry writes for someone
+(`/group-roles`, `/group-requests/decide`). Apps show the group as created, and those posts as
+written, by that person: never by the belfry.
 
 Steps 3 and 4 are best effort (a relay that refuses them does not undo the group). A `9002` or
 `9000` that fails deletes the group again (`9008`) and answers `503 relay`.
@@ -242,29 +249,45 @@ follow the canvas boards `cards/print` (+ dark), `cards/print-sheet` and
   - Pages: 1 to 50 (`pages`), with the total next to it ("= 8 cards · 4 A6 on each A4").
   - Batch name (`batch`, up to 60 characters): "Batch N" unless typed, N = every batch this
     belfry made so far, plus one.
-  - **Generate PDF** (`POST /cards/make`, csrf): makes `pages × per_page` cards and opens the
-    batch's sheets in a new tab, where the browser's print dialog opens by itself (Save as PDF).
-    The service ships no PDF library, so the PDF is the browser's; the print CSS gives exact A4
-    pages with no margins.
+  - **Generate PDF** (`POST /cards/make`, csrf): makes `pages × per_page` cards and answers
+    `303` to the batch's PDF, `GET /cards/batch/<batch>.pdf` (admins only; `application/pdf`,
+    `Content-Disposition: inline; filename="<batch name>.pdf"`), which opens in a new tab.
+    `<batch>` is the batch's number (the second it was made).
 - **Cards made · N**: Card (its id) · For (Group / Topic) · Batch · State (Not scanned yet /
   Claimed / Retired) · Name (a group's name; a topic's `#hashtag`) · Started by (the person's
   name, with "(guest steward)" for a guest) · **Reset** on a used card (`POST
   /cards/<id>/reset`, csrf, a confirmation): unclaimed again, its link revoked, the group it
-  started left exactly as it is. A batch's name opens its sheets again (not on the board: there
-  is no other way to print a batch a second time).
-- **The sheets** (`/cards/print/<batch>`, admins only): the board's card, black on white, Inter.
-  - A group card (upright, 105 × 148.5 mm): the community's logo and name; "**Group** · people
-    you get to know. Join and say hi."; a box "Group name:" with two lines to write on; a box
-    "Description:" with four; the QR code (bottom left) with "Scan to join this group".
-  - A topic card (on its side, 148.5 × 105 mm): logo and name; "**Topic** · come and go, share
-    what you know."; a box "#" with a line; a box "About:" with three; on the right the QR code,
-    "Scan to contribute to this topic" and "No account required".
-  - 4 per page: the boards' sheets (group cards on an upright A4, topic cards on an A4 on its
-    side), a dashed cut line down and across the middle. 2 per page: the same card enlarged
-    × √2 to A5 (two upright cards side by side on an A4 on its side; two lying cards one above
-    the other on an upright A4), one cut line. 1 per page: enlarged × 2 to A4, no cut line.
-  - The card's id and address are in the QR code only (error correction Q; the white card is
-    its quiet zone). Cards made before `per_page` existed print four to a sheet.
+  started left exactly as it is. A batch's name opens its PDF again (not on the board: there is
+  no other way to print a batch a second time).
+- **The PDF** (`cardspdf.py`, drawn with fpdf2; a browser's own printing is not relied on:
+  Safari ignores `@page`). The board's cards, black on white, in Inter (static TTFs made from
+  the theme's own variable fonts, in `belfry_onboarding/fonts/`, OFL).
+  - A group card (upright): the belfry's logo and name; "**Group** · people you get to know.
+    Join and say hi."; a box "Group name:" with two lines to write on; a box "Description:" with
+    four; the QR code (bottom left) with "Scan to join this group".
+  - A topic card (on its side): logo and name; "**Topic** · come and go, share what you know.";
+    a box "#" with a line; a box "About:" with three; on the right the QR code, "Scan to
+    contribute to this topic" and "No account required".
+  - The page: A4. Nothing is drawn within 8 mm of a paper edge. The cells are equal, each as
+    large as that printable area allows at the card's own proportions, and the block of cells is
+    centred on the page. Dashed cut lines run between cells from one printable edge to the
+    other; none at the paper's edge.
+
+    | Cards per page | Group cards (upright) | Topic cards (on their side) |
+    |---|---|---|
+    | 4 | upright A4, 2 × 2, each 97 × 137.2 mm | A4 on its side, 2 × 2, each 137.2 × 97 mm |
+    | 2 | A4 on its side, side by side, each 137.2 × 194 mm | upright A4, one above the other, each 194 × 137.2 mm |
+    | 1 | upright A4, 194 × 274.4 mm | A4 on its side, 274.4 × 194 mm |
+
+    (The PDF page itself is upright or on its side as the table says: with two cards a page the
+    other way round would make them no larger than four a page.)
+  - The QR code is drawn as vector squares (error correction Q) with four modules of white kept
+    clear on every side; it is made a little smaller than on the board when that takes it. The
+    card's id and address are in the QR code only.
+  - The logo: the one an admin uploaded (branding) when it can be fetched and drawn, else the
+    theme folder's own `logo.svg` / `.png` / `.webp`, else the Arms in the belfry's colours
+    (black without any). A long name is set smaller, then cut with "…": it never leaves the card.
+  - Cards made before `per_page` existed are four to a sheet.
 
 What the cards promise and what v1 does: "Scan to contribute to this topic · No account
 required" is true for a topic that exists (someone who scans it reads it as a guest at once, and
@@ -282,7 +305,6 @@ yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the l
 
 - A weekly digest of a topic by e-mail.
 - Posting from a card without an e-mail address.
-- A PDF made by the server (the browser's print dialog makes it).
 - A preview of the group's recent messages before joining.
 - Deleting unused cards, moving a card to another group.
 - The phone apps (no `/g/*` in apple-app-site-association or assetlinks).

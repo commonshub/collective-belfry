@@ -324,9 +324,11 @@ def make_group(
     title, about = form["title"], form["about"]
     # a group as the chat's "New group" makes one (open, public); a topic as its "New channel"
     access = [] if topic else [["open"], ["public"]]
-    _publish(svc, 9007, [["h", group], *access])
+    # the groups key writes these for the person: `by` says whose they are (the creator)
+    by = ["by", who["pubkey"]]
+    _publish(svc, 9007, [["h", group], *access, by])
     try:
-        _publish(svc, 9002, [["h", group], ["name", title], ["about", about], *access])
+        _publish(svc, 9002, [["h", group], ["name", title], ["about", about], *access, by])
         tags = [["h", group], ["p", who["pubkey"], "admin"], ["role", "admin"]]
         tags.append(["by", who["pubkey"]])
         if who["name"]:
@@ -340,12 +342,12 @@ def make_group(
     # the rest is a courtesy: the group exists and has its steward
     if not topic:
         text = f"⬡ New group: {title}{' · ' + about if about else ''}"
-        if not events.publish(svc, 9, [["h", PARENT], ["pod", group]], text):
+        if not events.publish(svc, 9, [["h", PARENT], ["pod", group], by], text):
             log.warning("cards: %s not announced in #%s", group, PARENT)
     name = who["name"] or "Somebody"
     what = "topic" if topic else "group"
     line = f"{name} started this {what} from a printed card"
-    if not events.publish(svc, 9, [["h", group], ["p", who["pubkey"]], ["card", "1"]], line):
+    if not events.publish(svc, 9, [["h", group], ["p", who["pubkey"]], ["card", "1"], by], line):
         log.warning("cards: no first line in %s", group)
 
 
