@@ -219,15 +219,21 @@ def newest_anchor(events: list[dict[str, Any]], account: str) -> dict[str, Any] 
     return min(mine, key=lambda e: (-e["created_at"], e["id"])) if mine else None
 
 
-def _joins(prev: Roster, earlier_lbs: set[str], r: Roster) -> bool:
+def _joins(
+    prev: Roster, earlier_lbs: set[str], r: Roster, earlier_devices: set[str] | None = None
+) -> bool:
     """§5.7: a device that signed in adds itself. Signed by the new device, every device of
     ``prev`` kept in their order, the signer added last, a letterbox the chain never had. Only
     the account's anchor makes it count: valid on the anchored path, never after its end."""
     return (
         r.n == prev.n + 1
         and r.signer not in prev.devices
+        # a device the chain ever had (removed since) never adds itself again: it asks (5.2)
+        and r.signer not in (earlier_devices or ())
         and r.devices == (*prev.devices, r.signer)
         and r.lb not in earlier_lbs
+        # the joiner dates its own roster: never before the one it follows
+        and r.created_at >= prev.created_at
     )
 
 
@@ -284,12 +290,22 @@ def chain(
                 return None
         if at is None:
             return None
-        path, lbs = [root], {root.lb}
+        path, lbs, had = [root], {root.lb}, set(root.devices)
+        joined: set[str] = set()  # added themselves, not yet endorsed by an older device
         for r in reversed(back):
-            if not (_follows(path[-1], lbs, r) or _joins(path[-1], lbs, r)):
+            if _follows(path[-1], lbs, r):
+                # §5.7: until a device that was there before its join signs a roster, a
+                # device that added itself changes nothing (no adding, no removing)
+                if r.signer in joined:
+                    return None
+                joined.clear()  # an older device signed after them: endorsed
+            elif _joins(path[-1], lbs, r, had):
+                joined.add(r.signer)
+            else:
                 return None
             path.append(r)
             lbs.add(r.lb)
+            had.update(r.devices)
         return path
 
     rosters = path_to(anchor_head(anchor_event)) or [root]

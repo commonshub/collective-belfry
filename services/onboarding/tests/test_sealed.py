@@ -964,3 +964,37 @@ def test_a_signed_in_device_adds_itself_only_through_the_anchor():
     out = t.roster(P, A, 3, join, "alice_lb3", [P], 1200)
     c = sealed.chain(t.anchor(A, r1, 1201, head=out), [r1, join, out])
     assert c.head.id == out["id"] and c.devices == (pub_of[P],)
+
+
+def test_a_device_that_added_itself_is_limited_until_an_older_device_signs():
+    t = tool()
+    A, P, L, T = "alice", "alice_phone", "alice_laptop", "alice_tablet"
+    r1 = t.roster(P, A, 1, None, "alice_lb1", [P], 1000)
+    join = t.roster(L, A, 2, r1, "alice_lb2", [P, L], 1100)
+    ids = lambda c: [r.id for r in c.rosters]
+
+    # the joiner cannot remove the phone, nor add the tablet
+    for bad in (
+        t.roster(L, A, 3, join, "alice_lb3", [L], 1200),
+        t.roster(L, A, 3, join, "alice_lb2", [P, L, T], 1200),
+    ):
+        c = sealed.chain(t.anchor(A, r1, 1201, head=bad), [r1, join, bad])
+        assert ids(c) == [r1["id"]]  # an anchor naming an invalid path: the root
+
+    # the phone endorses it (any roster of its own after the join); then the laptop may act
+    ok = t.roster(P, A, 3, join, "alice_lb2", [P, L], 1200)
+    add = t.roster(L, A, 4, ok, "alice_lb2", [P, L, T], 1300)
+    c = sealed.chain(t.anchor(A, r1, 1301, head=add), [r1, join, ok, add])
+    assert ids(c) == [r1["id"], join["id"], ok["id"], add["id"]]
+
+    # dated before the roster it follows: not a join
+    early = t.roster(L, A, 2, r1, "alice_lb2", [P, L], 999)
+    c = sealed.chain(t.anchor(A, r1, 1101, head=early), [r1, early])
+    assert ids(c) == [r1["id"]]
+
+    # removed once, it never adds itself again
+    r2 = t.roster(P, A, 2, r1, "alice_lb1", [P, L], 1100)
+    r3 = t.roster(P, A, 3, r2, "alice_lb2", [P], 1200)
+    back = t.roster(L, A, 4, r3, "alice_lb3", [P, L], 1300)
+    c = sealed.chain(t.anchor(A, r1, 1301, head=back), [r1, r2, r3, back])
+    assert back["id"] not in ids(c) and c.devices == (t.PUB[P],)

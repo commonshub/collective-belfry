@@ -414,6 +414,48 @@ that added itself, that roster is its own join, and a request dated at or after 
 (`>=`, not `>`); the joiner dates its 8562 at or after its roster; a refusal is remembered
 per request, never against a later request of the same device.
 
+**Tightened after Android's review** (2026-11-23, before anything was built; these replace
+whatever above says otherwise).
+
+- *Validity, more.* A join's `created_at` is not before its prev's. Its signer is in NO
+  earlier roster of the path (a device the chain ever had asks, 5.2; a removed device with a
+  live session cannot walk back in). **A device that added itself changes nothing until an
+  older device has signed**: a normal roster (one that adds, removes, or only restates)
+  signed by a device that joined is invalid while no roster signed by a device that was in
+  the head BEFORE that join comes after the join on the path. So a joiner reads and writes,
+  and can neither remove my devices nor add others. (Server: `sealed.chain`, tests.)
+- *"It was me" endorses.* Besides the 8563, the device that is tapped publishes roster n+1 =
+  same devices, same `lb` (and its anchor). That roster is the endorsement; from then on the
+  joiner is a device like the others. Remove needs no endorsement (it is signed by an older
+  device).
+- *An older device that lacks the new secret* is "in the head, a letterbox behind": it keeps
+  everything (Remove, the notice, 8563, session checks, answering requests, writing: it
+  seals to the head letterbox by its public key); only reading the newer messages waits
+  ("Waiting for ‹session name›"). Never the locked / waiting state of a device outside the
+  head. So a joiner that never hands the secret on can always be removed.
+- *The joiner on first sight.* A device that follows a join reads `/api/me/sessions` fresh:
+  a joiner that is not a live chat session there is removed at once (5.6), with the notice
+  saying so. Notices and any per-day count use the time THIS device first saw the join, never
+  the roster's own date.
+- *Older keys.* A joiner is handed earlier letterboxes without a prompt only under exactly
+  step 2's conditions (fresh session row, request not older than the session, pinned and
+  trusted, never in the chain before, fewer than 3 devices let in within 24 h, joins
+  counted); otherwise the Allow card. Nobody hands a joiner its whole chain because the
+  joiner sent it an 8561: the "hand back" of 5.4 is for a fresh start only. A giver gives
+  what it holds.
+- *8563.* A confirmation signed by a device whose own added-notice is unanswered on this
+  device does not count yet (kept, judged again).
+- *Arrivals out of order.* A hand-over from a joiner that arrives before its roster is kept
+  and tried again. A device that first follows a join reads its wraps again from 0.
+- *Races and leftovers.* A join that lost the anchor to another roster is discarded and its
+  letterbox never reused; if the winning roster already holds the device, it asks for keys.
+  A device left out by a fresh start made elsewhere asks (5.2), it does not join. Remove on
+  a joiner also offers to remove the devices added since, while unanswered.
+- *Old apps.* An app that does not know this section rejects every join: a pinned device
+  keeps its old head and treats wraps to the join's letterbox as not for it. So the flag
+  goes on for a belfry only when its people's apps read joins (web live, the TestFlight
+  build, the Android release), and the first build that reads joins re-reads from 0.
+
 **What the other devices do.** They follow the anchored head as for any roster, take the new
 secret from the joiner's 8561 (accepted: the giver is a device of the chain), answer its 8562
 without a prompt, and show the 2a notice, once for all (2b): "‹session name› was added
@@ -426,8 +468,9 @@ name›" on newer sealed messages and asks (8562); any head device holding it an
 belfry's server, so its admins; someone with my mailbox) got my sealed messages only once one
 of my devices came online and added theirs (step 2), and only if fewer than 3 were added that
 day. Now they read everything sealed from the moment they join, with none of my devices
-needed, and the 3-a-day limit no longer stands in their way; and a joiner who never hands the
-new secret on keeps my own devices from reading new messages until I remove it. What stays:
+needed, and the 3-a-day limit no longer stands in their way; they can write as me in sealed
+conversations; and a joiner who never hands the new secret on keeps my own devices from
+reading new messages until I remove it. They cannot remove my devices or add more. What stays:
 they never get anything sealed before they joined unless a device of mine hands it over, and
 every device of mine says who was added and offers Remove. §1's "Not protected" says the same.
 
