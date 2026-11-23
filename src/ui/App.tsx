@@ -62,7 +62,7 @@ import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBa
 import { CardScreen } from './Card'
 import { GroupWho } from './WhoCanRead'
 import { cardNow, hashtagSlug, setDemoMake, takeCardFromUrl } from '../core/cards'
-import { encTest, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
+import { encTest, encWhy, onRemoved, removedNow, startEnc } from '../core/enc/runtime'
 import { testFormat3 } from '../core/access'
 import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 
@@ -237,7 +237,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         // guest's too (the lead's ruling, the review's P1.1); read always, written when belfry.json says 3
         if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret) {
           void startEnc(session.clientSecret)
-          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3 } })
+          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy } })
         }
         if (sealedOn) expectSealed()
         startDms()

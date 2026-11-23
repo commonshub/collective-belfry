@@ -7,6 +7,9 @@
 const { spawn } = require("child_process"); const fs = require("fs"); const crypto = require("crypto");
 const chat = process.env.HOME + "/agents/belfry-webapp/work/chat";
 const { finalizeEvent, getPublicKey, nip59 } = require(chat + "/node_modules/nostr-tools");
+// the web's own rules, for the parts the test plays itself (the groups key's posts and answers)
+require(chat + "/node_modules/esbuild").buildSync({ entryPoints: [chat + "/src/core/enc/core.ts"], bundle: true, platform: "node", format: "cjs", outfile: __dirname + "/.enc-core.cjs", logLevel: "error" });
+const EC = require(__dirname + "/.enc-core.cjs");
 const dir = __dirname, dist = process.argv[2] || chat + "/dist-enctest", base = "http://127.0.0.1:4482/", relayHttp = "http://127.0.0.1:4481";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let bad = 0; const check = (n, ok, got) => { if (!ok) bad++; console.log((ok ? "ok   " : "FAIL ") + n + (ok ? "" : " " + String(JSON.stringify(got)).slice(0, 500))); };
@@ -205,6 +208,7 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   const clear9 = finalizeEvent({ kind: 9, created_at: Math.floor(Date.now() / 1000), tags: [["h", gid]], content: "A clear one, after the key" }, linaSk);
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([clear9]) });
   await sleep(3000);
+  console.log("debug clear9:", JSON.stringify({ why: await S.ev(`window.__enc.why(${JSON.stringify(clear9)})`), at: clear9.created_at, shown: await has(S, "A clear one, after the key") }));
   check("…a clear kind 9 after the first key shows nowhere", !(await has(S, "A clear one, after the key")));
   // §23: a photo in the private group: encrypted before the upload; Lina's app opens it
   const upBefore = (await (await fetch(relayHttp + "/uploads")).json()).length;
@@ -227,6 +231,34 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   check("group Who can read this: 'Only the devices of these 2 people can read Garden committee'", /Only the devices of these 2 people can read Garden committee/.test(w) && /Others/.test(w) && /How it works/.test(w), w.slice(0, 400));
   await S.shot("group-who");
   await S.ev("history.back()"); await sleep(800);
+  // §24a: a belfry: button in the private group (posted by the groups key under its own key), pressed by Sam:
+  // the press into the group, and a copy to the groups key as a people conversation; then a faked answer
+  const gkSk = sk("groups-key"), gkPub = getPublicKey(gkSk);
+  const gkKey = EC.newKey();
+  const devs = [sS.device, getPublicKey(sk("sam-laptop")), s2.device, sL.device];
+  const genv = EC.groupEnvelopes(gkSk, gkKey.k, gid, devs, "lists").map((t) => finalizeEvent(t, gkSk));
+  const bmsg = EC.withId({ kind: 9, pubkey: gkPub, created_at: Math.floor(Date.now() / 1000), tags: [["h", gid], ["button", "close", "Close the request", "primary", "belfry:request-close"]], content: "A request from the web: Close it?" });
+  const bwrap = finalizeEvent(EC.groupMessage(gkSk, bmsg, gkKey.K, gid), gkSk);
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([...genv, bwrap]) });
+  await S.ev(`location.hash = '#/c/${gid}'`);
+  check("the groups key's message with its button opens in the private group", await until(() => has(S, "Close the request"), 20000), await S.ev("document.body.innerText.slice(-300)"));
+  const beforeB = new Set((await dump()).map((e) => e.id));
+  await S.ev("window.__w = []; const w0 = console.warn; console.warn = (...a) => { window.__w.push(a.join(' ')); w0(...a) }")
+  await S.ev("[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Close the request').click()"); await sleep(800);
+  await S.ev("[...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Close').at(-1).click()"); await sleep(5000); // the confirmation
+  const warns = await S.ev("JSON.stringify(window.__w)"); if (warns !== '[]') console.log("press warnings:", warns);
+  d = (await dump()).filter((e) => !beforeB.has(e.id));
+  check("the press went into the group encrypted (an 8572 by Sam, no clear 1985)", d.some((e) => e.kind === 8572 && e.pubkey === pkS && e.tags.some((t) => t[0] === "h" && t[1] === gid)) && !d.some((e) => e.kind === 1985 && e.tags.some((t) => t[0] === "h" && t[1] === gid)), d.map((e) => e.kind));
+  // the copy to the groups key: open its envelope and message with the groups key, as the server would
+  let copy = null;
+  for (const env of d.filter((e) => e.kind === 8571 && e.tags.some((t) => t[0] === "p" && t[1] === gkPub))) { try { const o = EC.openPeopleEnvelope(gkSk, env); if (o) { for (const m of d.filter((e) => e.kind === 8572 && e.tags.some((t) => t[0] === "p" && t[1] === gkPub))) { try { copy = EC.openPeopleMessage(o.rumor.content, m).rumor } catch {} } } } catch {} }
+  const tg = (n) => copy && copy.tags.filter((t) => t[0] === n);
+  check("the copy to the groups key: kind 1985, p = the groups key only, the button, k, e press, the message as content", !!copy && copy.kind === 1985 && tg("p").length === 1 && tg("p")[0][1] === gkPub && tg("button").some((t) => t[1] === "close" && t[4] === "belfry:request-close") && tg("k").some((t) => t[1] === "9") && tg("e").some((t) => t[3] === "press") && JSON.parse(copy.content).id === bmsg.id, copy && copy.tags);
+  // the answer, from the groups key into the group under its own key (never adopted for sending)
+  const pressId = copy && tg("e").find((t) => t[3] === "press")[1];
+  const ans = EC.withId({ kind: 1985, pubkey: gkPub, created_at: Math.floor(Date.now() / 1000), tags: [["L", "belfry/action-result"], ["l", "ok", "belfry/action-result"], ["e", bmsg.id], ["press", pressId || ""], ["p", pkS], ["h", gid], ["closed", "1"]], content: "Closed by the belfry." });
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent(EC.groupMessage(gkSk, ans, gkKey.K, gid), gkSk)]) });
+  check("the groups key's answer opens: 'Closed by the belfry.'", await until(() => has(S, "Closed by the belfry."), 20000), await S.ev("document.body.innerText.slice(-300)"));
   await S.shot("group");
   // (a) Android: a connection authenticated with a DEVICE key, not the account, gets no 8572 (§18.1)
   const got = await new Promise((res) => {

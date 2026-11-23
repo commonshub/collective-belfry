@@ -39,7 +39,7 @@ export function useVersion() {
 
 export async function loadAll() {
   const d = await db()
-  for (const e of await d.getAll('events')) events.set(e.id, e)
+  for (const e of await d.getAll('events')) if (!refuse(e)) events.set(e.id, e)
   for (const o of await d.getAll('outbox')) outbox.set(o.localId, o)
   bump()
 }
@@ -54,7 +54,16 @@ export const heldEvent = (id: string): Ev | undefined => events.get(id)
 
 /** enc/runtime.ts (§17.2): an event that must never count (a clear event in a private group after its first key). */
 let refuse: (e: NostrEvent) => boolean = () => false
-export const setRefuse = (f: (e: NostrEvent) => boolean) => { refuse = f }
+export const setRefuse = (f: (e: NostrEvent) => boolean) => { refuse = f; recheck() }
+/** Events already held that the rule now refuses (a private group's first key just became known)
+ *  go too: out of memory and out of the database. */
+export function recheck() {
+  const out = [...events.values()].filter((e) => refuse(e))
+  if (!out.length) return
+  for (const e of out) events.delete(e.id)
+  bump()
+  void db().then((d) => Promise.all(out.map((e) => d.delete('events', e.id)))).catch(() => {})
+}
 
 export function addEvents(list: NostrEvent[]) {
   let changed = false

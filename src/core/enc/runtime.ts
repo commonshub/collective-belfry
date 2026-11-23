@@ -10,7 +10,7 @@ import { finalizeEvent, getPublicKey, type Filter, type NostrEvent } from 'nostr
 import { BELFRY } from '../../config'
 import { belfryGroupsKey, belfryNostrKey, encryptedFormat, loadAccessInfo, onAccessInfo } from '../access'
 import { kvGet, kvSet } from '../db'
-import { addEvents, all, latestCreatedAt, outboxItems, setRefuse, subscribe } from '../store'
+import { addEvents, all, latestCreatedAt, outboxItems, recheck, setRefuse, subscribe } from '../store'
 import { allGroups, group as groupOf } from '../model'
 import { connectionOf, enqueueSigned, me, onOutbox, queryPaged, setEncryptsFiles, setExtraGroupsFilters, setExtraMainFilters, setGroupWrap, setPagedMainFilters } from '../sync'
 import * as E from './core'
@@ -55,7 +55,10 @@ async function saveKeys() {
     }
   })
 }
-function noteConv(conv: string, at: number) { const was = encConvs.get(conv); if (was === undefined || at < was) encConvs.set(conv, at) }
+function noteConv(conv: string, at: number) {
+  const was = encConvs.get(conv)
+  if (was === undefined || at < was) { encConvs.set(conv, at); if (conv.startsWith('g:')) queueMicrotask(() => recheck()) } // a group's first key: clear events after it go (§17.2)
+}
 function holdKey(r: KeyRec) {
   const had = keys.get(r.K)
   if (had) { // §17.12: the first valid declaration of a K fixes its people; only "unconfirmed" may clear
@@ -580,7 +583,7 @@ function refuseClear(e: NostrEvent): boolean {
   const h = hOf(e)
   if (!h || !isPrivateGroup(h) || clearInGroup(e)) return false
   const f = groupFirstAt(h)
-  return f !== undefined && e.created_at > f
+  return f !== undefined && e.created_at >= f // (the key's own second too: a same-second clear event never counts)
 }
 
 /** The group key named by a group 8572/8571 (d = K): held, or opened from the group's envelopes
@@ -630,6 +633,9 @@ async function openGroupMessages() {
   if (add.length) addEvents(add)
 }
 
+/** For a press sent at once (buttons.ts): the group's encryption, outside the outbox. */
+export const encryptGroupEvent = (tpl: { kind: number; content: string; tags: string[][]; created_at: number }) => wrapForGroup(tpl)
+
 /** §5 + §16.1 + §18.7 sending in a private group: the members' devices (39002 × their lists, read
  *  whole on this connection), the newest key whose entry set is exactly that device set (mine, or
  *  another member's), else a new key and its envelopes (signed by my account through the signer). */
@@ -642,11 +648,14 @@ async function wrapForGroup(tpl: { kind: number; content: string; tags: string[]
   const people = [...new Set([...g.members, me()])].sort()
   const toRead = people.filter((a) => chainFor(a) !== E.SERVICE && (!readOnThisConnection(a) || chainFor(a) === undefined))
   if (toRead.length && !(await readLists(toRead, 5000))) throw new Error('timeout: couldn’t check who can read this group')
+  // §23 (end): a member with no list at all after that read: read once more, then skipped for this message only
+  const none = people.filter((a) => chainFor(a) === undefined)
+  if (none.length) await readLists(none, 5000)
   if (listedHere() !== 'yes') throw new Error('timeout: this device isn’t set up for encrypted messages yet')
   const devices: string[] = [], lines: { account: string; id: string }[] = []
   for (const a of people) {
     const c = chainFor(a)
-    if (c === undefined) continue // a member with no list gets nothing (held for them: §17.5 is about people conversations)
+    if (c === undefined) continue // no list found after two reads: skipped for this message (§23); an empty list: no devices, no entry
     if (c === E.SERVICE) { devices.push(a); continue }
     if (c.fork || c.invalidAbove) throw new Error('timeout: couldn’t check who can read this group')
     devices.push(...E.receivers(E.current(c))); lines.push({ account: a, id: E.current(c).id })
@@ -719,4 +728,5 @@ export function encOnlyDevice(): boolean {
 export const encConvHere = (conv: string) => conv.startsWith('n:') && isEncConv([...conv.slice(2).split(','), me()])
 
 // tests against a local relay (TEST_RELAYS): public facts only, never a secret
+export const encWhy = (e: NostrEvent) => { const h = hOf(e) ?? ''; return { private: isPrivateGroup(h), first: groupFirstAt(h) ?? null, clear: clearInGroup(e), refused: refuseClear(e), sig: !!e.sig } }
 export const encTest = () => ({ device: encDevice(), keys: encKeyCount(), listed: listedHere(), on: encOn(), convs: [...encConvs.keys()], relay: BELFRY.mainRelay })

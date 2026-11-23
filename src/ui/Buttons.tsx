@@ -49,7 +49,8 @@ export function MessageButtons({ ev, groupId, disabled = false }: { ev: NostrEve
     setSendError('')
     try {
       await press(ev, groupId, b)
-    } catch {
+    } catch (e) {
+      console.warn('press:', e instanceof Error ? e.message : e) // (the why stays in the console; the line says it in words)
       setSendError("Couldn't send. Check your connection and try again.")
     }
   }
