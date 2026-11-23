@@ -88,6 +88,7 @@ def document(settings: Any) -> dict[str, Any]:
         "email_code": base + "/email-code",
         "session": base + "/session",
         "channel_invites": base + "/channel-invites",
+        "cards": base + "/cards",
         "follows": base + "/me/follows",
         "apply": site + "/apply",
         "invite_offer": shop + "/belfry/api/invites/{token}" if shop else "",
@@ -316,10 +317,12 @@ def preview_origin(settings: Any, origin: str | None, path: str) -> str | None:
 def _chat_only(settings: Any, origin: str, path: str) -> bool:
     """Writes the chat makes and the community's website never does (inviting to co-host,
     cohost.py): no CORS for the apex (published sites run there) nor the previews."""
+    from . import cards
     from .cohost import CHAT_ONLY
 
     domain = getattr(settings, "nip05_domain", "") or ""
-    return bool(CHAT_ONLY.match(path)) and origin.rstrip("/") in (
+    # printed cards too (cards.py): starting a group from one hands out a session
+    return bool(CHAT_ONLY.match(path) or cards.CHAT_ONLY.match(path)) and origin.rstrip("/") in (
         f"https://{domain}",
         f"https://preview.{domain}",
     )

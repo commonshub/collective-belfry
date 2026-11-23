@@ -704,6 +704,7 @@ ICONS = {
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
     "plugins": '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
     "sales": '<path d="M3 9V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6zM14 5v14"/>',
+    "cards": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20v.01M20 20v.01M17 20h.01M20 17h.01"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
     "trash": '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
@@ -718,6 +719,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
             ("/", "Home", "home", "member"),
             ("/website", "Website", "website", "admin"),
             ("/sales", "Sales", "sales", "admin"),
+            ("/cards", "Printed cards", "cards", "admin"),
         ],
     ),
     (

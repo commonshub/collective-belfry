@@ -40,6 +40,8 @@ from . import (
     blossom,
     branding,
     bridge,
+    cards,
+    cardsconsole,
     charter,
     checkin,
     claim,
@@ -324,6 +326,8 @@ def create_app(services: Services | None = None) -> FastAPI:
     checkin.register(app)  # /api/group-roles, /api/events/<d>/attendees|checkin (checkin.py)
     cohost.register(app)  # /api/events/<d>/cohost-invites(/answer|/withdraw) (cohost.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
+    cards.register(app)  # /api/cards: printed cards that start a group (cards.py)
+    cardsconsole.register(app)  # belfry.<domain>/cards: making and printing them
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
     places.register(app)  # /api/places: cities for profiles, and ones members add (places.py)
     admins.register(app)  # /api/admins: admins give the admin role from the chat (admins.py)
