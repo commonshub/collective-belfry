@@ -981,8 +981,18 @@ def test_a_device_that_added_itself_is_limited_until_an_older_device_signs():
         c = sealed.chain(t.anchor(A, r1, 1201, head=bad), [r1, join, bad])
         assert ids(c) == [r1["id"]]  # an anchor naming an invalid path: the root
 
-    # the phone endorses it (any roster of its own after the join); then the laptop may act
-    ok = t.roster(P, A, 3, join, "alice_lb2", [P, L], 1200)
+    # ... not in the provisional tail either
+    c = sealed.chain(t.anchor(A, r1, 1101, head=join), [r1, join, t.roster(L, A, 3, join, "alice_lb2", [P, L, T], 1200)])
+    assert ids(c) == [r1["id"], join["id"]]
+
+    # a roster of the phone that does not say so endorses nothing (a `ready` one, say)
+    plain = t.roster(P, A, 3, join, "alice_lb2", [P, L], 1200, ready=True)
+    still = t.roster(L, A, 4, plain, "alice_lb2", [P, L, T], 1300)
+    c = sealed.chain(t.anchor(A, r1, 1301, head=still), [r1, join, plain, still])
+    assert still["id"] not in ids(c)
+
+    # the phone endorses it ("It was me"); then the laptop may act
+    ok = t.roster(P, A, 3, join, "alice_lb2", [P, L], 1200, extra=[["endorse", t.PUB[L]]])
     add = t.roster(L, A, 4, ok, "alice_lb2", [P, L, T], 1300)
     c = sealed.chain(t.anchor(A, r1, 1301, head=add), [r1, join, ok, add])
     assert ids(c) == [r1["id"], join["id"], ok["id"], add["id"]]

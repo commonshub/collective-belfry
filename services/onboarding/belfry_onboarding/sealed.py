@@ -114,6 +114,8 @@ class Roster:
     devices: tuple[str, ...]
     ready: bool
     created_at: int
+    # §5.7: the devices this roster endorses (its ``endorse`` tags), after they added themselves
+    endorses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,7 @@ def parse_roster(event: Any, account: str) -> Roster | None:
         devices=devices,
         ready=any(t and t[0] == "ready" for t in event["tags"]),
         created_at=event["created_at"],
+        endorses=tuple(v for v in _values(event, "endorse") if is_key(v)),
     )
 
 
@@ -235,6 +238,23 @@ def _joins(
         # the joiner dates its own roster: never before the one it follows
         and r.created_at >= prev.created_at
     )
+
+
+def _unendorsed(path: list[Roster]) -> set[str]:
+    """§5.7: the devices of PATH that added themselves and that no later roster endorses. An
+    endorsement is a roster's ``["endorse", <device>]`` tag, signed by a device that was in
+    the roster BEFORE that device's join. A device that left the head is no longer waiting."""
+    waiting: dict[str, tuple[str, ...]] = {}  # joiner → the devices before its join
+    for before, r in zip(path, path[1:], strict=False):
+        if r.signer not in before.devices:  # a join (path steps are valid ones)
+            waiting[r.signer] = before.devices
+            continue
+        for d in r.endorses:
+            if d in waiting and r.signer in waiting[d]:
+                del waiting[d]
+        for d in [d for d in waiting if d not in r.devices]:
+            del waiting[d]
+    return set(waiting)
 
 
 def _follows(prev: Roster, earlier_lbs: set[str], r: Roster) -> bool:
@@ -291,17 +311,12 @@ def chain(
         if at is None:
             return None
         path, lbs, had = [root], {root.lb}, set(root.devices)
-        joined: set[str] = set()  # added themselves, not yet endorsed by an older device
         for r in reversed(back):
             if _follows(path[-1], lbs, r):
-                # §5.7: until a device that was there before its join signs a roster, a
-                # device that added itself changes nothing (no adding, no removing)
-                if r.signer in joined:
+                # §5.7: a device that added itself changes nothing until endorsed
+                if r.signer in _unendorsed(path):
                     return None
-                joined.clear()  # an older device signed after them: endorsed
-            elif _joins(path[-1], lbs, r, had):
-                joined.add(r.signer)
-            else:
+            elif not _joins(path[-1], lbs, r, had):
                 return None
             path.append(r)
             lbs.add(r.lb)
@@ -320,7 +335,12 @@ def chain(
             children.setdefault(r.prev, []).append(r)
     lbs = {r.lb for r in rosters}
     while True:  # what is published and not anchored yet
-        valid = [r for r in children.get(rosters[-1].id, []) if _follows(rosters[-1], lbs, r)]
+        waiting = _unendorsed(rosters)  # §5.7: their rosters count nowhere, the tail included
+        valid = [
+            r
+            for r in children.get(rosters[-1].id, [])
+            if _follows(rosters[-1], lbs, r) and r.signer not in waiting
+        ]
         if not valid:
             break
         rosters.append(min(valid, key=lambda r: r.id))  # a fork: the lower id, for now
