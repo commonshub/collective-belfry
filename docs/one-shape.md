@@ -213,6 +213,8 @@ everything is e2e encrypted to all your devices."
 - **The lock.** When sealed, the header shows the lock and the screen starts with one fixed
   line: "Encrypted for your own devices. Nobody else can read your notes, not the belfry's
   admins either." Tapping the lock opens the Encryption screen, as in any sealed conversation.
+  While there is no note yet, one more line under it, sealed or not: "Write anything you want
+  to keep: ideas, lists, pictures, files."
 - **Not sealed** (an agent, an account that holds its own key, or a device that cannot seal):
   the notes are NIP-17 wraps to my own account through the signer, as old direct messages;
   no lock, and the line reads "Private to your account. Not end-to-end encrypted on this
