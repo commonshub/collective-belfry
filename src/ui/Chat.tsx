@@ -10,7 +10,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postGuestMessage, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -917,7 +917,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             const key = m.ev.id
             return <Fragment key={key}>
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} prevAt={prevItem?.at} groupId={id}
-                name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
+                name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(authorOf(m.ev), ps)}
                 reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
                 thread={th.get(m.ev.id)} onThread={() => openThread(m)} onOpenThread={() => openThread(m)} threadOpen={false} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
             </Fragment>
@@ -1167,6 +1167,8 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   const frozen = !!group(groupId)?.archived // an archived group: no menu, no reacting
   // press and hold (phones) or right-click: react, reply, edit or delete your own
   const hold = useHold(() => onAct(), !!p || frozen)
+  // a card's group: the claimer, not the groups key that signed for them (model.authorOf)
+  const author = authorOf(m.ev)
   if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
@@ -1178,9 +1180,9 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
       <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail || isCard ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '') + (active ? ' thread-active' : '')}
         {...hold}>
-        {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
+        {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(author)} aria-label={`${name}: profile`}><Avatar pubkey={author} /></button> : <div className="gutter" />}
         <div className="body">
-          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}><PersonName pubkey={m.ev.pubkey} name={name === fallbackName(m.ev.pubkey) ? undefined : name} /></button><AgentTag pk={m.ev.pubkey} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{tag}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(author)}><PersonName pubkey={author} name={name === fallbackName(author) ? undefined : name} /></button><AgentTag pk={author} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{tag}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
           {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />

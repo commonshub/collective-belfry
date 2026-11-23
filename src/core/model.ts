@@ -187,6 +187,35 @@ export function plainRefs(text: string, npub = '@…'): string {
 export const isPodId = (id: string) => id.startsWith('pod-')
 export const isProposalId = (id: string) => id.startsWith('prop-')
 /** The pod a chat post announces (its `pod` tag), if any. */
+// ---- who really made it: the cards server signs for the claimer (Xavier, 23 Nov) --------------
+// The groups key signs a card's group or topic (9007, 9002, the "New group" post in general, the
+// first line) and names the person in ["by", <pubkey>]. Honoured only on events whose author is
+// exactly the groups key (belfry.json groups_key). Groups claimed before the server wrote `by`: the
+// ["p", …] of the group's kind 9 tagged ["card", "1"] by the groups key.
+let claimers: { list: Ev[]; map: Map<string, string> } = { list: [], map: new Map() }
+function claimerOf(group: string): string | undefined {
+  const list = all(me())
+  if (claimers.list !== list) {
+    const gk = belfryGroupsKey(), map = new Map<string, string>()
+    if (gk) for (const e of list) if (e.kind === 9 && e.pubkey === gk && e.tags.some((t) => t[0] === 'card' && t[1] === '1')) {
+      const h = e.tags.find((t) => t[0] === 'h')?.[1], p = e.tags.find((t) => t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? ''))?.[1]
+      if (h && p && !map.has(h)) map.set(h, p)
+    }
+    claimers = { list, map }
+  }
+  return claimers.map.get(group)
+}
+/** E's real author: the person behind an event the groups key signed for them (["by"], or the
+ *  card's claimer); anyone else's events are their own. */
+export function authorOf(e: { pubkey: string; kind: number; tags: string[][] }): string {
+  const gk = belfryGroupsKey()
+  if (!gk || e.pubkey !== gk) return e.pubkey
+  const by = e.tags.find((t) => t[0] === 'by' && /^[0-9a-f]{64}$/.test(t[1] ?? ''))?.[1]
+  if (by) return by
+  const group = e.tags.find((t) => t[0] === 'pod')?.[1] ?? e.tags.find((t) => t[0] === 'h')?.[1]
+  return (group && claimerOf(group)) || e.pubkey
+}
+
 export const podOf = (e: Ev) => {
   const v = tag(e, 'pod')
   return v && isPodId(v) ? v : undefined
@@ -248,7 +277,7 @@ const groupSets: () => GroupSets = perLog((list) => {
         g.metaAt.vouches = e.created_at
       }
     }
-    if (e.kind === 9007) made.set(id, made.get(id) ?? e.pubkey) // its creator administers it (Belfry's relay patch)
+    if (e.kind === 9007) made.set(id, made.get(id) ?? authorOf(e)) // its creator administers it (Belfry's relay patch); a card's claimer (authorOf)
     if (e.kind === 39001) listed.set(id, e.tags.filter((t) => t[0] === 'p' && t[1]).map((t) => t[1]))
     if (e.kind === 39002) g.members = new Set(e.tags.filter((t) => t[0] === 'p').map((t) => t[1]))
     // admitted (9000 put-user) or removed / declined (9001 remove-user) by an admin
@@ -885,7 +914,7 @@ export const calendar: () => CalEvent[] = perLog((list) => {
   const del = deleted(list)
   const gs = new Map(allGroups().map((g) => [g.id, g]))
   const creators = new Map<string, string>() // group id → its creator (first 9007)
-  for (const e of [...list].sort(byTime)) if (e.kind === 9007) { const h = tag(e, 'h'); if (h && !creators.has(h)) creators.set(h, e.pubkey) }
+  for (const e of [...list].sort(byTime)) if (e.kind === 9007) { const h = tag(e, 'h'); if (h && !creators.has(h)) creators.set(h, authorOf(e)) }
   // versions: by d for Belfry events (any host may write one), by coordinate for the older ones
   const byKey = new Map<string, Ev[]>()
   for (const e of list) {

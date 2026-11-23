@@ -27,7 +27,7 @@ import { NotifyOptions, NotifySheet, useNotifyRow } from './Follow'
 import { InviteSheet } from './Invite'
 import { Markdown } from './markdown'
 import { RichText, TopicsBar } from './Topics'
-import { BellIcon, CalendarIcon, ChevronRightIcon, DocIcon, GearIcon, GlobeIcon, ImageIcon, LinkIcon, PeopleIcon, PersonPlusIcon, PlusIcon, PodShape, PushPinIcon, TodoIcon } from './icons'
+import { BellIcon, CalendarIcon, ChevronRightIcon, DocIcon, GearIcon, GlobeIcon, ImageIcon, LinkIcon, PeopleIcon, PersonPlusIcon, PlusIcon, PodShape, PushPinIcon, TodoIcon, ClockIcon } from './icons'
 import { stateLabel } from './Calendar'
 
 const LockIcon = () => <svg className="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
@@ -96,6 +96,8 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
   // a channel's people are its followers (Xavier, 23 Nov); a group keeps its members
   rows.push({ page: 'members', icon: <PeopleIcon />, title: followsIt(g) ? 'Followers' : 'Members', n: g.members.size, hint: asking ? `${asking} asking to join` : undefined })
   if (!guestish) rows.push({ page: 'notifications', icon: <BellIcon on={notifyRow.on} />, title: 'Notifications', n: notifyRow.value })
+  // the activity log: a row like the others (Xavier, 23 Nov: "in its own menu as 'Activity log'")
+  if (f.allTasks.length + messages(id).length > 0) rows.push({ page: 'log', icon: <ClockIcon />, title: 'Activity log' })
   if (mayEdit(g) && !g.archived) rows.push({ page: 'settings', icon: <GearIcon />, title: 'Settings' })
   // Notifications is a sheet over the channel (three choices, applied on tap); the others are screens
   const open = (r: Row) => { if (r.page === 'notifications') { setNotify(true); return } onPick(); go(`c/${encodeURIComponent(id)}/${r.page}`) }
@@ -130,7 +132,6 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
         ))}
       </nav>
       <div className="cmenu-foot">
-        {f.allTasks.length + messages(id).length > 0 && <button className="link" onClick={() => { onPick(); go(`c/${encodeURIComponent(id)}/log`) }}>Log</button>}
         {g.isPod && g.members.has(me()) && <LeaveLink g={g} />}
       </div>
       {notify && <NotifySheet channel={id} onClose={() => setNotify(false)} />}
@@ -147,7 +148,7 @@ function LeaveLink({ g }: { g: Group }) {
   )
 }
 
-const TITLES: Record<string, string> = { pinned: 'Pinned', proposals: 'To decide', todos: 'To-dos', photos: 'Photos', files: 'Files', groups: 'Groups', topics: 'Topics', members: 'Members', notifications: 'Notifications', settings: 'Settings', log: 'Log' }
+const TITLES: Record<string, string> = { pinned: 'Pinned', proposals: 'To decide', todos: 'To-dos', photos: 'Photos', files: 'Files', groups: 'Groups', topics: 'Topics', members: 'Members', notifications: 'Notifications', settings: 'Settings', log: 'Activity log' }
 
 /** c/<id>/<page>: one of the menu's screens. */
 export function ChannelPage({ id, page }: { id: string; page: string }) {

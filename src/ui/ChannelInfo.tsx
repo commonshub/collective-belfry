@@ -13,7 +13,7 @@ import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from
 import { inboxKnown, isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage, nameOf } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, assignTask, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
-import { ACTIVE_DAYS, allGroups, archivable, followsIt, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
+import { ACTIVE_DAYS, allGroups, archivable, authorOf, followsIt, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
 import { isGuest } from '../core/invite'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
@@ -70,7 +70,7 @@ export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Ta
 export type InfoTab = Tab
 
 export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: (t: T) => void; tabs?: [T, string][] }) {
-  const list = tabs ?? ([['about', 'About'], ['members', 'Members'], ['tasks', 'To-dos'], ['files', 'Files'], ['log', 'Log']] as [T, string][])
+  const list = tabs ?? ([['about', 'About'], ['members', 'Members'], ['tasks', 'To-dos'], ['files', 'Files'], ['log', 'Activity log']] as [T, string][])
   return (
     <div className="seg">
       {list.map(([k, label]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{label}</button>)}
@@ -557,9 +557,8 @@ export function Members({ groupId }: { groupId: string }) {
       {reviewing.map((a) => <GroupRequest key={a.ev.id} g={g!} a={a} />)}
       {reviewing.length > 0 && <div className="section-title">{followsIt(g) ? 'Followers' : 'Members'} <span>{g?.members.size}</span></div>}
       <Guard fallback={null}><Suspense fallback={<div className="members-map" />}>
-        {mapped.length > 0
-          ? <MembersMap pubkeys={members} onOpen={openProfile} />
-          : <p className="hint pad-x">Nobody here shares their city yet. {isMember ? <button className="link" onClick={() => openProfile(me())}>Add yours</button> : null}</p>}
+        {/* no line when nobody shares their city (Xavier, 23 Nov): the map only when there is one */}
+        {mapped.length > 0 && <MembersMap pubkeys={members} onOpen={openProfile} />}
       </Suspense></Guard>
       {/* a row: face, name, the role here when it isn't the default (no labels: docs/checkin.md §5);
           a tap opens the profile, which shows the role here and lets this channel's admins change it */}
@@ -616,7 +615,7 @@ function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem |
     case 9021: return { ev: e, icon: '🙋', text: 'asked to join', detail: short(e.content, 200) }
     case 9022: return { ev: e, icon: '🚪', text: 'left' }
     case 9002: return { ev: e, icon: '⚙️', text: 'changed the channel', detail: [t('name'), t('about')].filter(Boolean).map((x) => short(x!, 120)).join(' · ') }
-    case 9007: return { ev: e, icon: '✨', text: 'created the channel' }
+    case 9007: return { ev: e, icon: '✨', text: group(groupId)?.isPod ? 'created the group' : 'created the channel' }
     case 1985: {
       const l = e.tags.find((x) => x[0] === 'l')?.[1] ?? ''
       if (t('L') === '#t') return { ev: e, icon: '#', text: 'changed the pinned topics' }
@@ -663,7 +662,7 @@ export function Log({ groupId }: { groupId: string }) {
             <div key={it.ev.id} className={'log-row' + (open === it.ev.id ? ' open' : '')}>
               <button className="log-main" onClick={() => setOpen(open === it.ev.id ? null : it.ev.id)} aria-expanded={open === it.ev.id}>
                 <span className="log-ico" aria-hidden="true">{it.icon}</span>
-                <span className="log-text"><b>{who(it.ev.pubkey)}</b> {it.text}{it.detail && open !== it.ev.id ? <small>{short(it.detail, 60)}</small> : null}</span>
+                <span className="log-text"><b>{who(authorOf(it.ev))}</b> {it.text}{it.detail && open !== it.ev.id ? <small>{short(it.detail, 60)}</small> : null}</span>
                 <time className="hint">{fmtTime(it.ev.created_at)}</time>
               </button>
               {open === it.ev.id && (
