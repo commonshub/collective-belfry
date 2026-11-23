@@ -345,8 +345,11 @@ services:
   # The config lives in the community-relay-config volume: relay-init seeds it from
   # relay/rnostr.toml once, then the onboarding service rewrites it from that template with the
   # pubkeys of all active passes and rnostr (--watch) reloads it. See relay/README.md.
+  # RELAY_IMAGE (set per box in infra/.env after its one-time export/import, relay/README.md):
+  # belfry-relay:private-<commit>-<n>, Belfry's rnostr with the private-kinds rule. Unset = the
+  # official v0.4.9 image, unchanged.
   relay-init:
-    image: rnostr/rnostr:latest@sha256:c022e4384f8fe1eb6023d497fe0c5cf9cd13d239f62160713546de4522f69214
+    image: ${RELAY_IMAGE:-rnostr/rnostr:latest@sha256:c022e4384f8fe1eb6023d497fe0c5cf9cd13d239f62160713546de4522f69214}
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -359,7 +362,7 @@ services:
     restart: "no"
 
   relay:
-    image: rnostr/rnostr:latest@sha256:c022e4384f8fe1eb6023d497fe0c5cf9cd13d239f62160713546de4522f69214
+    image: ${RELAY_IMAGE:-rnostr/rnostr:latest@sha256:c022e4384f8fe1eb6023d497fe0c5cf9cd13d239f62160713546de4522f69214}
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
