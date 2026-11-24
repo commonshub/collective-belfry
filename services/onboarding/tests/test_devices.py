@@ -429,7 +429,8 @@ def test_old_web_sessions_named_by_the_chat_address_are_devices():
     for name in ("chat.belfry.test · Safari on iPhone", "apps.belfry.test/chat · Chrome on iPhone"):
         assert discovery.chat_session(svc, {"application_name": name, "redirect_origin": ""}, names)
     for name in ("other.example · Safari", "belfry.test/website · Firefox"):
-        assert not discovery.chat_session(svc, {"application_name": name, "redirect_origin": ""}, names)
+        row = {"application_name": name, "redirect_origin": ""}
+        assert not discovery.chat_session(svc, row, names)
 
 
 def test_an_unreadable_list_table_is_moved_aside_and_rebuilt(tmp_path):
