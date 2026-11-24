@@ -40,6 +40,9 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   for any other change (title, description, cover, Event website, tickets, co-hosts); the host can
   always flip it. "turn off by default unless there is a change of date time or location or online
   url" (owner, Event form canvas evform-edit-confirm, 2026-11-24)
+- **EV-64** [apps, server] The Join online link is for people going only; the app shows it from 1
+  hour before the start, and the server e-mails it to them 1 hour before (lead's ruling on the
+  canvas's open point, 2026-11-24, to confirm with the owner).
 - **EV-62** [apps] The description comes after the links that follow from Where (owner, Event form
   v6, 2026-11-24).
 
