@@ -1,3 +1,4 @@
+import { myListDevices } from '../core/enc/runtime'
 import { NO_PREVIEW, buildPreviewTags, outsideLink, shownFor } from '../core/linkpreview'
 import { encryptedFormat } from '../core/access'
 /** Format 3 (the lead): a people conversation that is, or will be, encrypted: no link previews in it. */
@@ -26,8 +27,8 @@ import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
-import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
-import { AddedBanner, DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
+import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine, myDevices } from '../core/sealed'
+import { AddedBanner, DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine, SealIcon } from './Sealed'
 import { Avatar, Btn, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow, Pictures, PictureRow } from './common'
 import { placesOn } from './Places'
 import { SendingLine } from './Sending'
@@ -184,6 +185,8 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const title = mail ? (isNewMail(conv) ? `New e-mail to ${who}` : threadName(conv)) : convName(conv)
   const sealed = isSealed(conv)
   const notes = isNotes(conv)
+  // Xavier, 24 Nov: Notes' header says how many devices can read it; tapping it opens Who can read this
+  const notesDevices = notes ? (encryptedFormat() === 3 ? myListDevices() : myDevices().length) : 0
   // the device lines between the messages, by time (core/sealed.ts; none unless sealed)
   const lines = sealed && !locked ? deviceLines(conv) : []
   // pictures sent together and their caption are one bubble (dmfiles.ts bubbles)
@@ -199,7 +202,8 @@ export function MessageThread({ conv }: { conv: Conv }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button>
         {notes
-          ? <><span className="notes-face"><Avatar pubkey={me()} size={30} /></span><h1><span className="seal-title">{NOTES}{sealed && <LockButton conv={conv} />}</span></h1></>
+          ? <><span className="notes-face"><Avatar pubkey={me()} size={30} /></span>{sealed ? <button type="button" className="notes-head" aria-label={`Notes to myself, encrypted for your ${notesDevices === 1 ? 'device' : `${notesDevices} devices`}. See who can read this`} onClick={() => go('dm/' + enc(conv) + '/lock')}><h1><span className="seal-title">{NOTES}<span className="seal-lock" aria-hidden="true"><SealIcon size={13} /></span></span>{notesDevices > 0 && <small>Encrypted for your {notesDevices === 1 ? 'device' : `${notesDevices} devices`}</small>}</h1></button>
+            : <h1><span className="seal-title">{NOTES}</span></h1>}</>
           : !mail && peers(conv).length === 1
           ? <PersonHead pubkey={peers(conv)[0]} sealed={sealed ? conv : undefined} />
           : <><Who conv={conv} size={30} /><h1><span className="seal-title">{title}{sealed && <LockButton conv={conv} />}</span>{sub && <small>{sub}</small>}</h1></>}

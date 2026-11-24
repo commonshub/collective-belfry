@@ -34,7 +34,7 @@ export function WhoCanRead({ conv }: { conv: Conv }) {
   const myRows = (mine?.devices ?? []).slice().sort((a, b) => (a === here ? -1 : b === here ? 1 : (mine?.since?.get(a) ?? 0) - (mine?.since?.get(b) ?? 0)))
   const firstNames = others.map((p) => (realName(p) || displayName(p)).split(' ')[0])
   const lead = mail ? 'On the belfry, only your devices can read this conversation.'
-    : others.length === 0 ? 'Only your devices can read this conversation.'
+    : others.length === 0 ? 'Only your devices can read your notes.' // (Notes: encrypted/notes-self-who)
     : others.length === 1 ? `Only ${firstNames[0]}’s devices and yours can read this conversation.`
     : 'Only the devices of the people here can read this conversation.'
   return (

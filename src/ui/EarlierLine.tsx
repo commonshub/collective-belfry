@@ -3,7 +3,7 @@
 // an encrypted conversation. It can't know which conversation a message it can't open belongs to
 // (the alias hides it: the lead's ruling), so it speaks generally.
 import { useEffect, useState } from 'react'
-import { addedDevices, answerDevice, firstScreenDevices, firstScreenOk, goneOk, listWarnings, askForEarlier, askedNow, olderDevices, sharedByNow, shareWith, unresolvedCount, type AddedDevice } from '../core/enc/runtime'
+import { addedDevices, answerDevice, goneOk, listWarnings, askForEarlier, askedNow, olderDevices, sharedByNow, shareWith, unresolvedCount, type AddedDevice } from '../core/enc/runtime'
 import { displayName } from '../core/model'
 import { RemoveSheet } from './WhoCanRead'
 import { missingLetterboxes, mySessions, type SessionRow } from '../core/sealedrt'
@@ -61,20 +61,13 @@ export function AddedCards() {
   useEffect(() => { void mySessions(0).then(setRows) }, [])
   const [said, setSaid] = useState<string[]>([]) // confirmations stay after their card went (card-shared, card-removed)
   const list = addedDevices()
-  if (!list.length && !said.length && !listWarnings().fork && !listWarnings().strange && !firstScreenDevices().length) return null
+  if (!list.length && !said.length && !listWarnings().fork && !listWarnings().strange) return null
   const name = (k: string) => (rows ?? []).find((r) => r.client_pubkey === k)?.device || (rows ?? []).find((r) => r.client_pubkey === k)?.application_name || 'A new device'
   const byKey = (k: string) => (rows ?? []).find((r) => r.client_pubkey === k)
   const warn = listWarnings()
-  const first = firstScreenDevices()
   return <>
     {warn.fork && <div className="enc-card warn" role="alert"><b>Your belfry gave out two different lists of your devices</b><p>Something is wrong on the belfry’s side. Tell its admins; check Me › Devices.</p></div>}
     {warn.strange > 0 && <div className="enc-card warn" role="alert"><b>A device that was never on your list got your messages</b><p>Someone may be reading what is sent to you. Tell the belfry’s admins; check Me › Devices.</p></div>}
-    {first.length > 0 && <div className="enc-card" role="region" aria-label="These devices can read your messages">
-      <b>These devices can read your messages</b>
-      {first.map((d) => <p key={d}>{name(d)}{byKey(d)?.created_at ? ` · added ${fmtDay(new Date(String(byKey(d)!.created_at)))}` : ''}</p>)}
-      <p>Not yours? Remove it in Me › Devices.</p>
-      <div className="row-btns two"><button className="btn ghost" onClick={() => go('me/devices')}>Me › Devices</button><button className="btn" onClick={() => void firstScreenOk()}>OK</button></div>
-    </div>}
     {said.map((t, i) => <div key={i} className="enc-card done" role="status">{t}<button className="link" onClick={() => setSaid(said.filter((_, j) => j !== i))}>OK</button></div>)}
     {list.map((a) => <AddedCard key={a.device} a={a} name={a.reader ? displayName(a.device) : name(a.device)} onSaid={(t) => setSaid((x) => [...x, t])} bunker={(rows ?? []).find((r) => r.client_pubkey === a.device) as { bunker_pubkey?: string } | undefined} />)}
   </>

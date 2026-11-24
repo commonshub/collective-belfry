@@ -2327,3 +2327,7 @@ form .create-where { margin-bottom: 14px; }
 .evh-going { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
 .evh-more { margin-left: auto; color: var(--muted); font-size: 20px; }
 .ev-people-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+
+/* Notes to myself: the whole header opens Who can read this (encrypted/notes-self) */
+.notes-head { flex: 1; min-width: 0; background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.notes-head h1 { margin: 0; }

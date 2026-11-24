@@ -579,6 +579,9 @@ export function firstScreenDevices(): string[] {
 }
 export async function firstScreenOk() { firstScreenSeen = true; await kvSet(KV_FIRST_SCREEN, true).catch(() => {}); keyListeners.forEach((l) => l()) }
 
+/** How many devices my current list has (agent readers aside): Notes' "Encrypted for your N devices". */
+export function myListDevices(): number { const c = chainOnly(me()); return c ? E.current(c).devices.length : 0 }
+
 /** An answer seen for DEVICE (by another device of mine, or this one). */
 export const answerFor = (d: string) => answeredHere.get(d)
 
