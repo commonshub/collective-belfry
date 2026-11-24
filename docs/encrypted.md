@@ -76,12 +76,6 @@ content: ""
   a gap means "not loaded yet", ask again). Its event id is the **list id**.
 - Reading: `{kinds:[8570], authors:[belfry], "#p":[accounts…]}` on the community relay, kept on
   the live subscription.
-- Built (server, `devices.py`): a list is written after every session bound to a client key or
-  ended, in whatever part of the belfry it happens (the signer client is wrapped), and by a check
-  of every account every 10 minutes (sessions bound by their first `connect`, expiries, anything
-  missed); at most one list every 2 seconds. The counter and the latest list per account are kept
-  in `devices.sqlite` next to the register; before writing, the relay's latest list wins when it
-  is further on. Switch: `DEVICE_LISTS` (§12).
 - A device that does not find itself on its own account's current list within 60 s of signing
   in tells the person ("This device isn't set up for encrypted messages yet · Try again") and
   holds what it would send.
@@ -276,11 +270,7 @@ Messages list. An e-mail shows "By e-mail"; the header lock explains.
 
 - Nobody signs in again; nothing is re-encrypted.
 - `belfry.json` → `"encrypted": {"format": 1 | 3}`. Apps that know this document read both
-  formats always, and write the one the belfry names. **The switch** is the setting
-  `ENCRYPTED_FORMAT` (`1`, the default, or `3`; any other value stops the service at start).
-  The device lists (§3) have their own switch, `DEVICE_LISTS` (off by default): they are
-  turned on first, and format 3 only once every account has a list and the relay rule of §18.1
-  is live. Each such device says so once with a
+  formats always, and write the one the belfry names. Each such device says so once with a
   kind 30078 `d = belfry:device:reads` signed by the **device** key, tag `["v","3"]`; the
   console shows how many live devices have not said it, and whose.
 - Switched per belfry, belfry.sh first. One way: after the switch, devices added since are
@@ -353,11 +343,7 @@ Where this section and an earlier one differ, this one counts.
 6. **A removed device learns it** from `GET /api/v1/sessions/removed`, NIP-98 signed by the
    **device** key itself: `{removed: false}` or `{removed: true, at, by_name?}` (`by_name` = the
    removing device's name when the belfry knows it; `POST /me/sessions/revoke` takes an optional
-   `by` = the caller's device pubkey). Kept 30 days. As built: `at` in Unix seconds; `by_name`
-   = the name the signer keeps for the caller's own session (as `/api/me/sessions` gives it,
-   with the device); a device that left its list without a revoke the belfry saw (an expiry)
-   is answered `removed: true` with no `by_name`; a key the belfry never saw as a session = 404.
-   Rate: 30 a minute per address.
+   `by` = the caller's device pubkey). Kept 30 days.
 7. **Writing.** Device keys and one-time keys write 8571–8575 and the device-signed 30078 on an
    authenticated connection, as one-time 1059s do today.
 8. **Events, check-in, tickets in a private group** exist only inside the group, encrypted: no
@@ -524,3 +510,92 @@ is never adopted for sending (it carries no authenticated entry set).
 - **Grace at the start of a listing**: a device also counts when the first list that has it is
   dated no later than the outer date + 5 minutes (clocks may be off by the relay's 5 minutes).
   The same for a group key's maker. Vector: listed at 2000, outer 1800 → ok; outer 1600 → no.
+
+## 22. Groups relay, checked live (2026-11-23, belfry.sh, test groups deleted after)
+
+- zooid accepts kinds 8571 and 8572 with an `h` tag (from the groups key and from a guest of the
+  group), serves them by `#h` and by `#h` + `#d`, and took an 8571 of 300 kB.
+- A guest of another group, and a relay member who is not in the group, get none of a private
+  group's events.
+- **A relay member who is not in the group still gets its 39000 (name, metadata).** Apps hide
+  private groups from non-members, but the name is readable by any member's app that asks the
+  relay directly. The content is encrypted anyway; the name and the member list (39002 was not
+  served to the non-member in this test, 39000 was) are not.
+
+## 23. Private groups: files and members without a device (2026-11-23)
+
+- **Files in a private group are encrypted before upload**, the same way as a kind 15 file in a
+  private conversation (vectors/dm-files.json): AES-256-GCM on the device, ciphertext on Blossom.
+  The rumor's `imeta` entry carries `url`, `m` (the original type), `x` (sha256 of the
+  CIPHERTEXT, what Blossom stores), `ox` (sha256 of the original), `size`, `dim` / `blurhash` /
+  `thumb` when known, plus `encryption-algorithm aes-gcm`, `decryption-key <hex>`,
+  `decryption-nonce <hex>`. A reader that finds `decryption-key` decrypts and checks `ox`. A
+  thumbnail, when present, is encrypted the same way under its own nonce.
+- **A member whose account has no device list** (read complete, none found) gets no entry; the
+  group's message is not held for them. "Who can read this" names them under "Not signed in on
+  any device". A member whose list could not be READ is not skipped: the send waits and retries.
+
+## 24. Buttons and e-mail in a private group (2026-11-23)
+
+**A press of a `belfry:` button** in a private group:
+1. The press is the usual rumor (docs/actions.md: kind 1985, `L belfry/action`, `l <button id>`,
+   `e` = the message, `p` = its author, `h` = the group), sent into the group encrypted like any
+   group event.
+2. A second rumor, its own id, is sent as a people-conversation message to the groups key
+   (a service key: its own device, §2): kind 1985 with `L belfry/action`, `l <button id>`,
+   `h` = the group, `["e", <id of the press rumor in the group>, "", "press"]`,
+   `["p", <groups key>]` only (the message's author is not a person of this copy),
+   `["button", <id>, <label>, <style>, <action>]` copied from the message,
+   `["k", "<kind of the message>"]`; `content` = the message rumor as JSON (unsigned, as opened),
+   with `decryption-key` and `decryption-nonce` removed from every `imeta` (the belfry never
+   learns file keys). The answer names the press in the group (`["press", <press id>]`).
+3. The belfry checks: the sender is a member of the group (39002); (the embedded rumor's id is
+   not recomputed: its imeta was trimmed) the button is in its tags; then the action's own rules (who may
+   press) exactly as today. The message's content is believed as the presser shows it: every
+   rule that matters is about the presser.
+4. The answer (kind 1985, `L belfry/action-result`, as today) is sent into the group by the
+   groups key as a sender (§10): an 8572 under a key the groups key makes for the group's current
+   devices. Members open it and never adopt that key for sending (§17.8).
+
+**E-mail into a private group**: the belfry, as sender (the groups key), puts the inbox card into
+the group as an 8572; the app shows it as today's mail card with "By e-mail" and the header lock
+explains (board group-email). Nothing else changes for the reader.
+
+Both need the server's "groups key as a sender into a private group"; not built yet.
+- (Android, after §23) **Every account with an active pass has a list, empty when it has no
+  device**: the belfry writes one (`n` 1, no `device` tags) for each such account. A list with no
+  devices = "not signed in on any device". "No list found at all" is treated as "could not be
+  read": read once more, then skip that member for this message only.
+
+## 25. Guests, for now (2026-11-23)
+
+Guests are not on the community relay's whitelist, so they can neither read device lists nor
+receive key envelopes there. Until that changes:
+- a people conversation with a guest is not encrypted (no lock); one that was already encrypted
+  holds its messages ("this encrypted conversation now includes a guest") — never clear;
+- in a private group a guest member's devices get no entry, and a guest's session cannot post
+  there ("Guests can't take part in private groups yet");
+- a guest's session does not run the encryption at all.
+Possible follow-up: the relay lets a guest's key read and write only kinds 8570–8575 (we run our
+own relay build now, §18.1).
+
+## 26. After the full review of the web build (2026-11-23)
+
+- In a private group, an opened rumor of a kind on §16.9's clear list (metadata, membership,
+  roles, belfry labels) is DROPPED: those come only from the relay in clear.
+- A group is treated as private when its metadata says so OR it has ever been encrypted on this
+  device; unknown metadata holds the message.
+- Events, meetings, proposals and tickets cannot be created inside a private group in this
+  version ("Not available in private groups yet").
+- A removed device wipes itself only when the belfry says removed AND it is absent from its
+  account's current list.
+- An encrypted file opens in the app only as image, video, audio or PDF; anything else downloads.
+- Known limit: a group's outer event is dated by the signer and zooid has no time rule; the
+  belfry decides group membership anyway (§17.10).
+- Opened inside an 8572, the label spaces `belfry/pin`, `belfry/inbox`, `belfry/event-status`
+  and `belfry/proposal-status` count (with the same admin / author checks as in clear: the author
+  is the seal's signer); every other `belfry/*` label space inside an 8572 is dropped (roles,
+  guest, vouch come in clear from the relay, §16.9). The belfry cannot read encrypted inbox
+  states in a private group.
+- A group that was ever encrypted on this device is written encrypted whatever the cached format
+  says; with the format unknown and an encrypted object ever seen, writes hold.
