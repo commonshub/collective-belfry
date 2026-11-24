@@ -72,7 +72,7 @@ import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 // and it is announced in general with ["t","new-topic"], ["channel", <hashtag>])
 if (getBackend() === 'demo') setDemoMake(async (kind, f) => {
   if (kind !== 'topic') return createPod(f.title.trim(), f.about.trim(), 'general', { closed: false, prompt: '' })
-  const tag = hashtagSlug(f.hashtag), about = [f.title.trim(), f.about.trim()].filter(Boolean).join(' · ')
+  const tag = hashtagSlug(f.hashtag), about = f.about.trim() // (Cards v87: the hashtag is the name, the description the about)
   const id = await createChannel(tag, about, tag)
   await enqueue('groups', { kind: 9, tags: [['h', 'general'], ['t', 'new-topic'], ['channel', tag]], content: `# New topic: #${tag} · ${about}\n${location.origin}${location.pathname}#/c/${tag}` })
   return id
@@ -373,7 +373,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   const [section = places ? 'home' : 'c', a, b, c, d] = route
   let view
   let pane // a large screen: an open thread in a third column, its channel stays in the middle
-  if (card) view = <CardScreen id={card} signedIn={profiles().get(me())?.name || session.email || displayName(me())} onIn={() => {}}
+  if (card) view = <CardScreen id={card} signedIn={profiles().get(me())?.name || session.email || displayName(me())} signedEmail={session.email || profiles().get(me())?.nip05 || undefined} onSignOut={onSignOut} onIn={() => {}}
     onInvite={(g) => { setCard(''); go('c/' + encodeURIComponent(g)) }} onStarted={(g) => { setCard(''); go('c/' + encodeURIComponent(g)) }} onClose={() => setCard('')} />
   else if (places && section === 'home') view = <HomeScreen />
   else if (places && section === 'calendar') view = <CalendarPlace />

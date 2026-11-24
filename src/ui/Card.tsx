@@ -8,12 +8,12 @@ import qrcode from 'qrcode-generator'
 import { BELFRY, NAME } from '../config'
 import { setPendingInvite } from '../core/auth'
 import {
-  CardFailed, cardErrorText, cardInfo, claimSignedIn, claimStart, claimVerify, dropForm, hashtagSlug, hashtagState, nextHashtag,
+  CardFailed, cardErrorText, cardInfo, claimSignedIn, claimStart, claimVerify, dropForm, hashtagSlug, hashtagState,
   cardDone, cardUrl, setCardTopic, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
 } from '../core/cards'
 import type { SignedIn } from '../core/guestjoin'
 import { signedFetch } from '../core/sync'
-import { Btn, Form } from './common'
+import { Btn, Form, useNow } from './common'
 import { CodeBoxes } from './GuestJoin'
 import { useCommunityName } from './community'
 import { Logo } from './Login'
@@ -23,8 +23,8 @@ const EMPTY: CardForm = { title: '', about: '', hashtag: '', name: '', email: ''
 /** The card ID. SIGNED_IN: the account's name ("Signed in as …"), or undefined for a visitor.
  *  ON_IN: a visitor's right code (the session to enter). ON_INVITE: the card's guest link is the
  *  pending invite now (App takes it from there). ON_CLOSE: leave the card page. */
-export function CardScreen({ id, signedIn, onIn, onInvite, onStarted, onClose }: {
-  id: string; signedIn?: string; onIn: (r: SignedIn) => void | Promise<void>; onInvite: (group: string) => void
+export function CardScreen({ id, signedIn, signedEmail, onSignOut, onIn, onInvite, onStarted, onClose }: {
+  id: string; signedIn?: string; /** the account box (cards/claim-signed-in): its e-mail and Log out */ signedEmail?: string; onSignOut?: () => void; onIn: (r: SignedIn) => void | Promise<void>; onInvite: (group: string) => void
   /** signed in: the group or topic was just made */ onStarted: (group: string) => void; onClose: () => void
 }) {
   const [info, setInfo] = useState<CardInfo | null>(null)
@@ -65,7 +65,7 @@ export function CardScreen({ id, signedIn, onIn, onInvite, onStarted, onClose }:
     </Dead>
   )
   if (info.state === 'archived') return <Dead title={`${info.title || `This ${info.kind}`} has ended`} onClose={onClose}>The {info.kind} was archived.</Dead>
-  return <StartForm id={id} kind={info.kind} signedIn={signedIn} onIn={onIn} onTaken={join} onStarted={onStarted} onRetired={() => setInfo({ state: 'retired', kind: info.kind, title: '' })} />
+  return <StartForm id={id} kind={info.kind} signedIn={signedIn} signedEmail={signedEmail} onSignOut={onSignOut} onIn={onIn} onTaken={join} onStarted={onStarted} onRetired={() => setInfo({ state: 'retired', kind: info.kind, title: '' })} />
 }
 
 /** A card that can't go the usual way: why, and the belfry's page (states-closed, -archived, -offline). */
@@ -87,8 +87,8 @@ function Dead({ title, children, again, onClose }: { title: string; children: Re
 
 type Step = 'form' | 'code' | 'taken'
 
-function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: {
-  id: string; kind: CardKind; signedIn?: string; onIn: (r: SignedIn) => void | Promise<void>; onTaken: (group: string, invite: string) => void; onStarted: (group: string) => void; onRetired: () => void
+function StartForm({ id, kind, signedIn, signedEmail, onSignOut, onIn, onTaken, onStarted, onRetired }: {
+  id: string; kind: CardKind; signedIn?: string; signedEmail?: string; onSignOut?: () => void; onIn: (r: SignedIn) => void | Promise<void>; onTaken: (group: string, invite: string) => void; onStarted: (group: string) => void; onRetired: () => void
 }) {
   const community = useCommunityName(NAME)
   const [f, setF] = useState<CardForm>(() => keptForm(id) ?? EMPTY)
@@ -100,12 +100,12 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
   const [tag, setTag] = useState<'' | 'free' | 'taken' | 'invalid' | 'unknown' | 'checking'>('')
   const [recheck, setRecheck] = useState(0)
   const [taken, setTaken] = useState<{ group: string; invite: string } | null>(null)
+  const [sentAt, setSentAt] = useState(0) // "Send a new code (in 24 s)"
+  const now = useNow(1000)
+  const wait = Math.max(0, 30 - Math.floor(now - sentAt)) // (useNow: seconds)
   const set = (k: keyof CardForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF((o) => ({ ...o, [k]: e.target.value }))
   useEffect(() => { keepForm(id, f) }, [id, f])
-  // a topic: the hashtag is suggested from the topic's words until it's edited by hand (Xavier: ask the
-  // topic, then suggest the hashtag); taken → the next free one (-2, -3…) is offered
-  const [tagEdited, setTagEdited] = useState(() => !!f.hashtag && f.hashtag !== hashtagSlug(f.title))
-  const setTitle = (e: React.ChangeEvent<HTMLInputElement>) => { const v = e.target.value; setF((o) => ({ ...o, title: v, ...(kind === 'topic' && !tagEdited ? { hashtag: hashtagSlug(v) } : {}) })) }
+  // a topic: the hashtag is asked directly, it is the channel's name (Cards v87, onb-topic-form)
   // the hashtag's live check (a topic card)
   const slug = hashtagSlug(f.hashtag)
   const asked = useRef('')
@@ -116,15 +116,6 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
     asked.current = slug
     const t = setTimeout(() => { void hashtagState(slug).then(async (s) => {
       if (asked.current !== slug) return
-      if (s === 'taken' && !tagEdited) { // a suggestion that's taken: the next free one
-        for (let n = 2; n <= 9; n++) {
-          const next = nextHashtag(slug, n)
-          const st = await hashtagState(next)
-          if (asked.current !== slug) return
-          if (st === 'free') { setF((o) => ({ ...o, hashtag: next })); return }
-          if (st !== 'taken') break
-        }
-      }
       setTag(s)
     }) }, 350)
     return () => clearTimeout(t)
@@ -138,11 +129,12 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
     if (x.code === 'hashtag_taken') { setTag('taken'); setStep('form') }
     setError(cardErrorText(x, kind))
   }
-  const ready = !!f.title.trim() && (kind !== 'topic' || tag === 'free') && (!!signedIn || (!!f.name.trim() && /^\S+@\S+\.\S+$/.test(f.email.trim())))
+  const ready = (kind === 'topic' ? tag === 'free' : !!f.title.trim()) && (!!signedIn || (!!f.name.trim() && /^\S+@\S+\.\S+$/.test(f.email.trim())))
 
   const start = async () => {
     setError('')
     if (!ready) return
+    if (kind === 'topic') f.title = slug // (a topic's name is its hashtag; no words: Cards v87)
     if (signedIn) {
       try {
         const group = await claimSignedIn(id, kind, f, signedFetch)
@@ -152,7 +144,7 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
       } catch (e) { fail(e) }
       return
     }
-    try { await claimStart(id, f.email); setCode(''); setStep('code') } catch (e) { fail(e) }
+    try { await claimStart(id, f.email); setCode(''); setSentAt(Date.now() / 1000); setStep('code') } catch (e) { fail(e) }
   }
   const verify = async (c: string) => {
     if (busy) return
@@ -177,47 +169,56 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
       <Btn className="btn" onClick={() => onTaken(taken.group, taken.invite)}>{kind === 'topic' ? 'Open the topic' : 'Join'}</Btn>
     </div>
   )
+  const what = kind === 'topic' ? '#' + slug : f.title.trim()
   if (step === 'code') return (
     <div className="screen login card-page">
       <Logo />
       <h2>Check your e-mail</h2>
-      <p>We sent a 6-digit code to <b className="addr">{f.email.trim()}</b>. It can take a minute.</p>
+      <p>To create <b>{what}</b>, enter the 6-digit code we sent to <b className="addr">{f.email.trim()}</b>.</p>
       <CodeBoxes value={code} disabled={busy} invalid={!!error} onChange={(v) => { setCode(v); setError(''); if (v.length === 6) void verify(v) }} />
       <div className="join-state" role="status" aria-live="polite">
-        {busy ? <span className="hint">Starting {f.title.trim()}…</span> : error ? <span className="error" role="alert">{error}</span> : note ? <span className="hint">{note}</span> : <span className="hint">Not there? Look in your spam folder.</span>}
+        {busy ? <span className="hint">Creating {what}…</span> : error ? <span className="error" role="alert">{error}</span> : note ? <span className="hint">{note}</span> : null}
       </div>
       <div className="join-links">
-        <Btn className="link" disabled={busy} onClick={async () => { setError(''); try { await claimStart(id, f.email); setNote('A new code is on its way to your e-mail.') } catch (e) { fail(e) } }}>Send a new code</Btn>
+        <Btn className="link" disabled={busy || wait > 0} onClick={async () => { setError(''); try { await claimStart(id, f.email); setSentAt(Date.now() / 1000); setNote('A new code is on its way to your e-mail.') } catch (e) { fail(e) } }}>{wait > 0 ? `Send a new code (in ${wait} s)` : 'Send a new code'}</Btn>
         <button type="button" className="link" disabled={busy} onClick={() => { setStep('form'); setError(''); setNote(''); setCode('') }}>Use another address</button>
       </div>
+      <p className="hint small">Not there? Look in your spam folder.</p>
     </div>
   )
+  const me1 = (signedIn || '?').trim()[0]?.toUpperCase() ?? '?'
   return (
     <div className="screen login card-page">
       <Logo />
-      <h2>Start this {word}</h2>
-      <p>{kind === 'topic'
-        ? 'You found a new topic card. No introductions needed: people come and go and share what they know.'
-        : `You found a new group card. You start the group and look after it; everyone who scans this card after you joins it.`}</p>
-      {signedIn && <p className="card-who">Signed in as <b>{signedIn}</b></p>}
+      <span className="card-chip">Card {id}{kind === 'topic' ? ' · topic' : ''}</span>
+      <h2>Start a {word}</h2>
+      <p>Nobody has scanned this card yet. The {word} starts with you.</p>
       <Form className="start-form card-form" onSubmit={start}>
-        <label className="field"><span>{kind === 'topic' ? 'Topic' : 'Title'}</span>
-          <input className="input" value={f.title} maxLength={80} required onChange={setTitle} placeholder="What you wrote on the card" /></label>
-        {kind === 'topic' && <label className="field"><span>Hashtag</span>
-          <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required onChange={(e) => { setTagEdited(true); set('hashtag')(e) }} placeholder="gluten-free-baking" /></span>
-          <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? (tagEdited ? '✓ Available' : '✓ Available · suggested from the topic, you can change it') : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : tag === 'unknown' ? <>Couldn’t check just now · <button type="button" className="link" onClick={() => setRecheck((n) => n + 1)}>Try again</button></> : ''}</small>
-        </label>}
-        <label className="field"><span>Description <small>(optional)</small></span>
-          <textarea className="input" rows={3} value={f.about} maxLength={500} onChange={set('about')} placeholder={kind === 'topic' ? 'What people share here' : undefined} /></label>
+        {kind === 'topic' ? <label className="field"><span>Hashtag</span>
+          <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required autoFocus onChange={set('hashtag')} placeholder="tool-library" /></span>
+          <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? '✓ Available · this is the channel’s name' : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : tag === 'unknown' ? <>Couldn’t check just now · <button type="button" className="link" onClick={() => setRecheck((n) => n + 1)}>Try again</button></> : ''}</small>
+        </label>
+        : <label className="field"><span>Group name</span>
+          <input className="input" value={f.title} maxLength={80} required autoFocus onChange={set('title')} />
+          <small className="hint">What you wrote on the card</small></label>}
+        <label className="field"><span>Description</span>
+          <textarea className="input" rows={3} value={f.about} maxLength={500} onChange={set('about')} /></label>
         {!signedIn && <>
           <label className="field"><span>Your name</span>
             <input className="input" value={f.name} maxLength={100} autoComplete="name" required onChange={set('name')} /></label>
-          <label className="field"><span>E-mail</span>
+          <label className="field"><span>Your e-mail</span>
             <input className="input" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required placeholder="you@example.org" value={f.email} onChange={set('email')} /></label>
-          <p className="hint small">We’ll send a 6-digit code to confirm it. Already have an account on {community}? Use its e-mail address.</p>
         </>}
         {error && <div className="error" role="alert">{error}</div>}
-        <button className="btn" disabled={!ready}>Start the {word}</button>
+        <button className="btn" disabled={!ready}>Create the {word}</button>
+        {signedIn && <div className="card-account" role="group" aria-label="Signed in">
+          <span className="card-av" aria-hidden="true">{me1}</span>
+          <span className="rt"><b>{signedIn}</b>{signedEmail && signedEmail !== signedIn && <small>{signedEmail}</small>}</span>
+          {onSignOut && <button type="button" className="link" onClick={onSignOut}>Log out</button>}
+        </div>}
+        <p className="hint small">{signedIn
+          ? (kind === 'topic' ? 'You’ll look after this topic.' : <>You’ll be the group’s first steward.<br />People who scan the same QR code again will be invited to join this group so that you can remain connected after this event without having to share your email address publicly.</>)
+          : `You’ll look after this ${word}. We’ll send a 6-digit code to confirm your e-mail.`}</p>
       </Form>
     </div>
   )

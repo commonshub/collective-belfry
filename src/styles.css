@@ -2275,3 +2275,11 @@ form .create-where { margin-bottom: 14px; }
 
 .enc-card.warn { border-color: #b91c1c; }
 .enc-card.warn b { color: #b91c1c; }
+
+/* create from a card (Cards v87, onb-*) */
+.card-chip { align-self: flex-start; font-size: 13px; font-weight: 600; color: var(--muted); background: var(--surface-2); border-radius: 12px; padding: 4px 10px; }
+.card-account { margin-top: 12px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; }
+.card-account .card-av { width: 32px; height: 32px; border-radius: 16px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; font-weight: 600; flex: none; }
+.card-account .rt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.card-account small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.gmid-card { font-size: 14px; color: var(--muted); margin-top: 2px; }

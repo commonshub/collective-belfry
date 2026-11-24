@@ -568,19 +568,38 @@ function JoinBar({ g }: { g: Group }) {
  *  The cards server writes the topic's about as "<topic> · <description>" (Belfry 7bfa781). */
 function TopicCard({ id, by, fallback }: { id: string; by: string; fallback: string }) {
   const g = group(id)
-  // from the post itself while the topic isn't known here: "# New topic: #tag · topic · description"
+  // from the post itself while the topic isn't known here: "# New topic: #tag · description"
   const fromPost = (fallback.split('\n')[0] ?? '').replace(/^#\s*New topic:\s*#\S+\s*·?\s*/, '')
   const about = g?.about ?? fromPost
-  const [topic, ...rest] = about.split(' · ')
   const open = () => go(`c/${encodeURIComponent(id)}`)
   return (
     <div className="ev-card ntc" role="article" aria-label="New topic">
       <span className="k"><svg className="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M3.5 12V4h8l9 9-8 8z" /><circle cx="8" cy="8.5" r="1.3" /></svg>New topic</span>
-      <span className="h">#{g?.name && g.name !== topic ? g.name : id}</span>
-      {topic && <span className="n">{topic}</span>}
-      {rest.length > 0 && <span className="d"><Linkify text={rest.join(' · ')} /></span>}
-      <span className="m">Started by {displayName(by)}{g ? ` · ${g.members.size} following` : ''}</span>
+      <span className="h">#{g?.name ?? id}</span>
+      {about && <span className="d"><Linkify text={about} /></span>}
+      <span className="m">Steward: {displayName(by)}{g ? ` · ${g.members.size} following` : ''}</span>
       <button className="btn" onClick={(e) => { e.stopPropagation(); open() }}>Open</button>
+    </div>
+  )
+}
+
+/** A group created from a printed card, in town square (Cards v87, onb-town-group): New group · its name ·
+ *  its description · Steward: … · N people · Join (Open when you're in). */
+function CardGroupCard({ id, by, fallback }: { id: string; by: string; fallback: string }) {
+  const g = group(id)
+  const state = useGroupState(id)
+  if (state === 'deleted' || hiddenFromMe(g)) return <PodCard id={id} fallback={fallback} />
+  const name = g?.name ?? nameInCard(fallback)
+  const about = g?.about ?? (fallback.split('\n')[0] ?? '').split(' · ').slice(1).join(' · ')
+  const n = g?.members.size ?? 1
+  const inIt = !!g?.members.has(me())
+  return (
+    <div className="ev-card ntc" role="article" aria-label="New group">
+      <span className="k"><PodShape members={n} size={14} />New group</span>
+      <span className="h">{name}</span>
+      {about && <span className="d"><Linkify text={about} /></span>}
+      <span className="m">Steward: {displayName(by)} · {n === 1 ? '1 person' : `${n} people`}</span>
+      <button className="btn" onClick={(e) => { e.stopPropagation(); if (inIt || g?.closed) go(`c/${encodeURIComponent(id)}${inIt ? '' : '/group'}`); else void joinGroup(id) }}>{inIt ? 'Open' : 'Join'}</button>
     </div>
   )
 }
@@ -1197,6 +1216,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   // a reference to a channel, group, event or proposal at the very end: a preview box (Refs.tsx)
   const end = mail ? undefined : endRef(m.text)
   const newTopic = newTopicOf(m.ev) // a topic started from a card: its card, as a group's (Xavier, 23 Nov)
+  const cardGroup = podOf(m.ev) && m.ev.pubkey === belfryGroupsKey() ? podOf(m.ev) : undefined // a group made from a card (the groups key posts it for the person)
   const isCard = !!(legacy || podOf(m.ev) || proposalOf(m.ev) || newTopic) // a card always says who made it
   const frozen = !!group(groupId)?.archived // an archived group: no menu, no reacting
   // press and hold (phones) or right-click: react, reply, edit or delete your own
@@ -1221,9 +1241,10 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
         <div className="body">
           {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(author)}><PersonName pubkey={author} name={name === fallbackName(author) ? undefined : name} /></button><AgentTag pk={author} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{tag}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
-          {newTopic && <div className="created-line">started a topic from a printed card</div>}
-          {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
-          {newTopic ? <TopicCard id={newTopic} by={author} fallback={m.text} /> : legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />
+          {newTopic && <div className="created-line">created the topic <b>#{group(newTopic)?.name ?? newTopic}</b></div>}
+          {cardGroup && <div className="created-line">created the group <b>{group(cardGroup)?.name ?? nameInCard(m.text)}</b></div>}
+          {(legacy || (podOf(m.ev) && !cardGroup) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
+          {newTopic ? <TopicCard id={newTopic} by={author} fallback={m.text} /> : cardGroup ? <CardGroupCard id={cardGroup} by={author} fallback={m.text} /> : legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />
             : end ? <>{end.rest && <RichText text={end.rest} groupId={groupId} onOpen={onTopic} />}<RefPreview r={end.ref} /></>
             : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
           {og && <OgCard url={og} />}
@@ -1673,9 +1694,11 @@ const isCardLine = (m: Message) => m.ev.pubkey === belfryGroupsKey() && m.ev.tag
 function CardLine({ m, groupId }: { m: Message; groupId: string }) {
   const who = m.ev.tags.find((t) => t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? ''))?.[1]
   const word = group(groupId)?.isPod ? 'group' : 'topic'
+  const cardId = m.ev.tags.find((t) => t[0] === 'card' && /^[A-Z0-9]{6}$/.test(t[1] ?? ''))?.[1]
   return (
     <div className="join-line" role="note">
-      <span>{who ? <><b>{who === me() ? 'You' : displayName(who)}</b> started this {word}</> : `This ${word} was started`} from a printed card</span>
+      {/* (Cards v87: "You created the group from card K7Q2MX"; the card's id when the line carries it) */}
+      <span>{who ? <><b>{who === me() ? 'You' : displayName(who)}</b> created the {word}</> : `This ${word} was created`} from {cardId ? `card ${cardId}` : 'a printed card'}</span>
       <time>{fmtTime(m.ev.created_at)}</time>
     </div>
   )

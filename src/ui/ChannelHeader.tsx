@@ -10,7 +10,8 @@ import { markSeen } from '../core/actions'
 import { channelIcon, displayName, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group, nameOf } from '../core/model'
 import { BELFRY } from '../config'
 import { dropOutbox, outboxItems, useVersion } from '../core/store'
-import { me, retry } from '../core/sync'
+import { me, retry, signedFetch } from '../core/sync'
+import { groupCard } from '../core/cards'
 import { Btn, go, Sheet } from './common'
 import { SummaryLine } from './ChannelLine'
 import { ChannelMenu, ChannelSubtitle } from './ChannelMenu'
@@ -134,17 +135,25 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
   )
 }
 
-/** "Steward: Lou · 8 people" (a group) or "Started by Dev · 23 following" (a channel): one line. */
+/** "Steward: Lou · 8 people" (a group) or "Steward: Dev · 23 following" (a topic or channel): one line. */
 export function midFacts(g: Group, mine = me()): string {
   const keeper = [...g.admins][0]
   const who = keeper ? (keeper === mine ? 'you' : displayName(keeper)) : ''
   const n = g.isPod ? g.members.size : g.reading.size || g.members.size
   const count = g.isPod ? (n === 1 ? '1 person' : `${n} people`) : `${n} following`
-  return [who && (g.isPod ? 'Steward: ' : 'Started by ') + who, count].filter(Boolean).join(' · ')
+  return [who && 'Steward: ' + who, count].filter(Boolean).join(' · ') // (a topic too: Cards v87, onb-topic-done)
 }
 
 /** The mid part: two lines of description (More opens the whole menu), the facts, ⌃ folds, ⌄ opens. */
 function GroupMid({ g, welcome, onFold, onMore }: { g: Group; welcome?: 'started' | 'joined'; onFold: () => void; onMore: () => void }) {
+  // the card it was created from (its stewards can ask: GET /groups/<id>/card), for the line under the facts
+  const [cardId, setCardId] = useState('')
+  useEffect(() => {
+    if (!g.admins.has(me())) return
+    let live = true
+    groupCard(g.id, signedFetch).then((c) => { if (live && c) setCardId(c.id) }, () => {})
+    return () => { live = false }
+  }, [g.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // More only when the two-line clamp really cut the description (Xavier, Cards v73)
   const about = useRef<HTMLDivElement>(null)
   const [cut, setCut] = useState(false)
@@ -162,9 +171,10 @@ function GroupMid({ g, welcome, onFold, onMore }: { g: Group; welcome?: 'started
       {g.about && <div ref={about}><Markdown className="gmid-about" text={g.about} /></div>}
       {g.about && cut && <button className="link gmid-more" onClick={onMore}>More</button>}
       <div className="gmid-facts">{midFacts(g)}</div>
-      {welcome && <div className="gmid-welcome" role="status"><b>Welcome to {g.isPod ? g.name : '# ' + g.name}!</b> {g.isPod
-        ? (welcome === 'started' ? 'You started it. Say hi and share something to get it going: a photo, a tip, a question.' : 'Say hi and share something: a photo, a tip, a question.')
-        : (welcome === 'started' ? 'You started it. Share something to get it going: a link, a photo, a question.' : 'No introductions needed: share what you know.')}</div>}
+      {cardId && <div className="gmid-card">Card {cardId}: {g.isPod ? 'anyone who scans it joins here' : 'anyone who scans it can read, post and follow'}</div>}
+      {welcome && <div className="gmid-welcome" role="status"><b>{g.isPod ? `Welcome to ${g.name}!` : welcome === 'started' ? `#${g.name} is open!` : `Welcome to #${g.name}!`}</b> {g.isPod
+        ? (welcome === 'started' ? 'You created it and you look after it. Say hi and share something to get it going.' : 'Say hi and share something: a photo, a tip, a question.')
+        : (welcome === 'started' ? 'You created it and you look after it. Share the first tip, link or question.' : 'No introductions needed: share what you know.')}</div>}
       <div className="gmid-handle">
         <button className="icon-btn" aria-label="Fold up" onClick={onFold}><ChevronUpIcon /></button>
         <span className="gmid-bar" aria-hidden="true" />

@@ -242,7 +242,7 @@ function demoInfo(id: string): CardInfo {
   const kind: CardKind = id === 'T9PC4H' ? 'topic' : 'group'
   if (taken && demoRetired().includes(id)) return { state: 'retired', kind, title: taken }
   if (taken) return { state: 'claimed', kind, group: taken, title: taken, invite: 'demo-card-invite-' + id.toLowerCase() + '-xxxxxx' }
-  if (id === 'K7Q2MX' || id === 'T9PC4H') return { state: 'unclaimed', kind }
+  if (id === 'K7Q2MX' || id === 'T9PC4H' || id === 'G2RDNS') return { state: 'unclaimed', kind } // (G2RDNS: a second free group card, for a signed-in start)
   if (id === 'CXAWMS') return { state: 'claimed', kind, group: 'general', title: 'Townsquare', invite: 'demo-card-invite-cxawms-xxxxxxxx' }
   if (id === 'TPCHAT') return { state: 'claimed', kind: 'topic', group: 'general', title: 'Townsquare', invite: 'demo-card-invite-tpchat-xxxxxxxx' }
   if (id === 'RETRDX') return { state: 'retired', kind, title: 'Sourdough starters' }
