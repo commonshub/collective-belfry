@@ -80,11 +80,10 @@ Teaching page: the "How encryption works" explainer (private preview).
 
 ## What is never done in encrypted conversations
 
-- **ENC-40** [web] The web sends no link preview from an encrypted (or v1 sealed) conversation:
-  browsers can only fetch through the belfry, which would learn the link. Phones may attach a
-  sender-built preview whose picture is encrypted (docs/link-previews-v2.md). (to confirm: the
-  lead's brief said "no previews in encrypted conversations" for all; the v2 contract allows
-  phone previews with an encrypted picture.)
+- **ENC-40** [apps] Link previews in sealed (v1), format-3 conversations and private groups: only
+  built by the sender's phone (it fetches the page itself) and attached inside the message with
+  the picture AES-GCM encrypted; readers never fetch; the web sends none there (a browser can't
+  fetch the page). → docs/link-previews-v2.md (lead's ruling, 2026-11-24)
 - **ENC-41** [all] No typing indicators in encrypted conversations, version 1 and format 3
   (docs/encrypted.md §6).
 - **ENC-42** [all] Events, tickets, check-in and proposals exist only outside private groups in

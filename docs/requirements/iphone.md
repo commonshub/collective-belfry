@@ -42,7 +42,7 @@ engineering rules (layout rules that prevent hangs, offline-first, demo mode).
   review is unanswered: to confirm before doing it.)
 - **IOS-21** [iphone] The Apple team is shared with other apps: touch only `sh.belfry.*`.
 - **IOS-22** [iphone] No Mac on the team's machine: CI is the only build; a run does only what the
-  change touched; the full suite only for a new minor release; no full screenshot suite (PROC-21).
+  change touched; no full suite and no full screenshot suite at all, releases included (PROC-21).
 - **IOS-23** [iphone] The export-compliance answer (the app implements NIP-44 itself) is the
   owner's call. (to confirm)
 - **IOS-24** [iphone] The marketing version follows Android's number.
