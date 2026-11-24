@@ -198,8 +198,41 @@ def store(svc: Any) -> Store:
     path = str(Path(svc.settings.register_path).with_name("devices.sqlite"))
     with _stores_lock:
         if path not in _stores:
-            _stores[path] = Store(path)
+            try:
+                _stores[path] = Store(path)
+            except sqlite3.DatabaseError:
+                _stores[path] = _rebuilt(path)
         return _stores[path]
+
+
+def _rebuilt(path: str) -> Store:
+    """The table is a cache of what the relay holds (the latest list per account is read back
+    from the relay when the table has none): a file that no longer opens as a database is moved
+    aside (kept for a look) and a fresh one made, instead of every list write failing."""
+    aside = f"{path}.unreadable-{int(time.time())}"
+    try:
+        Path(path).rename(aside)
+    except OSError:
+        pass
+    log.warning("devices: %s could not be read as a database; moved aside as %s", path, aside)
+    return Store(path)
+
+
+def reset_store(svc: Any) -> None:
+    """Called when a running store starts failing with DatabaseError (the file was damaged under
+    it): the next store() call moves it aside and starts fresh."""
+    path = str(Path(svc.settings.register_path).with_name("devices.sqlite"))
+    with _stores_lock:
+        held = _stores.pop(path, None)
+        if held is not None:
+            try:
+                held._db.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            Store(path)._db.close()
+        except sqlite3.DatabaseError:
+            _rebuilt(path)._db.close()
 
 
 # ── an account's devices ────────────────────────────────────────────────────────────────────
@@ -464,6 +497,15 @@ def event_for(
 
 
 def refresh(svc: Any, account: str, *, force: bool = False) -> str:
+    """See _refresh; a damaged list table is moved aside and rebuilt (reset_store) once."""
+    try:
+        return _refresh(svc, account, force=force)
+    except sqlite3.DatabaseError:
+        reset_store(svc)
+        return _refresh(svc, account, force=force)
+
+
+def _refresh(svc: Any, account: str, *, force: bool = False) -> str:
     """Bring ACCOUNT's list up to date: ``published``, ``same``, ``off`` (the switch),
     ``skipped`` (a service key) or ``unknown`` (the signer, the register or the relay could not
     say; tried again at the next check). FORCE: publish even with the switch off (tests)."""

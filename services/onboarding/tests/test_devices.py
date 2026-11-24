@@ -430,3 +430,20 @@ def test_old_web_sessions_named_by_the_chat_address_are_devices():
         assert discovery.chat_session(svc, {"application_name": name, "redirect_origin": ""}, names)
     for name in ("other.example · Safari", "belfry.test/website · Firefox"):
         assert not discovery.chat_session(svc, {"application_name": name, "redirect_origin": ""}, names)
+
+
+def test_an_unreadable_list_table_is_moved_aside_and_rebuilt(tmp_path):
+    """devices.sqlite is a cache of the relay: a damaged file must not stop list writes."""
+    from types import SimpleNamespace
+
+    from belfry_onboarding import devices
+
+    reg = tmp_path / "register.sqlite"
+    bad = tmp_path / "devices.sqlite"
+    bad.write_bytes(b"SQLite format 3\x00" + bytes(range(256)) * 20)
+    svc = SimpleNamespace(settings=SimpleNamespace(register_path=str(reg)))
+    devices._stores.pop(str(bad), None)
+    st = devices.store(svc)
+    assert st.latest("a" * 64) is None
+    assert any(p.name.startswith("devices.sqlite.unreadable-") for p in tmp_path.iterdir())
+    devices._stores.pop(str(bad), None)
