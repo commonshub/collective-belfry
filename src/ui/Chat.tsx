@@ -1,5 +1,5 @@
 import { typingSlug } from '../core/cards'
-import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
+import { NO_PREVIEW, buildPreviewTags, outsideLink, shownFor } from '../core/linkpreview'
 import { ComposerPreview, OgCard } from './LinkPreview'
 import { GroupName } from './GroupName'
 import { replaceHash } from '../core/nav'
@@ -990,7 +990,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {privateGuest && <div className="join-bar" role="note"><span>Guests can’t take part in private groups yet.</span></div>}
       {!readOnly && <RecordingBar groupId={id} />}
       {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
-        onSend={(text, files, announce, np) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, [...eventTags(text), ...(np ? [NO_PREVIEW] : [])]) }} prefill={prefill}
+        onSend={(text, files, announce, pv) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, [...eventTags(text), ...pv]) }} prefill={prefill}
         onEvent={events && !noExtrasHere(id) ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() && !noExtrasHere(id) ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events && !noExtrasHere(id) ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
       {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => { const url = `https://${BELFRY.domain}/events/${d}`; void postMessage(id, url, [], undefined, false, eventTags(url)) }} />} {/* SPEC 19.63: the meeting's URL is sent in the channel at once, not left in the composer */}
@@ -1090,7 +1090,7 @@ export function ThreadView({ groupId, rootId: asked, pane = false, replying = fa
       {root && reading() && !frozen && <GuestBar groupId={groupId} />}
       {root && !reading() && !frozen && (mailT
         ? <MailThreadComposer t={mailT} groupId={groupId} root={root} autoFocus={replying} />
-        : <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files, _a, np) => postThreadReply(groupId, root.ev, text, files, np ? [NO_PREVIEW] : [])} />)}
+        : <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files, _a, pv) => postThreadReply(groupId, root.ev, text, files, pv)} />)}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
@@ -1109,7 +1109,7 @@ function MailThreadComposer({ t, groupId, root, autoFocus }: { t: MailThread; gr
     <>
       <Composer groupId={groupId} draft={'t:' + t.id} autoFocus={autoFocus} placeholder={r.placeholder} above={r.line}
         className={r.mail ? 'mail-mode' : 'team-mode'} plain={r.mail}
-        linkPreview={!r.mail} onSend={(text, files, _a, np) => (r.mail ? r.send(text) : postThreadReply(groupId, root.ev, text, files, np ? [NO_PREVIEW] : []))} />
+        linkPreview={!r.mail} onSend={(text, files, _a, pv) => (r.mail ? r.send(text) : postThreadReply(groupId, root.ev, text, files, pv))} />
       {r.toast}
     </>
   )
@@ -1226,7 +1226,8 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   const author = authorOf(m.ev)
   // the first link to an outside page: its preview under the message (channels/og-*)
   // (none in a private group or for a message opened from an encrypted one: the lead's privacy ruling)
-  const og = isCard || mail || inMail || privateNow(groupId) || (!m.ev.pending && 'sig' in m.ev && m.ev.sig === '') ? undefined : outsideLink(m.text, m.ev.tags, cards.map((c) => c.link ?? ''))
+  const og0 = isCard || mail || inMail ? null : shownFor(m.text, m.ev.tags) // from its tags only (link previews v2)
+  const og = og0 && !cards.some((c) => c.link === og0.url) ? og0 : null
   if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
@@ -1248,7 +1249,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
           {newTopic ? <TopicCard id={newTopic} by={author} fallback={m.text} /> : cardGroup ? <CardGroupCard id={cardGroup} by={author} fallback={m.text} /> : legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />
             : end ? <>{end.rest && <RichText text={end.rest} groupId={groupId} onOpen={onTopic} />}<RefPreview r={end.ref} /></>
             : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
-          {og && <OgCard url={og} />}
+          {og && <OgCard shown={og} />}
           <MessageButtons ev={m.ev} groupId={groupId} disabled={!!p || frozen} />
           {cards.length > 0 && <div className="ev-cards">{cards.slice(0, 3).map((c) => <EventCard key={c.key} coord={c.coord} link={c.link} fallback="" />)}</div>}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
@@ -1364,7 +1365,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft, above, below, imagesOnly = false, className, plain = false, linkPreview = true }: { /** the preview of an outside link above the field, ✕ = sent without it (channels/og-composer); off where the message can't carry the tag */ linkPreview?: boolean; /** a line above the text field (who receives it: an e-mail thread) */ above?: ReactNode; /** a line under it ("Sending as a guest · Log in") */ below?: ReactNode; /** photos only from the + (a guest in a topic from a card) */ imagesOnly?: boolean; /** an extra class (mail-mode: going out by e-mail) */ className?: string; /** plain text only: no files, no @people or #channels (an e-mail) */ plain?: boolean; /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean, noPreview: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft, above, below, imagesOnly = false, className, plain = false, linkPreview = true }: { /** the preview of an outside link above the field, ✕ = sent without it (channels/og-composer); off where the message can't carry the tag */ linkPreview?: boolean; /** a line above the text field (who receives it: an e-mail thread) */ above?: ReactNode; /** a line under it ("Sending as a guest · Log in") */ below?: ReactNode; /** photos only from the + (a guest in a topic from a card) */ imagesOnly?: boolean; /** an extra class (mail-mode: going out by e-mail) */ className?: string; /** plain text only: no files, no @people or #channels (an e-mail) */ plain?: boolean; /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean, preview: string[][]) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   // typing indicators (docs/typing.md): this conversation or this thread; not by e-mail
   const tplace = useMemo<Place | null>(() => (groupId && draft && !plain ? (draft.startsWith('t:') ? { h: groupId, root: draft.slice(2) } : { h: groupId }) : null), [groupId, draft, plain])
@@ -1491,6 +1492,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     const f = files
     const a = canAnnounce && ann
     const np = !!link && dropped === link
+    const lk = link
     setText('')
     setDropped('')
     setFiles([])
@@ -1498,7 +1500,11 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     if (tplace) messageSent(tplace)
     if (!announcing) setAnn(false)
     setBusy(true)
-    try { await onSend(t, f, a, np) } catch (e) {
+    try {
+      // the preview the sender builds (v2): ✕ → none; else the belfry's answer and its picture on Blossom (10 s at most)
+      const pv = !lk ? [] : np ? [NO_PREVIEW] : await Promise.race([buildPreviewTags(lk).catch(() => []), new Promise<string[][]>((r) => setTimeout(() => r([]), 10_000))])
+      await onSend(t, f, a, pv)
+    } catch (e) {
       // not saved on this device (storage full or refused), or an e-mail undone: the text and files come back
       setText((now) => now || text)
       for (const [name, pk] of mentioned) picked.current.set(name, pk)
@@ -1728,7 +1734,7 @@ function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId
       {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
       {shown.map((r) => <InlineReply key={r.ev.id} r={r} groupId={groupId} onAct={() => onAct(r)} />)}
       {!reading() && !group(groupId)?.archived && <Composer groupId={groupId} draft={'t:' + root.ev.id} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
-        onSend={(text, files, _a, np) => postThreadReply(groupId, root.ev, text, files, np ? [NO_PREVIEW] : [])} />}
+        onSend={(text, files, _a, pv) => postThreadReply(groupId, root.ev, text, files, pv)} />}
       <div className="thread-foot">
         <button className="link thread-hide" onClick={onHide}>Hide</button>
         <button className="link thread-hide thread-open" onClick={onOpen}>Open thread<ChevronRightIcon /></button>

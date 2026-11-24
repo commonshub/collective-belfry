@@ -1,4 +1,4 @@
-import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
+import { NO_PREVIEW, buildPreviewTags, outsideLink, shownFor } from '../core/linkpreview'
 import { encryptedFormat } from '../core/access'
 /** Format 3 (the lead): a people conversation that is, or will be, encrypted: no link previews in it. */
 const encryptedHere = (conv: string) => (conv.startsWith('n:') || conv.startsWith('m:')) && (encryptedFormat() === 3 || encConvHere(conv))
@@ -317,7 +317,8 @@ function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttrib
   const end = d.kind === 1301 ? undefined : endRef(d.text) // a reference at the end: its preview box
   // an outside page: its preview (channels/og-dm), never in a sealed conversation: asking would tell the belfry
   // which links were sent in it (the lead's ruling, 23 Nov)
-  const og = (d.kind === 14 || d.kind === 4) && !d.sealed && !isSealed(d.conv) && !encryptedHere(d.conv) ? outsideLink(d.text, d.tags) : undefined
+  // from its tags only (v2: nothing fetched; a sealed or encrypted one's picture comes encrypted)
+  const og = d.kind === 14 || d.kind === 4 ? shownFor(d.text, d.tags) : null
   return (
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')} {...hold}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
@@ -326,7 +327,7 @@ function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttrib
         : end ? <>{end.rest && <RefText text={end.rest} className="dm-text" />}<RefPreview r={end.ref} /></>
         : d.text ? <RefText text={d.text} className="dm-text" /> : <div className="dm-text">(empty)</div>}
       {d.attachments && d.attachments.length > 0 && <Attachments d={d} />}
-      {og && <OgCard url={og} />}
+      {og && <OgCard shown={og} />}
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>
         {d.clear ? <span className="dm-state">Not encrypted</span> : notSealed(d.conv, d) && <NotSealedMark />}
@@ -506,7 +507,9 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
     setText('')
     if (needsSubject && !subject.trim()) { setText(t); setError('Give it a subject: it names the thread.'); return }
     try {
-      const target = await sendDm(conv, t, needsSubject ? subject : undefined, np ? [NO_PREVIEW] : [])
+      const lk = dmLink
+      const pv = !lk ? [] : np ? [NO_PREVIEW] : await Promise.race([buildPreviewTags(lk).catch(() => []), new Promise<string[][]>((r) => setTimeout(() => r([]), 10_000))])
+      const target = await sendDm(conv, t, needsSubject ? subject : undefined, pv)
       setSubject('')
       if (target && target !== conv) go('dm/' + enc(target)) // a new e-mail: its thread
     } catch (e) {

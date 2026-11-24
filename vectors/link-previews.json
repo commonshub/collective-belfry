@@ -1,0 +1,1404 @@
+{
+ "_": "Link previews built by the sender (SPEC 19.87; collective-belfry docs/link-previews-v2.md). Written by belfry-android (tools/link_previews_vectors.py); web and iOS copy it byte for byte. Sections: links (which link of a text gets a preview: the composer's rule), html (a page's text and final address -> title / description / site / picture address; og, then twitter, then <title> / meta description, piece by piece; values: tags stripped, entities decoded, whitespace collapsed, cut to 200 / 300 / 100 Unicode code points then trailing spaces trimmed; the picture made absolute against the final address, https only), charsets (bytes + Content-Type -> title), urls (may the sender's device fetch it), addresses (may it connect to a name that resolved to this; every address of a name must pass), pictures (the type by the first bytes, hex), tags (what a message carries: the preview tag and its imeta entry, plain and AES-256-GCM encrypted with a fixed key and nonce, as files of direct messages: vectors/dm-files.json), read (a message's text and tags -> the box a reader shows, or null; the picture only from the belfry's Blossom).",
+ "constants": {
+  "title_max": 200,
+  "description_max": 300,
+  "site_max": 100,
+  "page_max_bytes": 524288,
+  "picture_in_max_bytes": 5242880,
+  "picture_out_max_bytes": 307200,
+  "picture_side_max": 1200,
+  "redirects_max": 3,
+  "timeout_ms": 5000,
+  "no_preview_tag": [
+   "preview",
+   "none"
+  ],
+  "purpose": "purpose preview"
+ },
+ "domain": "belfry.example",
+ "files": "https://files.other.example",
+ "blossom": "https://blossom.belfry.example",
+ "links": [
+  {
+   "name": "one outside link",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [],
+   "link": "https://toolshare.example/stories/street-library"
+  },
+  {
+   "name": "only the first",
+   "text": "https://a.example/one and https://b.example/two",
+   "tags": [],
+   "link": "https://a.example/one"
+  },
+  {
+   "name": "http is not previewed",
+   "text": "old http://a.example/one",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "http is skipped, the https one after it counts",
+   "text": "http://a.example/one then https://b.example/two",
+   "tags": [],
+   "link": "https://b.example/two"
+  },
+  {
+   "name": "the sentence's punctuation is not the link's",
+   "text": "Read https://a.example/page.",
+   "tags": [],
+   "link": "https://a.example/page"
+  },
+  {
+   "name": "a bare host is not a link",
+   "text": "see a.example/page",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "the chat",
+   "text": "https://chat.belfry.example/#/c/garden-3f9a",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "the belfry itself",
+   "text": "https://belfry.belfry.example/skills/homepage.md",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "the community's own domain",
+   "text": "our page https://belfry.example/about",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "any name under the domain",
+   "text": "https://blossom.belfry.example/abc and https://wiki.belfry.example/x",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "a domain that only ends alike is outside",
+   "text": "https://notbelfry.example/x",
+   "tags": [],
+   "link": "https://notbelfry.example/x"
+  },
+  {
+   "name": "the host's case does not matter",
+   "text": "https://Chat.Belfry.Example/#/c/x then https://a.example/",
+   "tags": [],
+   "link": "https://a.example/"
+  },
+  {
+   "name": "a belfry link first, an outside one second",
+   "text": "https://chat.belfry.example/#/c/garden-3f9a see https://a.example/x",
+   "tags": [],
+   "link": "https://a.example/x"
+  },
+  {
+   "name": "an attachment (imeta)",
+   "text": "https://cdn.example/f/abc",
+   "tags": [
+    [
+     "imeta",
+     "url https://cdn.example/f/abc",
+     "m application/zip"
+    ]
+   ],
+   "link": null
+  },
+  {
+   "name": "the file server",
+   "text": "https://files.other.example/9f2c",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "a picture by its ending",
+   "text": "https://a.example/cat.JPG",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "a picture with a query",
+   "text": "https://a.example/cat.png?w=200",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "a PDF, a recording",
+   "text": "https://a.example/minutes.pdf https://a.example/talk.m4a",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "a file first, a page second",
+   "text": "https://a.example/cat.png https://a.example/cats",
+   "tags": [],
+   "link": "https://a.example/cats"
+  },
+  {
+   "name": "preview none",
+   "text": "https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "h",
+     "general"
+    ],
+    [
+     "preview",
+     "none"
+    ]
+   ],
+   "link": null
+  },
+  {
+   "name": "another preview value is not none",
+   "text": "https://a.example/x",
+   "tags": [
+    [
+     "preview",
+     "small"
+    ]
+   ],
+   "link": "https://a.example/x"
+  },
+  {
+   "name": "credentials in the address",
+   "text": "https://user:pw@a.example/x",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "no text",
+   "text": "",
+   "tags": [],
+   "link": null
+  },
+  {
+   "name": "in a Markdown link",
+   "text": "[the story](https://a.example/story)",
+   "tags": [],
+   "link": "https://a.example/story"
+  }
+ ],
+ "html": [
+  {
+   "name": "og: every piece",
+   "final_url": "https://toolshare.example/stories/street-library",
+   "html": "<!doctype html><html><head><title>Street library | ToolShare</title><meta property=\"og:title\" content=\"How a street tool library lends 400 drills a year\"><meta property=\"og:description\" content=\"Neighbours started lending their tools from a garage.\"><meta property=\"og:site_name\" content=\"ToolShare Journal\"><meta property=\"og:image\" content=\"https://toolshare.example/og/street-library.jpg\"><meta name=\"description\" content=\"Not this one\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "How a street tool library lends 400 drills a year",
+   "description": "Neighbours started lending their tools from a garage.",
+   "site": "ToolShare Journal",
+   "image": "https://toolshare.example/og/street-library.jpg"
+  },
+  {
+   "name": "twitter when there is no og",
+   "final_url": "https://a.example/post",
+   "html": "<!doctype html><html><head><title>Page title</title><meta name=\"twitter:title\" content=\"Twitter title\"><meta name=\"twitter:description\" content=\"Twitter description\"><meta name=\"twitter:image\" content=\"/img/card.png\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Twitter title",
+   "description": "Twitter description",
+   "site": "",
+   "image": "https://a.example/img/card.png"
+  },
+  {
+   "name": "title and meta description when there is neither",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>Just a title</title><meta name=\"description\" content=\"Just a description\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Just a title",
+   "description": "Just a description",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "an empty og:title falls back",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><meta property=\"og:title\" content=\"  \"><meta name=\"twitter:title\" content=\"\"><title>The title element</title></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "The title element",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "og before twitter before the rest, piece by piece",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta name=\"description\" content=\"D\"><meta name=\"twitter:description\" content=\"TD\"><meta property=\"og:title\" content=\"OG\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "OG",
+   "description": "TD",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "nothing usable",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><meta property=\"og:image\" content=\"/x.png\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "",
+   "description": "",
+   "site": "",
+   "image": "https://a.example/x.png"
+  },
+  {
+   "name": "a title over 200 characters is cut",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word</title></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "a description over 300 characters is cut",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta name=\"description\" content=\"Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools.\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. Neighbours lend tools. N",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "characters are code points, never half of one",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀😀</title></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "entities",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>Caf&eacute; &amp; Bar &#8212; &#x27;Open&#x27; &unknown; &lt;b&gt;</title></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Café & Bar — 'Open' &unknown; <b>",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "tags inside the title are stripped",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>The <b>bold</b>\n   plan</title></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "The bold plan",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "whitespace and no-break spaces collapse",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><meta property=\"og:title\" content=\"  Two\n\n\tlines&nbsp;&nbsp;here  \"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Two lines here",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "a relative picture against the page",
+   "final_url": "https://a.example/blog/post/1",
+   "html": "<!doctype html><html><head><title>T</title><meta property=\"og:image\" content=\"../img/a.png\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": "https://a.example/blog/img/a.png"
+  },
+  {
+   "name": "a protocol-relative picture",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta property=\"og:image\" content=\"//cdn.example/x.jpg\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": "https://cdn.example/x.jpg"
+  },
+  {
+   "name": "an http picture is none",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta property=\"og:image\" content=\"http://cdn.example/x.jpg\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "a data picture is none",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta property=\"og:image\" content=\"data:image/png;base64,AAAA\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "relative to the final address after redirects",
+   "final_url": "https://www.b.example/final/page",
+   "html": "<!doctype html><html><head><title>T</title><meta property=\"og:image\" content=\"/og.png\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": "https://www.b.example/og.png"
+  },
+  {
+   "name": "an entity in the picture's address",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta property=\"og:image\" content=\"https://a.example/i.png?a=1&amp;b=2\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": "https://a.example/i.png?a=1&b=2"
+  },
+  {
+   "name": "attributes in any order, any quotes, any case",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><META CONTENT='Hi there' PROPERTY=og:title><meta content=\"The site\" property=\"og:site_name\"/></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Hi there",
+   "description": "",
+   "site": "The site",
+   "image": null
+  },
+  {
+   "name": "comments and scripts are not read",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><!-- <meta property=\"og:title\" content=\"In a comment\"> --><script>var s = '<meta property=\"og:title\" content=\"In a script\">';</script><title>Real</title></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "Real",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "the first of two wins",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><meta property=\"og:title\" content=\"First\"><meta property=\"og:title\" content=\"Second\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "First",
+   "description": "",
+   "site": "",
+   "image": null
+  },
+  {
+   "name": "the site from application-name",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta name=\"application-name\" content=\"Garden Wiki\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "Garden Wiki",
+   "image": null
+  },
+  {
+   "name": "og:image:secure_url and twitter:image:src",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><title>T</title><meta name=\"twitter:image:src\" content=\"https://a.example/tw.png\"><meta property=\"og:image:secure_url\" content=\"https://a.example/secure.png\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "T",
+   "description": "",
+   "site": "",
+   "image": "https://a.example/secure.png"
+  },
+  {
+   "name": "twitter tags given as property",
+   "final_url": "https://a.example/",
+   "html": "<!doctype html><html><head><meta property=\"twitter:title\" content=\"As a property\"></head><body><p>Body text that is never read.</p></body></html>",
+   "title": "As a property",
+   "description": "",
+   "site": "",
+   "image": null
+  }
+ ],
+ "charsets": [
+  {
+   "name": "latin-1 by the header",
+   "content_type": "text/html; charset=iso-8859-1",
+   "bytes": "3c7469746c653e436166e93c2f7469746c653e",
+   "title": "Café"
+  },
+  {
+   "name": "latin-1 by a meta charset",
+   "content_type": "text/html",
+   "bytes": "3c6d65746120636861727365743d2269736f2d383835392d31223e3c7469746c653e4772fcdf653c2f7469746c653e",
+   "title": "Grüße"
+  },
+  {
+   "name": "UTF-8 when nothing says",
+   "content_type": "text/html",
+   "bytes": "3c7469746c653e436166c3a920e298953c2f7469746c653e",
+   "title": "Café ☕"
+  },
+  {
+   "name": "a byte order mark",
+   "content_type": "text/html",
+   "bytes": "efbbbf3c7469746c653e424f4d3c2f7469746c653e",
+   "title": "BOM"
+  }
+ ],
+ "urls": [
+  {
+   "url": "https://a.example/x",
+   "ok": true
+  },
+  {
+   "url": "https://a.example:443/x",
+   "ok": true
+  },
+  {
+   "url": "https://a.example./x",
+   "ok": true
+  },
+  {
+   "url": "https://xn--caf-dma.example/",
+   "ok": true
+  },
+  {
+   "url": "http://a.example/",
+   "ok": false
+  },
+  {
+   "url": "ftp://a.example/",
+   "ok": false
+  },
+  {
+   "url": "https://a.example:8443/",
+   "ok": false
+  },
+  {
+   "url": "https://user:pw@a.example/",
+   "ok": false
+  },
+  {
+   "url": "https://user@a.example/",
+   "ok": false
+  },
+  {
+   "url": "https://127.0.0.1/",
+   "ok": false
+  },
+  {
+   "url": "https://93.184.215.14/",
+   "ok": false
+  },
+  {
+   "url": "https://[::1]/",
+   "ok": false
+  },
+  {
+   "url": "https://[2606:4700::1111]/",
+   "ok": false
+  },
+  {
+   "url": "https://localhost/",
+   "ok": false
+  },
+  {
+   "url": "https://my.localhost/",
+   "ok": false
+  },
+  {
+   "url": "https://intranet/",
+   "ok": false
+  },
+  {
+   "url": "https://printer.local/",
+   "ok": false
+  },
+  {
+   "url": "https://router.lan/",
+   "ok": false
+  },
+  {
+   "url": "https://2130706433/",
+   "ok": false
+  },
+  {
+   "url": "https://0x7f.0.0.1/",
+   "ok": false
+  },
+  {
+   "url": "not a url",
+   "ok": false
+  }
+ ],
+ "addresses": [
+  {
+   "address": "93.184.215.14",
+   "ok": true
+  },
+  {
+   "address": "8.8.8.8",
+   "ok": true
+  },
+  {
+   "address": "1.1.1.1",
+   "ok": true
+  },
+  {
+   "address": "2606:4700:4700::1111",
+   "ok": true
+  },
+  {
+   "address": "2a00:1450:4001:80b::200e",
+   "ok": true
+  },
+  {
+   "address": "0.0.0.0",
+   "ok": false
+  },
+  {
+   "address": "10.1.2.3",
+   "ok": false
+  },
+  {
+   "address": "100.64.0.1",
+   "ok": false
+  },
+  {
+   "address": "100.127.255.254",
+   "ok": false
+  },
+  {
+   "address": "100.128.0.1",
+   "ok": true
+  },
+  {
+   "address": "127.0.0.1",
+   "ok": false
+  },
+  {
+   "address": "127.255.0.9",
+   "ok": false
+  },
+  {
+   "address": "169.254.169.254",
+   "ok": false
+  },
+  {
+   "address": "172.16.0.1",
+   "ok": false
+  },
+  {
+   "address": "172.31.255.255",
+   "ok": false
+  },
+  {
+   "address": "172.32.0.1",
+   "ok": true
+  },
+  {
+   "address": "192.0.0.8",
+   "ok": false
+  },
+  {
+   "address": "192.0.2.1",
+   "ok": false
+  },
+  {
+   "address": "192.168.1.1",
+   "ok": false
+  },
+  {
+   "address": "198.18.0.1",
+   "ok": false
+  },
+  {
+   "address": "198.51.100.7",
+   "ok": false
+  },
+  {
+   "address": "203.0.113.9",
+   "ok": false
+  },
+  {
+   "address": "224.0.0.251",
+   "ok": false
+  },
+  {
+   "address": "239.255.255.250",
+   "ok": false
+  },
+  {
+   "address": "240.0.0.1",
+   "ok": false
+  },
+  {
+   "address": "255.255.255.255",
+   "ok": false
+  },
+  {
+   "address": "::",
+   "ok": false
+  },
+  {
+   "address": "::1",
+   "ok": false
+  },
+  {
+   "address": "::ffff:127.0.0.1",
+   "ok": false
+  },
+  {
+   "address": "::ffff:8.8.8.8",
+   "ok": true
+  },
+  {
+   "address": "64:ff9b::a00:1",
+   "ok": false
+  },
+  {
+   "address": "64:ff9b::808:808",
+   "ok": true
+  },
+  {
+   "address": "2001:db8::1",
+   "ok": false
+  },
+  {
+   "address": "2001::1",
+   "ok": false
+  },
+  {
+   "address": "2002:a00:1::1",
+   "ok": false
+  },
+  {
+   "address": "2002:808:808::1",
+   "ok": true
+  },
+  {
+   "address": "fc00::1",
+   "ok": false
+  },
+  {
+   "address": "fd12:3456::1",
+   "ok": false
+  },
+  {
+   "address": "fe80::1",
+   "ok": false
+  },
+  {
+   "address": "fec0::1",
+   "ok": false
+  },
+  {
+   "address": "ff02::1",
+   "ok": false
+  },
+  {
+   "address": "100::1",
+   "ok": false
+  }
+ ],
+ "pictures": [
+  {
+   "name": "png",
+   "hex": "89504e470d0a1a0a0000000d49484452",
+   "type": "image/png"
+  },
+  {
+   "name": "jpeg",
+   "hex": "ffd8ffe000104a464946",
+   "type": "image/jpeg"
+  },
+  {
+   "name": "gif89a",
+   "hex": "474946383961010001",
+   "type": "image/gif"
+  },
+  {
+   "name": "gif87a",
+   "hex": "474946383761010001",
+   "type": "image/gif"
+  },
+  {
+   "name": "webp",
+   "hex": "52494646240000005745425056503820",
+   "type": "image/webp"
+  },
+  {
+   "name": "riff that is not webp",
+   "hex": "52494646240000005741564566",
+   "type": null
+  },
+  {
+   "name": "svg",
+   "hex": "3c3f786d6c2076657273696f6e3d",
+   "type": null
+  },
+  {
+   "name": "html",
+   "hex": "3c21646f63747970652068746d6c3e",
+   "type": null
+  },
+  {
+   "name": "too short",
+   "hex": "ffd8",
+   "type": null
+  },
+  {
+   "name": "empty",
+   "hex": "",
+   "type": null
+  }
+ ],
+ "tags": [
+  {
+   "name": "with a picture in the clear",
+   "preview": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal"
+   },
+   "picture": {
+    "plain": "ffd8ffe000104a46494600010100000100010000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b",
+    "url": "https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+    "mime": "image/jpeg",
+    "width": 1200,
+    "height": 630
+   },
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ]
+  },
+  {
+   "name": "with an encrypted picture",
+   "preview": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal"
+   },
+   "picture": {
+    "plain": "ffd8ffe000104a46494600010100000100010000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b",
+    "url": "https://blossom.belfry.example/a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+    "mime": "image/jpeg",
+    "width": 1200,
+    "height": 630,
+    "key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "nonce": "b2b2b2b2b2b2b2b2b2b2b2b2",
+    "ciphertext": "cb4062820305056295134a43811a8f7fa6bb0618c6034e743dca7a3b7b2807e2f53db931dd0a91ecd05eb9fe70ac56f0ce29ab5009158049394b172f63ba566299845422ddcd69769628c0e4aa876b33"
+   },
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "ox acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "encryption-algorithm aes-gcm",
+     "decryption-key a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+     "decryption-nonce b2b2b2b2b2b2b2b2b2b2b2b2",
+     "purpose preview"
+    ]
+   ]
+  },
+  {
+   "name": "no picture, no site",
+   "preview": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "",
+    "site": ""
+   },
+   "picture": null,
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "",
+     ""
+    ]
+   ]
+  }
+ ],
+ "read": [
+  {
+   "name": "a preview with its picture",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "h",
+     "general"
+    ],
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": {
+     "url": "https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "mime": "image/jpeg",
+     "width": 1200,
+     "height": 630,
+     "encrypted": false
+    }
+   }
+  },
+  {
+   "name": "an encrypted picture",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "ox acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "encryption-algorithm aes-gcm",
+     "decryption-key a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+     "decryption-nonce b2b2b2b2b2b2b2b2b2b2b2b2",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": {
+     "url": "https://blossom.belfry.example/a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "mime": "image/jpeg",
+     "width": 1200,
+     "height": 630,
+     "encrypted": true
+    }
+   }
+  },
+  {
+   "name": "no picture",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "a picture from anywhere but the belfry's Blossom is not shown",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://toolshare.example/og.jpg",
+     "m image/jpeg",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "a look-alike Blossom host",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example.evil.example/a",
+     "m image/jpeg",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "Blossom on another port",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example:8443/a",
+     "m image/jpeg",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "Blossom over http",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url http://blossom.belfry.example/a",
+     "m image/jpeg",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "an imeta that is not the preview's is not its picture",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "a picture without x",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "m image/jpeg",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "a picture that is not an image type",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "m image/svg+xml",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "an encrypted picture without its nonce",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "ox acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "encryption-algorithm aes-gcm",
+     "decryption-key a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "an encrypted picture with another algorithm",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "m image/jpeg",
+     "dim 1200x630",
+     "x a92737568ccbf0897c29eeb2061c28b7a7d31685918a6454e7eb983d5a964d7a",
+     "ox acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "encryption-algorithm aes-cbc",
+     "decryption-key a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+     "decryption-nonce b2b2b2b2b2b2b2b2b2b2b2b2",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "no size: the picture without one",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "imeta",
+     "url https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "m image/jpeg",
+     "x acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7",
+     "purpose preview"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": {
+     "url": "https://blossom.belfry.example/acd1f89d95dbcbc6548e1fc6579f2c6518fbf308d6ec715ab69c2311380fb7c7.jpg",
+     "mime": "image/jpeg",
+     "width": null,
+     "height": null,
+     "encrypted": false
+    }
+   }
+  },
+  {
+   "name": "preview none",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "none"
+    ]
+   ],
+   "shown": null
+  },
+  {
+   "name": "no tag: a plain link",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "h",
+     "general"
+    ]
+   ],
+   "shown": null
+  },
+  {
+   "name": "a link the text doesn't hold",
+   "text": "Nothing to see",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ]
+   ],
+   "shown": null
+  },
+  {
+   "name": "an http link",
+   "text": "See http://a.example/x",
+   "tags": [
+    [
+     "preview",
+     "http://a.example/x",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ]
+   ],
+   "shown": null
+  },
+  {
+   "name": "no title and no description",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "",
+     "",
+     "ToolShare Journal"
+    ]
+   ],
+   "shown": null
+  },
+  {
+   "name": "only a title, no site: the host",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "",
+     ""
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "",
+    "site": "",
+    "site_line": "toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "www. is not part of the host",
+   "text": "Read https://www.toolshare.example/x",
+   "tags": [
+    [
+     "preview",
+     "https://www.toolshare.example/x",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "toolshare.example"
+    ]
+   ],
+   "shown": {
+    "url": "https://www.toolshare.example/x",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "toolshare.example",
+    "site_line": "toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "a missing site element",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage."
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "",
+    "site_line": "toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "an overlong title in the tag is cut on reading",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  },
+  {
+   "name": "the first preview tag counts",
+   "text": "This is what we could become: https://toolshare.example/stories/street-library",
+   "tags": [
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "How a street tool library lends 400 drills a year",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ],
+    [
+     "preview",
+     "https://toolshare.example/stories/street-library",
+     "Second",
+     "Neighbours started lending their tools from a garage.",
+     "ToolShare Journal"
+    ]
+   ],
+   "shown": {
+    "url": "https://toolshare.example/stories/street-library",
+    "title": "How a street tool library lends 400 drills a year",
+    "description": "Neighbours started lending their tools from a garage.",
+    "site": "ToolShare Journal",
+    "site_line": "ToolShare Journal · toolshare.example",
+    "picture": null
+   }
+  }
+ ]
+}

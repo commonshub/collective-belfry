@@ -1,38 +1,71 @@
-// Previews of outside pages (Channels canvas v10, channels/og-*; approved by Xavier, 23 Nov).
-// The belfry fetches the page (GET /api/v1/link-preview?url=, NIP-98 with this session); the app
-// never contacts the outside site, and shows a picture only when the belfry serves it (its proxy).
-// A message tagged ["preview","none"] gets no preview (the sender's ✕ before sending: the lead's tag,
-// the same on iOS and Android). Only the first outside link of a message gets one.
+// Link previews built by the SENDER (collective-belfry docs/link-previews-v2.md; Xavier: "for all").
+// Readers never fetch anything: the box comes only from the message's ["preview", url, title,
+// description, site] tag and its imeta "purpose preview" picture (core/previewcore.ts, the shared vectors).
+// The web sender, in a channel, an open group or an unsealed DM, asks the belfry once while composing
+// (GET /api/v1/link-preview?url=, NIP-98), takes the picture from the belfry's proxy, makes it small and
+// uploads it to Blossom itself; in sealed or encrypted conversations the web sends no preview.
 import { useEffect, useState } from 'react'
 import { BELFRY } from '../config'
 import { target } from './refs'
-import { isLocalOnly, signedFetch } from './sync'
+import { isLocalOnly, signedFetch, uploadImage } from './sync'
+import { NO_PREVIEW, noPreview, previewLink, previewTags, readPreview, type ShownWithKeys } from './previewcore'
 
+export { NO_PREVIEW, noPreview }
 export interface LinkPreview { url: string; title: string; description: string; site: string; host: string; image?: string; /** demo only: a coloured block stands for the picture */ tint?: boolean }
 
-export const NO_PREVIEW: string[] = ['preview', 'none']
-export const noPreview = (tags?: string[][]) => !!tags?.some((t) => t[0] === 'preview' && t[1] === 'none')
-
-const URL_RE = /https:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g // https only (= refs.ts URL, without http)
-const MEDIA = /\.(jpe?g|png|gif|webp|avif|heic|svg|mp4|mov|webm|m4a|mp3|ogg|wav|pdf)(\?|#|$)/i
-
-/** The first link to an outside page in TEXT: https, not something in this belfry (its own cards),
- *  not a file (pictures and files show as themselves), not one of SKIP (event links with their cards). */
-export function outsideLink(text: string, tags?: string[][], skip: string[] = []): string | undefined {
-  if (!text || noPreview(tags)) return undefined
-  const files = new Set((tags ?? []).filter((t) => t[0] === 'imeta').flatMap((t) => t.filter((x) => x.startsWith('url ')).map((x) => x.slice(4))))
-  for (const m of text.matchAll(URL_RE)) {
-    const u = m[0]
-    if (files.has(u) || skip.includes(u) || MEDIA.test(u) || target(u)) continue
-    let host: string
-    try { host = new URL(u).hostname } catch { continue }
-    if (host === BELFRY.domain || host.endsWith('.' + BELFRY.domain)) continue // the belfry's own pages: not "outside"
-    return u
-  }
-  return undefined
+/** The composer's link: the first outside https link (previewcore), not one of this belfry's own cards. */
+export function outsideLink(text: string, tags: string[][] = []): string | undefined {
+  const u = previewLink(text, tags, BELFRY.domain)
+  return u && !target(u) ? u : undefined
 }
 
-// ---- fetching (once per URL per page; nothing found is remembered too) --------------------------
+/** What a reader shows for a message, from its tags only (null: a plain link). The demo (no relay) keeps
+ *  its pictures in the page (data: URLs), so it may show those. */
+export function shownFor(text: string, tags: string[][] = []): ShownWithKeys | null {
+  const r = readPreview(text, tags, BELFRY.blossom)
+  if (!r || r.picture || !isLocalOnly()) return r
+  const im = tags.find((t) => t[0] === 'imeta' && t.includes('purpose preview'))
+  const url = im?.find((x) => x.startsWith('url data:image/'))?.slice(4)
+  return url ? { ...r, picture: { url, mime: 'image/jpeg', width: null, height: null, encrypted: false } } : r
+}
+
+/** The tags the sender attaches for LINK: the belfry's answer (asked while composing; waited for a few
+ *  seconds at most) and, when it has a picture, that picture made small (≤ 1200 px, ≤ 300 kB JPEG) and
+ *  uploaded to Blossom. Nothing usable, or offline: no tags (a plain link). */
+export async function buildPreviewTags(link: string): Promise<string[][]> {
+  const e = getPreview(link)
+  const p = e instanceof Promise ? await Promise.race([e, new Promise<null>((r) => setTimeout(() => r(null), 6000))]) : e
+  if (!p) return []
+  let pic: Parameters<typeof previewTags>[1] = null
+  try {
+    const blob = p.image ? await (await fetch(p.image)).blob() : p.tint ? await demoPicture() : null
+    if (blob && blob.size <= 5_242_880 && /^image\/(jpeg|png|webp|gif)$/.test(blob.type || 'image/jpeg')) {
+      const small = await shrink(blob)
+      if (small) { const up = await uploadImage(small.blob); pic = { url: up.url, mime: 'image/jpeg', width: small.w, height: small.h, x: up.x } }
+    }
+  } catch { /* the picture couldn't be had: the preview without it */ }
+  return previewTags({ url: link, title: p.title, description: p.description, site: p.site }, pic)
+}
+
+async function shrink(b: Blob): Promise<{ blob: Blob; w: number; h: number } | null> {
+  const img = await createImageBitmap(b)
+  const scale = Math.min(1, 1200 / Math.max(img.width, img.height))
+  const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale))
+  const c = document.createElement('canvas'); c.width = w; c.height = h
+  c.getContext('2d')!.drawImage(img, 0, 0, w, h)
+  for (const q of [0.82, 0.7, 0.55, 0.4]) {
+    const out = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/jpeg', q))
+    if (out && out.size <= 307_200) return { blob: out, w, h }
+  }
+  return null
+}
+async function demoPicture(): Promise<Blob> {
+  const c = document.createElement('canvas'); c.width = 600; c.height = 315
+  const g = c.getContext('2d')!; const gr = g.createLinearGradient(0, 0, 600, 315); gr.addColorStop(0, '#7FA88B'); gr.addColorStop(1, '#2E5E43'); g.fillStyle = gr; g.fillRect(0, 0, 600, 315)
+  return new Promise((r) => c.toBlob((b) => r(b!), 'image/jpeg', 0.8))
+}
+
+// ---- the sender's ask to the belfry (once per URL per page; nothing found is remembered too) --------------------------
 type Entry = LinkPreview | null | Promise<LinkPreview | null>
 const cache = new Map<string, Entry>()
 const MAX = 300

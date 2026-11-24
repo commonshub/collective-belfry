@@ -19,6 +19,23 @@ let bad = 0
 const check = (name, ok, got) => { if (!ok) bad++; console.log((ok ? 'ok   ' : 'FAIL ') + name + (ok ? '' : ' ' + JSON.stringify(got).slice(0, 600))) }
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
+// link-previews.json (belfry-android; docs/link-previews-v2.md): the web's part: which link, the tags, what a reader shows
+{
+  const lp = vec('link-previews.json'), sha = (h) => createHash('sha256').update(Buffer.from(h, 'hex')).digest('hex')
+  for (const c of lp.links) { const got = M.LP.previewLink(c.text, c.tags, lp.domain, lp.files); check(`link-previews links ${c.name}`, got === c.link, got) }
+  for (const c of lp.tags) {
+    const pic = c.picture && { url: c.picture.url, mime: c.picture.mime, width: c.picture.width, height: c.picture.height,
+      ...(c.picture.key ? { x: sha(c.picture.ciphertext), ox: sha(c.picture.plain), key: c.picture.key, nonce: c.picture.nonce } : { x: sha(c.picture.plain) }) }
+    const got = M.LP.previewTags(c.preview, pic)
+    check(`link-previews tags ${c.name}`, eq(got, c.tags), { got, want: c.tags })
+  }
+  for (const c of lp.read) {
+    const r = M.LP.readPreview(c.text, c.tags, lp.blossom)
+    const got = r && (({ keys, ...rest }) => rest)(r)
+    check(`link-previews read ${c.name}`, eq(got, c.shown), { got, want: c.shown })
+  }
+}
+
 // groups.json: names (never the id), named, about, type, parent, closed, prompt, members, admins
 for (const c of vec('groups.json').cases) {
   globalThis.__EVENTS = c.events; globalThis.__ME = c.me

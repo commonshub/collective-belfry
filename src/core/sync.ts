@@ -458,6 +458,15 @@ export async function uploadBlob(file: File, max = 1600): Promise<string> {
   return upload(small, { blobKey: '', name: file.name || 'cover.jpg', mime: small.type || 'image/jpeg', size: small.size })
 }
 
+/** A picture as it is (a link preview's, made small already) to Blossom: its address and x (sha256). The
+ *  demo (no relay) keeps it in the page. */
+export async function uploadImage(blob: Blob): Promise<{ url: string; x: string }> {
+  if (!signer) throw new Error('Not signed in.')
+  const x = bytesToHex(sha256(new Uint8Array(await blob.arrayBuffer())))
+  if (localOnly) return { url: await new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(blob) }), x }
+  return { url: await upload(blob, { blobKey: '', name: 'preview.jpg', mime: blob.type || 'image/jpeg', size: blob.size }), x }
+}
+
 async function resize(file: File, max: number): Promise<Blob> {
   const img = await createImageBitmap(file)
   const scale = Math.min(1, max / Math.max(img.width, img.height))

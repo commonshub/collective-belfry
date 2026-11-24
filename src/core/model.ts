@@ -509,7 +509,7 @@ export function topics(groupId: string): string[] {
 export function parseMedia(e: Ev): Message {
   const media: Media[] = []
   for (const t of e.tags) {
-    if (t[0] !== 'imeta') continue
+    if (t[0] !== 'imeta' || t.includes('purpose preview')) continue // (a link preview's picture: shown in its box, docs/link-previews-v2.md)
     const f = Object.fromEntries(t.slice(1).map((p) => [p.slice(0, p.indexOf(' ')), p.slice(p.indexOf(' ') + 1)]))
     if (!f.url || !/^(https?:|idb:)/.test(f.url)) continue
     const [w, h] = (f.dim ?? '').split('x').map(Number)

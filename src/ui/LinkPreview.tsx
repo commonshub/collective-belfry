@@ -1,41 +1,52 @@
 // The preview of an outside page under a message (Channels canvas v10: channels/og-message,
 // og-loading, og-no-image, og-no-preview, og-several, og-dm, og-thread, og-dark, og-laptop) and
 // above the composer before sending (og-composer, with ✕).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { usePreview, type LinkPreview } from '../core/linkpreview'
+import type { ShownWithKeys } from '../core/previewcore'
+import { openFile, sha256hex } from '../core/dmfiles'
 const openOut = (href: string) => window.open(href, '_blank', 'noopener')
 
-/** Under a message: loading → a grey box of the same size; nothing found → nothing (just the link). */
-export function OgCard({ url }: { url: string }) {
-  const box = useRef<HTMLSpanElement>(null)
-  const [seen, setSeen] = useState(typeof IntersectionObserver === 'undefined')
-  useEffect(() => {
-    if (seen || !box.current) return
-    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setSeen(true); io.disconnect() } }, { rootMargin: '200px' })
-    io.observe(box.current)
-    return () => io.disconnect()
-  })
-  const p = usePreview(url, seen)
-  if (p === null) return null
-  if (p === 'loading') return (
-    <span ref={box} className="og load" role="status" aria-label="Loading the preview">
-      <span className="og-img" />
-      <span className="og-tb"><span className="bar" style={{ width: '40%' }} /><span className="bar big" style={{ width: '90%' }} /><span className="bar" style={{ width: '75%' }} /></span>
-    </span>
-  )
-  const pic = !!(p.image || p.tint)
+/** Under a message: built only from its tags (docs/link-previews-v2.md): nothing fetched but its picture,
+ *  from the belfry's own Blossom, checked against x and opened when encrypted. */
+export function OgCard({ shown }: { shown: ShownWithKeys }) {
+  const pic = usePicture(shown)
+  const hasPic = !!shown.picture
   return (
-    <a className={'og' + (pic ? '' : ' noimg')} href={p.url} target="_blank" rel="noopener noreferrer nofollow"
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); openOut(p.url) }}>
-      {p.image ? <img className="og-img" src={p.image} alt="Picture from the page" loading="lazy" referrerPolicy="no-referrer" />
-        : p.tint ? <span className="og-img tint" role="img" aria-label="Picture from the page" /> : null}
+    <a className={'og' + (hasPic ? '' : ' noimg')} href={shown.url} target="_blank" rel="noopener noreferrer nofollow"
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); openOut(shown.url) }}>
+      {hasPic && (pic ? <img className="og-img" src={pic} alt="Picture from the page" loading="lazy" referrerPolicy="no-referrer" /> : <span className="og-img" role="img" aria-label="Picture from the page" />)}
       <span className="og-tb">
-        <span className="og-site">{[p.site, p.host].filter(Boolean).filter((x, i, a) => a.indexOf(x) === i).join(' · ')}</span>
-        {p.title && <span className="og-ti">{p.title}</span>}
-        {p.description && <span className="og-ds">{p.description}</span>}
+        <span className="og-site">{shown.site_line}</span>
+        {shown.title && <span className="og-ti">{shown.title}</span>}
+        {shown.description && <span className="og-ds">{shown.description}</span>}
       </span>
     </a>
   )
+}
+
+const pictures = new Map<string, string>() // url → object URL (checked, opened)
+function usePicture(s: ShownWithKeys): string | undefined {
+  const p = s.picture
+  const [src, setSrc] = useState(() => (p ? pictures.get(p.url) ?? (p.url.startsWith('data:image/') ? p.url : undefined) : undefined))
+  useEffect(() => {
+    if (!p || src || !s.keys) return
+    let live = true
+    void (async () => {
+      const bytes = new Uint8Array(await (await fetch(p.url)).arrayBuffer())
+      let plain = bytes
+      if (p.encrypted) {
+        const o = await openFile([['encryption-algorithm', 'aes-gcm'], ['decryption-key', s.keys!.key ?? ''], ['decryption-nonce', s.keys!.nonce ?? ''], ['x', s.keys!.x], ['ox', s.keys!.ox ?? '']], bytes)
+        if (!o.ok) return
+        plain = o.plain
+      } else if ((await sha256hex(bytes)) !== s.keys!.x) return // not what the sender uploaded: no picture
+      const u = URL.createObjectURL(new Blob([plain as BlobPart], { type: p.mime }))
+      pictures.set(p.url, u)
+      if (live) setSrc(u)
+    })().catch(() => {})
+    return () => { live = false }
+  }, [p?.url]) // eslint-disable-line react-hooks/exhaustive-deps
+  return src
 }
 
 /** Above the field before sending: the preview the message will get, ✕ = send the link without it. */
