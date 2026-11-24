@@ -2283,3 +2283,42 @@ form .create-where { margin-bottom: 14px; }
 .card-account .rt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .card-account small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .gmid-card { font-size: 14px; color: var(--muted); margin-top: 2px; }
+
+/* the event form (Event form canvas v16, evform-*) */
+.evf-card { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px 4px; margin: 0 0 14px; background: var(--surface); }
+.evf-card .field { margin-bottom: 4px; }
+.evf-card .hint { margin: 2px 0 8px; }
+.evf-fetching { display: flex; align-items: center; gap: 8px; }
+.evf-fetching .spinner { width: 14px; height: 14px; }
+.evf-fetched { color: #15803d; }
+.evf-busy { opacity: .45; pointer-events: none; }
+.evf-changed { margin-left: 8px; font-size: 11px; padding: 1px 8px; background: #fef3c7; color: #92400e; border-radius: 10px; }
+.evf-when { display: flex; flex-direction: column; gap: 8px; }
+.evf-times { display: flex; align-items: center; gap: 8px; }
+.evf-times .input { flex: 1; }
+.evf-tz { margin: 6px 0 4px; }
+.evf-where { margin: 0 0 14px; }
+.seg2 + .evf-card, .seg2 + .field, .seg2 + .act-group { margin-top: 14px; }
+.evf-rows .act { display: flex; justify-content: space-between; width: 100%; }
+.evf-rows .act small { color: var(--muted); }
+.evf-changes { margin: 4px 0 14px; padding-left: 18px; }
+.evf-changes li { margin: 4px 0; }
+.evf-tell { margin-bottom: 14px; }
+.cover-pick { position: relative; }
+.cover-pick .cover-change { position: absolute; right: 10px; bottom: 10px; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; padding: 4px 10px; border-radius: 12px; }
+@media (min-width: 900px) {
+  .evf { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  dialog:has(.evf) { width: min(980px, 94vw); max-width: 980px; }
+}
+/* the event screen's rows (evview-*): Join online · Event website · Our page */
+.evr-rows { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; margin: 10px 0; }
+.evr { display: flex; align-items: center; gap: 8px; padding: 10px 12px; min-height: 44px; }
+.evr + .evr { border-top: 1px solid var(--line); }
+.evr-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.evr-t small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evr-join { background: #16a34a; color: #fff; border: 0; }
+.evr-ic { width: 40px; height: 40px; }
+.evr-copied { font-size: 12px; font-weight: 600; }
+.evh-going { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.evh-more { margin-left: auto; color: var(--muted); font-size: 20px; }
+.ev-people-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }

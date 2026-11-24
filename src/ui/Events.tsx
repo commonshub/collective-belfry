@@ -14,7 +14,7 @@ import { reading } from '../core/guestmode'
 import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
-import { addCoHost, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
+import { addCoHost, eventEnd, eventStart, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
 import { deleteEvent } from '../core/actions'
 import { isGuest } from '../core/invite'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools'
@@ -22,12 +22,12 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { makeSigner, type Session } from '../core/auth'
 import { kvDel } from '../core/db'
-import { Avatar, back, fmtDay, go, Lightbox, Sheet, Btn, Form, useMediaUrl } from './common'
+import { Avatar, back, fmtDay, go, Lightbox, Sheet, Btn, Form, useMediaUrl, useNow } from './common'
 import { Conversation, useCommunityName } from './Chat'
 import { FollowButton } from './Follow'
 import { Markdown } from './markdown'
 import { openProfile } from './Profile'
-import { CalendarIcon, ExternalIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, ImageIcon, MessageIcon, PersonPlusIcon, PinIcon, ScanIcon, ShareIcon, TicketIcon } from './icons'
+import { CalendarIcon, ExternalIcon, CloseIcon, CopyIcon, QrIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, ImageIcon, MessageIcon, PersonPlusIcon, PinIcon, ScanIcon, ShareIcon, TicketIcon } from './icons'
 import { EventFormSheet, DateChip, when, LABEL } from './Calendar'
 import { addByName, attendance, checkIn, handOver, mayRemove, removeFromMeeting, removedFromMeeting } from '../core/meetings'
 import { isAdmin } from '../core/access'
@@ -68,7 +68,7 @@ export function EventScreen({ link, coord, activeThread, ticket }: { link?: stri
 
 type Level = 0 | 1 | 2
 type ETab = 'chat' | 'photos' | 'people'
-type ESheet = '' | 'menu' | 'edit' | 'tickets' | 'guests' | 'qr' | 'cohost' | 'cancel' | 'take' | 'delete' | 'ticket' | 'checkin'
+type ESheet = '' | 'menu' | 'people' | 'edit' | 'tickets' | 'guests' | 'qr' | 'cohost' | 'cancel' | 'take' | 'delete' | 'ticket' | 'checkin'
 const TAB_KEY = 'belfry-event-tab'
 
 /** The event screen (docs/checkin.md §4): one header at three levels — 0 a bar (title, date, my
@@ -100,6 +100,8 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
     return () => { removeEventListener('focus', again); document.removeEventListener('visibilitychange', again) }
   }, [link])
   const host = isHost(e)
+  const [copied, setCopied] = useState(false)
+  const nowS = useNow(30_000)
   const g = group(e.groupId)
   const plain = tks.length === 1 && tks[0].implicit
   // Chat · Photos · People once I'm in: in the group, holding a ticket, or (the plain RSVP) having
@@ -191,6 +193,15 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
     <span className="ev-faces">{keys.slice(0, 5).map((k) => <Avatar key={k} pubkey={k} size={24} />)}</span>
   )
   const hostKeys = [e.creator, ...[...e.hosts].filter((k) => k !== e.creator && eventRoles(e, k)[0] === 'cohost')]
+  const nameOfHost = (k: string) => (api?.hosts.find((x) => x.pubkey === k)?.name || displayName(k)).split(' ')[0]
+  const hostNames = hostKeys.length <= 2 ? hostKeys.map(nameOfHost).join(' and ') : `${hostKeys.slice(0, 2).map(nameOfHost).join(', ')} and ${hostKeys.length - 2} more`
+  // Join online (evview-mid, -join-now, -not-going): for people going, from 1 hour before (the lead, canvas v16)
+  const online = e.links.length > 0 || !!api?.online
+  const startMs = eventStart(e), endMs = eventEnd(e), nowMs = nowS * 1000
+  const joinNow = holds && nowMs >= startMs - 3600_000 && nowMs < endMs
+  const mins = Math.round(Math.abs(nowMs - startMs) / 60_000)
+  const joinWord = !holds ? 'For people going: answer Going to get the link' : nowMs >= endMs ? 'The event has ended' : !joinNow ? 'The link appears here 1 hour before'
+    : nowMs < startMs ? `Starts in ${mins} min` : `Started ${mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`} ago`
   const PersonRow = ({ k, sub }: { k: string; sub?: string }) => (
     <button className="ev-person" onClick={() => openProfile(k, e.groupId)}><Avatar pubkey={k} size={32} /><span className="t"><b>{api?.hosts.find((x) => x.pubkey === k)?.name || displayName(k)}</b>{sub && <small>{sub}</small>}</span></button>
   )
@@ -208,28 +219,27 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
           {e.cover && <Cover url={e.cover} />}
           <div className="evh-main">
             <p className="evh-when"><b>{fmtDay(e.start)}</b>{e.allDay ? '' : ' · ' + when(e)}{tz}{e.end && e.end.toDateString() !== e.start.toDateString() ? ` → ${fmtDay(e.end)}` : ''}</p>
-            {e.location && <a className="evh-where" href={mapsUrl} target="_blank" rel="noreferrer"><PinIcon /> {e.location}</a>}
-            {e.links.map((l) => <a key={l} className="evh-where" href={l} target="_blank" rel="noreferrer"><LinkIcon /> Join online</a>)}
-            {!e.links.length && api?.online && <p className="hint evh-online">Online: the link shows once you have a place.</p>}
+            {e.location && <a className="evh-where" href={mapsUrl} target="_blank" rel="noreferrer"><PinIcon /> {e.location}{online ? ' · and online' : ''}</a>}
+            {!e.location && online && <p className="evh-where"><LinkIcon /> Online</p>}
+            {/* Event form canvas (evview-*): hosts and people going in one line under the place; fully open, › → People */}
+            <button className="evh-going" onClick={() => (level === 2 ? setSheet('people') : setLevel(2))} aria-label={level === 2 ? 'See everyone going' : undefined}>
+              {faces([...hostKeys, ...going.filter((k) => !hostKeys.includes(k))])}
+              <span>Hosted by {hostNames}{going.length ? ` · ${going.length} going` : ''}</span>{level === 2 && <span className="evh-more" aria-hidden="true">›</span>}
+            </button>
             {control}
-            {(going.length > 0 || maybe.length > 0) && (
-              <button className="evh-going" onClick={() => (inside ? setTab('people') : setLevel(2))}>
-                {faces(going.length ? going : maybe)}<span>{going.length} going{maybe.length ? ` · ${maybe.length} maybe` : ''}</span>
-              </button>
-            )}
+            <div className="evr-rows">
+              {online && <div className="evr"><span className="evr-t"><b>Join online</b><small>{joinWord}</small></span>
+                {joinNow && e.links[0] && <a className="btn small evr-join" href={e.links[0]} target="_blank" rel="noopener noreferrer">Join</a>}</div>}
+              {e.website && <div className="evr"><span className="evr-t"><b>Event website</b><small>{e.website.replace(/^https:\/\/(www\.)?/, '').replace(/\/$/, '')}</small></span>
+                <a className="icon-btn evr-ic" href={e.website} target="_blank" rel="noopener noreferrer" aria-label="Open the event website"><ExternalIcon /></a></div>}
+              <div className="evr"><span className="evr-t"><b>Our page</b><small>{eventUrl(e).replace(/^https:\/\//, '')}</small></span>
+                <button className="icon-btn evr-ic" aria-label={copied ? 'Copied' : 'Copy the link'} onClick={() => { void navigator.clipboard?.writeText(eventUrl(e)); setCopied(true); setTimeout(() => setCopied(false), 1500) }}>{copied ? <span className="evr-copied">Copied</span> : <CopyIcon />}</button>
+                <button className="icon-btn evr-ic" aria-label="Show the link as a QR code" onClick={() => setSheet('qr')}><QrIcon /></button></div>
+            </div>
             {!inside && e.description && level === 1 && <Markdown className="ev-about evh-teaser" text={e.description} />}
             {level === 2 && <>
-              <section><h3>Hosted by</h3>{hostKeys.map((k) => <PersonRow key={k} k={k} sub={k === e.creator ? 'Host' : 'Co-host'} />)}</section>
-              {going.length > 0 && <section><h3>Going · {going.length}</h3>{going.map((k) => <PersonRow key={k} k={k} sub={titles.get(p.holders.get(k) ?? '') && !plain ? titles.get(p.holders.get(k) ?? '') : undefined} />)}</section>}
-              {maybe.length > 0 && <section><h3>Maybe · {maybe.length}</h3>{maybe.map((k) => <PersonRow key={k} k={k} />)}</section>}
               {!plain && <section><h3>Tickets</h3>{tks.map((t) => <TicketRow key={t.d} t={t} p={p} onPick={open && st === 'none' ? () => pick(t) : undefined} />)}</section>}
-              {e.description && <section><Markdown className="ev-about" text={e.description} /></section>}
-              <section className="ev-url ev-address">
-                <h3>Address</h3>
-                <code>{eventUrl(e)}</code>
-                <LinkPair text={eventUrl(e)} share={{ url: eventUrl(e), title: e.title, text: e.title }} />
-                <button className="link ev-qr-link" onClick={() => setSheet('qr')}>QR code</button>
-              </section>
+              {e.description && <section><h3>About</h3><Markdown className="ev-about" text={e.description} /></section>}
               {host && e.isNew && <h3 className="evh-host-h">For hosts</h3>}
               {host && e.isNew && (
                 <section className="act-group evh-host">
@@ -275,10 +285,11 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
           {st === 'applied' || st === 'waitlist' ? 'The event’s chat opens once the hosts give you a place.' : e.status === 'cancelled' ? 'This event is cancelled.' : 'The chat, photos and people open once you have a place.'}
         </div></div>)}
       {sheet === 'menu' && <EventMenu e={e} host={host} may={may} onClose={() => setSheet('')} open={(s) => setSheet(s)} />}
-      {sheet === 'edit' && <EventFormSheet edit={e} onClose={() => setSheet('')} onSaved={(l) => { if (l !== eventLinkOf(e)) replaceHash('#/events/' + encodeURIComponent(l)) }} />}
+      {sheet === 'people' && <PeopleSheet e={e} hostKeys={hostKeys} going={going} maybe={maybe} onInvite={() => setSheet('qr')} onClose={() => setSheet('')} />}
+      {sheet === 'edit' && <EventFormSheet edit={e} going={going.length} onTickets={() => setSheet('tickets')} onCohosts={() => setSheet('cohost')} onClose={() => setSheet('')} onSaved={(l) => { if (l !== eventLinkOf(e)) replaceHash('#/events/' + encodeURIComponent(l)) }} />}
       {sheet === 'tickets' && <TicketsSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'guests' && <GuestList e={e} onClose={() => setSheet('')} />}
-      {sheet === 'qr' && <QrSheet url={eventUrl(e)} title="URL of the event" onClose={() => setSheet('')} />}
+      {sheet === 'qr' && <QrSheet url={eventUrl(e)} title="Our page" onClose={() => setSheet('')} />}
       {sheet === 'cohost' && <CoHostSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'cancel' && <CancelSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'delete' && <DeleteSheet e={e} onClose={() => setSheet('')} />}
@@ -874,3 +885,24 @@ export function EventWaitScreen({ title, onSignOut }: { title: string; onSignOut
 }
 
 export { DateChip }
+
+/** Everyone, like a channel's or group's members (Event form canvas, evview-people): search, Hosts (Host,
+ *  Co-host), Going · N (See all), Maybe · N; a name opens the profile; + invites (shares our page). */
+function PeopleSheet({ e, hostKeys, going, maybe, onInvite, onClose }: { e: CalEvent; hostKeys: string[]; going: string[]; maybe: string[]; onInvite: () => void; onClose: () => void }) {
+  const [q, setQ] = useState('')
+  const [all, setAll] = useState(false)
+  const everyone = [...new Set([...hostKeys, ...going, ...maybe])]
+  const hit = (k: string) => !q.trim() || displayName(k).toLowerCase().includes(q.trim().toLowerCase())
+  const row = (k: string, sub?: string) => <button key={k} className="ev-person" onClick={() => openProfile(k, e.groupId)}><Avatar pubkey={k} size={32} /><span className="t"><b>{displayName(k)}</b>{sub && <small>{sub}</small>}</span></button>
+  const g = going.filter((k) => !hostKeys.includes(k) && hit(k))
+  return (
+    <Sheet title="People" onClose={onClose}>
+      <div className="ev-people-top"><small className="hint">{e.title}</small><button className="icon-btn" aria-label="Invite someone" onClick={onInvite}><PersonPlusIcon /></button></div>
+      <input className="input" type="search" placeholder={`Search ${everyone.length} ${everyone.length === 1 ? 'person' : 'people'}`} value={q} onChange={(x) => setQ(x.target.value)} />
+      <section><h3>Hosts · {hostKeys.length}</h3>{hostKeys.filter(hit).map((k) => row(k, k === e.creator ? 'Host' : 'Co-host'))}</section>
+      {going.length > 0 && <section><h3>Going · {going.length}</h3>{(all || q ? g : g.slice(0, 5)).map((k) => row(k))}
+        {!all && !q && g.length > 5 && <button className="link" onClick={() => setAll(true)}>See all {going.length}</button>}</section>}
+      {maybe.length > 0 && <section><h3>Maybe · {maybe.length}</h3>{maybe.filter(hit).map((k) => row(k))}</section>}
+    </Sheet>
+  )
+}

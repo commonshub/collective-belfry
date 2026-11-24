@@ -53,6 +53,7 @@ export interface ApiViewer {
 export interface ApiEvent {
   d: string; coord: string; kind: number; group: string; link: string; url: string; title: string; description: string
   all_day: boolean; start: string | null; end: string | null; tz: string; location: string; online: boolean; links: string[]
+  /** the event's own site (["website", url]) */ website?: string | null
   cover: string | null; visibility: Visibility; status: 'scheduled' | 'cancelled'; status_reason: string
   hosts: { pubkey: string; name: string }[]; tickets: ApiTicket[]; going: number; community: string
   me: ApiViewer | null
@@ -104,7 +105,7 @@ export function fromApi(a: ApiEvent): CalEvent {
   const fake: Ev = { id: 'api-' + a.d, pubkey: creator, kind: Number(kind), created_at: 0, content: a.description, tags: [['d', a.d]], sig: '' }
   return {
     coord: a.coord, d: a.d, ev: fake, versions: [fake], title: a.title, description: a.description, location: a.location || undefined,
-    allDay, start: parse(a.start) ?? new Date(), end: parse(a.end), tz: a.tz || undefined, groupId: a.group, links: a.links,
+    allDay, start: parse(a.start) ?? new Date(), end: parse(a.end), tz: a.tz || undefined, groupId: a.group, links: a.links, website: typeof a.website === 'string' && /^https:\/\//.test(a.website) ? a.website : undefined,
     channels: [], rsvps: new Map(a.me?.rsvp ? [[me(), a.me.rsvp]] : []), rsvpEvents: new Map(), isNew: true, creator, meeting: false, invited: [],
     hosts: new Set(a.hosts.map((h) => h.pubkey)), cover: a.cover ?? undefined, visibility: a.visibility, slug: a.link !== a.d ? a.link : undefined,
     status: a.status, statusReason: a.status_reason || undefined, remote: true,
@@ -290,6 +291,8 @@ export interface EventForm {
   tz: string
   location: string
   online: string
+  /** the event's own outside site ("Event website"), https */
+  website?: string
   visibility: Visibility
   slug: string
   cover?: string // a Blossom URL (uploaded before)
@@ -364,6 +367,7 @@ function versionTags(d: string, n: EventForm, extra: string[][] = []): { kind: n
   }
   if (n.location.trim()) tags.push(['location', n.location.trim()])
   if (n.online.trim() && /^https:\/\//.test(n.online.trim())) tags.push(['r', n.online.trim()])
+  if (n.website?.trim() && /^https:\/\//.test(n.website.trim())) tags.push(['website', n.website.trim()])
   if (n.cover) tags.push(['image', n.cover])
   if (n.slug) tags.push(['slug', n.slug])
   return { kind: n.allDay ? 31922 : 31923, tags: [...tags, ...extra] }
@@ -402,16 +406,50 @@ export function formOf(e: CalEvent): EventForm {
     title: e.title, description: e.description, allDay: e.allDay,
     start: e.allDay ? tag(e.ev, 'start') ?? '' : utcToZoned(e.start, tz),
     end: e.end ? (e.allDay ? tag(e.ev, 'end') ?? '' : utcToZoned(e.end, tz)) : '',
-    tz, location: e.location ?? '', online: e.links[0] ?? '', visibility: e.visibility, slug: e.slug ?? '', cover: e.cover,
+    tz, location: e.location ?? '', online: e.links[0] ?? '', website: e.website ?? '', visibility: e.visibility, slug: e.slug ?? '', cover: e.cover,
   }
+}
+
+// ---- "Event website": paste it and the belfry fills in the rest (docs/event-details.md) ---------
+export interface EventDetails { url: string; title: string; start?: Date; end?: Date; allDay: boolean; tz?: string; place: string; image?: string; description: string }
+const DETAILS_DEMO: Record<string, Record<string, unknown>> = {
+  'https://riverside-openday.example': { title: 'Riverside Open Day 2027', starts_at: '2027-01-28T09:00:00Z', ends_at: '2027-01-28T16:00:00Z', all_day: false, timezone: 'Europe/Brussels', place: { name: 'Community hall', address: 'Rue Haute 12' }, description: 'Meet the groups of Riverside Commons: workshops, the repair café and soup at noon.' },
+}
+/** The event behind an outside URL, as the belfry reads it (members and their agents; null: nothing
+ *  usable, not allowed, or offline). Its picture comes through the belfry's proxy. Never a call link. */
+export async function fetchEventDetails(url: string): Promise<EventDetails | null> {
+  let d: Record<string, unknown>
+  if (isLocalOnly()) {
+    await new Promise((r) => setTimeout(r, 900))
+    const k = url.replace(/\/+$/, '')
+    if (!DETAILS_DEMO[k]) return null
+    d = { url: k, ...DETAILS_DEMO[k] }
+  } else {
+    try {
+      const r = await signedFetch(`${BELFRY.api}/event-details?url=${encodeURIComponent(url)}`)
+      if (!r.ok) return null
+      d = (await r.json().catch(() => ({}))) as Record<string, unknown>
+    } catch { return null }
+  }
+  const s = (v: unknown, n: number) => (typeof v === 'string' ? v.trim().slice(0, n) : '')
+  const date = (v: unknown) => { if (typeof v !== 'string') return undefined; const t = new Date(v); return isNaN(+t) ? undefined : t }
+  const p = d.place && typeof d.place === 'object' ? d.place as Record<string, unknown> : null
+  const place = p ? [s(p.name, 200), s(p.address, 300)].filter(Boolean).join(', ') : ''
+  let image: string | undefined
+  try { if (typeof d.image === 'string') { const i = new URL(d.image); if (i.protocol === 'https:' && i.origin === new URL(BELFRY.api).origin) image = i.href } } catch { /* not the proxy */ }
+  const out: EventDetails = { url: s(d.url, 2000) || url, title: s(d.title, 200), start: date(d.starts_at), end: date(d.ends_at), allDay: d.all_day === true,
+    tz: typeof d.timezone === 'string' && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)*$/.test(d.timezone) ? d.timezone : undefined, place, image, description: s(d.description, 5000) }
+  return out.title || out.start || out.place || out.description ? out : null
 }
 
 /** Is that custom URL free? (the belfry keeps them: unique per belfry) */
 export async function slugFree(name: string, d = ''): Promise<{ free: boolean; suggestion: string; problem?: string }> {
   const p = slugProblem(name)
   if (isLocalOnly()) {
-    const other = calendar().find((x) => x.slug === name && x.d !== d)
-    return { free: !p && !other, suggestion: name, problem: p }
+    const used = (n: string) => calendar().some((x) => x.slug === n && x.d !== d)
+    let next = name
+    for (let i = 2; used(next) && i < 50; i++) next = `${name.slice(0, 36)}-${i}` // (as the belfry does: the next free one)
+    return { free: !p && !used(name), suggestion: next, problem: p }
   }
   const r = await signedFetch(`${BELFRY.api}/events/slug?name=${encodeURIComponent(name)}${d ? '&event=' + encodeURIComponent(d) : ''}`)
   const j = await r.json().catch(() => ({}))

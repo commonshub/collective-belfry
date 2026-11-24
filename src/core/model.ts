@@ -898,8 +898,10 @@ export interface CalEvent {
   /** The time zone it was set in (NIP-52 start_tzid). */
   tz?: string
   groupId: string
-  /** Online meeting links (NIP-52 `r` tags: video calls, documents). */
+  /** Online meeting links (NIP-52 `r` tags: video calls, documents): "Join online". */
   links: string[]
+  /** The event's own outside site (["website", url]: Event form canvas, the lead's tag, 24 Nov). */
+  website?: string
   /** The channels its card was sent in (not its own chat); may be empty. */
   channels: string[]
   rsvps: Map<string, Rsvp>
@@ -1016,6 +1018,7 @@ export const calendar: () => CalEvent[] = perLog((list) => {
       description: e.content,
       location: tag(e, 'location'),
       links: e.tags.filter((t) => t[0] === 'r' && /^https:\/\//.test(t[1] ?? '')).map((t) => t[1]),
+      website: e.tags.find((t) => t[0] === 'website' && /^https:\/\//.test(t[1] ?? ''))?.[1],
       allDay, start, end: parse(tag(e, 'end')), tz: tag(e, 'start_tzid'),
       groupId, channels: [], isNew, creator, hosts,
       cover: tag(e, 'image') || undefined,
