@@ -61,7 +61,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, community, drops, followers, homepage, imagedim, sealed, stewards
+from . import apps, community, drops, enc, followers, homepage, imagedim, sealed, stewards
 from .blossom import event_id, verify_signature
 from .core import Services
 from .nip46check import conversation_key, nip44_decrypt, nip44_encrypt, sign_event
@@ -726,6 +726,8 @@ def mail_rumor(
 
 def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict):
     secret = _belfry(svc).secret
+    if enc.format3(svc):
+        return to_member_encrypted(svc, pubkey, raw, msg, sender, auth)
     # sealed conversations (docs/sealed.md §7): a member whose chain is ready gets the mail
     # under their head letterbox, which only their devices open; anyone else as before
     try:
@@ -755,6 +757,101 @@ def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender:
     else:
         wrap = gift_wrap(secret, rumor, pubkey)
     _publish(svc, wrap)
+
+
+def to_member_encrypted(
+    svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict
+) -> None:
+    """docs/encrypted.md §10, format 3: the belfry as a sender. The people conversation is
+    {belfry key, member}; a conversation key is made for the member's current devices (its
+    public half reused while the list is the same), its envelope published, then the copy. The
+    belfry keeps no copy and no secret. A member with no list, no device or a list that can't
+    be read: 451, the sending server tries again (never delivered in clear)."""
+    secret = _belfry(svc).secret
+    rumor = mail_rumor(svc, raw, msg, sender, auth, pubkey)
+    try:
+        sent = enc.send_people(svc, secret, rumor, [pubkey])
+    except enc.Held as exc:
+        log.warning("mail: %s…'s mail held (%s)", pubkey[:8], exc)
+        raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
+    except MailError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the relay: the sender tries again
+        log.warning("mail: %s…'s mail not encrypted: %r", pubkey[:8], exc)
+        raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
+    from . import push
+
+    for m in sent.messages:
+        push.announce(svc, m)
+
+
+def private_group(svc: Services, channel: str) -> bool:
+    """Format 3 only: CHANNEL is a private group, whose events are encrypted (§16.10). A
+    metadata read that fails is no answer: 451."""
+    if not enc.format3(svc):
+        return False
+    try:
+        return enc.is_private(svc, channel)
+    except Exception as exc:  # noqa: BLE001
+        raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
+
+
+def _sealed_files(
+    svc: Services, files: list[tuple[str, str, bytes]]
+) -> tuple[list[list[str]], list[str]]:
+    """§23: each attachment encrypted with AES-256-GCM before it goes to Blossom (the private
+    group's rule, as the apps do it): the imeta carries the original type and size, x of the
+    ciphertext, ox of the original and what opens it (inside the encrypted rumor only)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    out: list[list[str]] = []
+    refused: list[str] = []
+    for name, ctype, body in files:
+        key, nonce = AESGCM.generate_key(bit_length=256), secrets.token_bytes(12)
+        blob = AESGCM(key).encrypt(nonce, body, None)
+        try:
+            [got] = drops.upload(svc, [("", "application/octet-stream", blob)])
+        except Exception as exc:  # noqa: BLE001 — a type it does not take, too large
+            log.info("mail: attachment %r not kept: %r", name, exc)
+            refused.append(name or "an attachment")
+            continue
+        url = next(v[4:] for v in got[1:] if v.startswith("url "))
+        tag = ["imeta", f"url {url}", f"m {ctype}", f"size {len(body)}"]
+        tag += [f"x {hashlib.sha256(blob).hexdigest()}", f"ox {hashlib.sha256(body).hexdigest()}"]
+        tag += ["encryption-algorithm aes-gcm", f"decryption-key {key.hex()}"]
+        tag += [f"decryption-nonce {nonce.hex()}"]
+        dim = imagedim.size(body) if ctype.startswith("image/") else None
+        if dim:
+            tag.append(f"dim {dim[0]}x{dim[1]}")
+        if name:
+            tag.append(f"alt {name[:120]}")
+        out.append(tag)
+    return out, refused
+
+
+def post_card(
+    svc: Services, channel: str, text: str, tags: list[list[str]], client: str, private: bool
+) -> None:
+    """A card by the groups key in CHANNEL: as before, or (a private group, format 3) the
+    groups key as a sender (§24): an 8572 under a key it makes for the group's devices."""
+    if not private:
+        drops.post(svc, channel, text, tags, None, client=client)
+        return
+    gsecret = enc.groups_secret(svc)
+    if gsecret is None:
+        raise MailError(451, "4.3.0 Delivery failed here; try again later.")
+    content = (text + "\n" + drops._urls(tags)).strip()
+    rumor = {
+        "kind": 9,
+        "created_at": int(time.time()),
+        "tags": [["h", channel], *tags, ["client", client]],
+        "content": content,
+    }
+    try:
+        enc.send_group(svc, gsecret, rumor, channel)
+    except enc.Held as exc:
+        log.warning("mail: a card for %s held (%s)", channel, exc)
+        raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
 
 
 # ── in: a channel's mail ────────────────────────────────────────────────────────────────────
@@ -841,6 +938,13 @@ def thread_tags(root: dict[str, Any]) -> list[list[str]]:
 def to_channel(
     svc: Services, channel: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict
 ) -> None:
+    if private_group(svc, channel):
+        # a member's mail would be posted as the member, which needs one of their devices to
+        # encrypt it: in a private group only the shared inbox takes mail (as a card by the
+        # groups key, encrypted), whoever sends it
+        if inbox_on(svc, channel):
+            return to_inbox(svc, channel, raw, msg, sender, auth)
+        raise MailError(550, "5.7.1 This private group takes no e-mail.")
     member = apps.member_by_email(svc, sender)
     if not (member and auth.get("aligned")) and inbox_on(svc, channel):
         # a member whose provider did not prove the address is treated as anyone else (it could
@@ -935,7 +1039,8 @@ def to_inbox(
     body = text_of(msg)[:8000]
     name = email.utils.parseaddr(str(msg["From"] or ""))[0].strip()
     files = [f for f in attachments(msg) if len(f[2]) <= 20_000_000]
-    imeta, refused = _files(svc, files) if files else ([], [])
+    private = private_group(svc, channel)
+    imeta, refused = ((_sealed_files if private else _files)(svc, files)) if files else ([], [])
     text = "\n\n".join(x for x in (f"**{subject}**" if subject else "", body) if x) + _refused_note(
         refused
     )
@@ -948,7 +1053,7 @@ def to_inbox(
         *_mail_tags(msg),
         ["belfry-auth", "pass" if auth.get("aligned") else "none"],
     ]
-    drops.post(svc, channel, text or "(empty)", imeta + extra, None, client="belfry-mail")
+    post_card(svc, channel, text or "(empty)", imeta + extra, "belfry-mail", private)
 
 
 # ── in: one message, every recipient ────────────────────────────────────────────────────────
@@ -1104,9 +1209,8 @@ def sent_card(
         tags_.append(["e", reply_to, "", "reply"])
     if re.fullmatch(r"[0-9a-f]{64}", draft or ""):
         tags_.append(["draft", draft])
-    drops.post(
-        svc, channel, text_of(msg)[:8000] or "(empty)", tags_, None, client="belfry-mail-out"
-    )
+    text = text_of(msg)[:8000] or "(empty)"
+    post_card(svc, channel, text, tags_, "belfry-mail-out", private_group(svc, channel))
 
 
 def report(
@@ -1187,20 +1291,41 @@ def reported(svc: Services, email_id: str) -> bool:
 
 def handle_wrap(svc: Services, wrap: dict[str, Any]) -> None:
     sender, rumor = unwrap_out(svc, wrap)
+    handle_mail(svc, sender, rumor, wrap["id"])
+
+
+def handle_encrypted(svc: Services, event: dict[str, Any]) -> None:
+    """docs/encrypted.md §10, format 3: a member's 1301 as a people-conversation message to the
+    belfry key (an 8572 with ["p", belfry]). Opened as the belfry (its own device), accepted as
+    an app accepts it (the seal signed by a device on the author's list at the outer date), then
+    the same checks and the same way out as a gift wrap. The report is a kind 7679 to the
+    sender's account key (no ``lb``), as for an unsealed mail: the apps read reports that way."""
+    try:
+        rumor = enc.open_for(svc, _belfry(svc).secret, event)
+    except enc.Later as exc:
+        raise Later(str(exc)) from exc
+    handle_mail(svc, rumor["pubkey"], rumor, event["id"], encrypted=True)
+
+
+def handle_mail(
+    svc: Services, sender: str, rumor: dict[str, Any], event_id: str, encrypted: bool = False
+) -> None:
     if rumor.get("kind") != MAIL:
         return
     if rumor.get("created_at", 0) < time.time() - (WINDOW_DAYS + 1) * 86400:
         return
-    email_id = tag(rumor, "email-id") or rumor.get("id") or wrap["id"]
+    email_id = tag(rumor, "email-id") or rumor.get("id") or event_id
     if reported(svc, email_id):
         return  # sent before a restart
-    try:
-        # whom the report is for (their letterbox, or their account key), known before the mail
-        # leaves: a report is never encrypted to the account key because the read failed, and a
-        # mail is never sent twice because its report could not be made
-        chain = sealed.chain_for(svc, sender, strict=True)
-    except Exception as exc:  # noqa: BLE001
-        raise Later(f"the chain of {sender[:8]}… could not be read: {exc!r}") from exc
+    chain = None
+    if not encrypted:
+        try:
+            # whom the report is for (their letterbox, or their account key), known before the
+            # mail leaves: a report is never encrypted to the account key because the read
+            # failed, and a mail is never sent twice because its report could not be made
+            chain = sealed.chain_for(svc, sender, strict=True)
+        except Exception as exc:  # noqa: BLE001
+            raise Later(f"the chain of {sender[:8]}… could not be read: {exc!r}") from exc
     sent = None
     try:
         rcpts, code, answer, sent = outgoing(svc, sender, rumor)
@@ -1230,10 +1355,14 @@ def _later(seconds: float, call) -> None:
 
 
 def take_wrap(svc: Services, wrap: dict[str, Any], tries: int = 0, waited: float = 0.0) -> None:
-    """``handle_wrap``, and again later when the relay or the signer did not answer. Anything
-    else it raises is the caller's (a wrap that is not ours, a refusal: dropped)."""
+    """``handle_wrap`` (an 8572: ``handle_encrypted``), and again later when the relay or the
+    signer did not answer. Anything else it raises is the caller's (a wrap that is not ours, a
+    refusal: dropped)."""
     try:
-        handle_wrap(svc, wrap)
+        if wrap.get("kind") == enc.MSG:
+            handle_encrypted(svc, wrap)
+        else:
+            handle_wrap(svc, wrap)
     except Later as exc:
         delay = RETRY_AFTER[tries] if tries < len(RETRY_AFTER) else RETRY_EVERY
         if waited + delay > RETRY_FOR:
@@ -1311,15 +1440,54 @@ async def listen(app: FastAPI) -> None:
             delay = min(delay * 2, 120.0)
 
 
+async def listen_encrypted(app: FastAPI) -> None:
+    """Format 3 (docs/encrypted.md §10): 8572s for the belfry key on the community relay (a
+    member's outgoing mail, sent as one more person of the conversation). The relay serves these
+    only to the key in their ``p`` (§18.1): the filter asks for exactly that."""
+    from . import push
+
+    svc: Services = app.state.services
+    key = homepage.belfry_key(svc.settings)
+    if not svc.settings.relay_url or key is None or not svc.settings.mail_in:
+        return
+    me = key.public_key_xonly.format().hex()
+    seen: dict[str, float] = {}
+
+    def filters(_first: bool) -> list[dict[str, Any]]:
+        return [{"kinds": [enc.MSG], "#p": [me], "since": int(time.time()) - 3 * 86400}]
+
+    async def on_event(e: dict[str, Any], _live: bool, _first: bool) -> None:
+        if not isinstance(e, dict) or e.get("kind") != enc.MSG or e.get("id") in seen:
+            return
+        now = time.time()
+        seen[e["id"]] = now
+        for k in [k for k, t in seen.items() if t < now - 4 * 86400]:
+            del seen[k]
+        try:
+            await run_in_threadpool(take_wrap, svc, e)
+        except (ValueError, KeyError, TypeError) as exc:
+            log.debug("mail: skipped an 8572: %s", exc)
+        except Exception as exc:  # noqa: BLE001 — the next one still counts
+            log.warning("mail: an 8572 failed: %s", exc)
+
+    await push.subscribe(
+        svc.settings.relay_url, filters, lambda ev: sign_event(key.secret, ev), on_event
+    )
+
+
 @contextlib.asynccontextmanager
 async def running(app: FastAPI):
-    task = asyncio.create_task(listen(app))
+    tasks = [asyncio.create_task(listen(app))]
+    if enc.format3(app.state.services):
+        tasks.append(asyncio.create_task(listen_encrypted(app)))
     try:
         yield
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
 
 # ── the routes ──────────────────────────────────────────────────────────────────────────────

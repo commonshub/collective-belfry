@@ -904,7 +904,7 @@ def open_for(svc: Any, secret: bytes, msg: dict[str, Any], relay: Any = None) ->
             envs = relay.query([{"kinds": [KEY], "#p": [me], "#d": [d]}], _as(secret)) or []
         except Exception as exc:  # noqa: BLE001
             raise Later(f"envelopes not read: {exc!r}") from exc
-        waiting = False
+        waiting = refused = False
         for env in envs:
             if _one(env, "d") != d or _one(env, "p") != me:
                 continue
@@ -926,6 +926,7 @@ def open_for(svc: Any, secret: bytes, msg: dict[str, Any], relay: Any = None) ->
                 waiting = True
                 continue
             if verdict != "ok":
+                refused = True
                 continue
             held = (r["content"], people_id(people))
             with _keys_lock:
@@ -935,6 +936,8 @@ def open_for(svc: Any, secret: bytes, msg: dict[str, Any], relay: Any = None) ->
                 held = _keys[(me, d)]  # type: ignore[index]
             break
         if held is None:
+            if refused and not waiting:
+                raise ValueError("the key is not one its people's devices made")
             raise Later("the key's envelope isn't here yet" if not waiting else "lists pending")
     k, key_people = held
     seal, rumor = open_people_message(k, msg)
