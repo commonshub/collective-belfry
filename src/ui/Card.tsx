@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import qrcode from 'qrcode-generator'
 import { BELFRY, NAME } from '../config'
-import { setPendingInvite } from '../core/auth'
+import { loadSession, setPendingInvite } from '../core/auth'
 import {
   CardFailed, cardErrorText, cardInfo, claimConfirm, claimPoll, claimSignedIn, claimStart, claimVerify, takeConfirm, dropForm, hashtagSlug, hashtagState,
   cardDone, cardUrl, setCardTopic, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
@@ -174,7 +174,13 @@ function StartForm({ id, kind, signedIn, signedEmail, onSignOut, onIn, onTaken, 
       try {
         const r = await claimPoll(id, f.email)
         if (r && live) { cardDone(); dropForm(); markMid(r.group, 'started'); await onIn(r.signed) }
-      } catch (e) { if (live && e instanceof CardFailed && e.code === 'expired') setError(cardErrorText(e, kind)) } // (anything else: asked again)
+      } catch (e) {
+        if (!live || !(e instanceof CardFailed) || e.code !== 'expired') return // (anything else: asked again)
+        // 410 also when the Confirm button was opened in another tab of this browser: that tab holds the
+        // session now (shared storage): come in with it instead of saying it expired (the lead)
+        if (await loadSession().catch(() => undefined)) { live = false; location.reload(); return }
+        setError(cardErrorText(e, kind))
+      }
       finally { running = false }
     }
     const t = setInterval(() => { void tick() }, 3000)
