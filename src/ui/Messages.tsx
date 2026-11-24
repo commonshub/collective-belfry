@@ -1,4 +1,7 @@
 import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
+import { encryptedFormat } from '../core/access'
+/** Format 3 (the lead): a people conversation that is, or will be, encrypted: no link previews in it. */
+const encryptedHere = (conv: string) => (conv.startsWith('n:') || conv.startsWith('m:')) && (encryptedFormat() === 3 || encConvHere(conv))
 import { ComposerPreview, OgCard } from './LinkPreview'
 import { encConvHere, encFirstAt } from '../core/enc/runtime'
 import { AddedCards, EarlierLine } from './EarlierLine'
@@ -314,7 +317,7 @@ function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttrib
   const end = d.kind === 1301 ? undefined : endRef(d.text) // a reference at the end: its preview box
   // an outside page: its preview (channels/og-dm), never in a sealed conversation: asking would tell the belfry
   // which links were sent in it (the lead's ruling, 23 Nov)
-  const og = (d.kind === 14 || d.kind === 4) && !d.sealed && !isSealed(d.conv) ? outsideLink(d.text, d.tags) : undefined
+  const og = (d.kind === 14 || d.kind === 4) && !d.sealed && !isSealed(d.conv) && !encryptedHere(d.conv) ? outsideLink(d.text, d.tags) : undefined
   return (
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')} {...hold}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
@@ -451,7 +454,7 @@ const kb = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(
 function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean }) {
   const [text, setText] = useState('')
   // the first outside link: its preview above the field, ✕ = sent without one (channels/og-composer)
-  const dmLink = isMail(conv) || isSealed(conv) ? undefined : outsideLink(text) // (none in a sealed conversation)
+  const dmLink = isMail(conv) || isSealed(conv) || encryptedHere(conv) ? undefined : outsideLink(text) // (none in a sealed or encrypted conversation)
   const [droppedLink, setDroppedLink] = useState('')
   const [subject, setSubject] = useState('')
   const [error, setError] = useState('')

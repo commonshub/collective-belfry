@@ -1204,7 +1204,8 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   // a card's group: the claimer, not the groups key that signed for them (model.authorOf)
   const author = authorOf(m.ev)
   // the first link to an outside page: its preview under the message (channels/og-*)
-  const og = isCard || mail || inMail ? undefined : outsideLink(m.text, m.ev.tags, cards.map((c) => c.link ?? ''))
+  // (none in a private group or for a message opened from an encrypted one: the lead's privacy ruling)
+  const og = isCard || mail || inMail || privateNow(groupId) || ('sig' in m.ev && m.ev.sig === '') ? undefined : outsideLink(m.text, m.ev.tags, cards.map((c) => c.link ?? ''))
   if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
@@ -1457,7 +1458,8 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
   // locked while the send runs (an e-mail waits out its Undo): one tap, one message
   const [busy, setBusy] = useState(false)
   // the first outside link: its preview above the field; ✕ sends it without one (channels/og-composer)
-  const link = linkPreview && !plain ? outsideLink(text) : undefined
+  // (none in a private group: its messages are encrypted, asking would tell the belfry which links: the lead)
+  const link = linkPreview && !plain && !(groupId && privateNow(groupId)) ? outsideLink(text) : undefined
   const [dropped, setDropped] = useState('')
   const send = async () => {
     if (busy || (!text.trim() && !files.length)) return
