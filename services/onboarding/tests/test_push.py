@@ -621,3 +621,79 @@ def test_a_wrap_marked_silent_is_never_pushed(scene):
     # another value is not the mark: the push goes out
     loud = ev(PrivateKey(), 1059, [["p", cy], ["silent", "0"]], "…")
     assert w.handle(loud, "community") == [(cy, "dm")]
+
+
+# ── format 3 (docs/encrypted.md §10, §17.14) ────────────────────────────────────────────────
+def test_an_encrypted_dm_is_told_once_per_person_for_a_burst(scene):
+    rsvc, keys, devkeys, relay, gw, w = scene
+    clock = [1000.0]
+    w.clock = lambda: clock[0]
+    cy = pk(keys["Cy"])
+    copy = ev(PrivateKey(), 8572, [["p", cy], ["d", "ab" * 32]], "…")
+    assert w.handle(copy, "community") == [(cy, "dm")]
+    plain = opened(gw, devkeys, "Cy")
+    assert plain["type"] == "dm" and plain["body"] == "New message" and "from" not in plain
+    # the next copies of a burst (one 8572 per person and per message): not again within 5 s
+    clock[0] += 2
+    assert w.handle(ev(PrivateKey(), 8572, [["p", cy], ["d", "cd" * 32]], "…"), "community") == []
+    clock[0] += 4
+    assert w.handle(ev(PrivateKey(), 8572, [["p", cy], ["d", "ef" * 32]], "…"), "community") == [
+        (cy, "dm")
+    ]
+    # the sender's own copy is silent; history before EOSE is never told
+    quiet = ev(PrivateKey(), 8572, [["p", cy], ["d", "01" * 32], ["silent", "1"]], "…")
+    clock[0] += 10
+    assert w.handle(quiet, "community") == []
+    assert w.handle(ev(PrivateKey(), 8572, [["p", cy]], "…"), "community", live=False) == []
+
+
+def test_an_encrypted_group_event_follows_the_levels_and_the_outer_mentions(scene):
+    rsvc, keys, devkeys, relay, gw, w = scene
+    bob = rsvc.odoo.push_devices([pk(keys["Bob"])])[0]["partner_id"]
+    cy = rsvc.odoo.push_devices([pk(keys["Cy"])])[0]["partner_id"]
+    push.set_settings(rsvc, bob, {"channels": {"garden": "all"}})
+    push.set_settings(rsvc, cy, {"channels": {"garden": "mentions"}})
+    e = ev(keys["Ada"], 8572, [["h", "garden"], ["d", "ab" * 32]], '{"kind":13}')
+    # Bob (all) gets a message; Cy (mentions only) nothing; Ada (the sender) never; Dee isn't in
+    assert w.handle(e, "groups") == [(pk(keys["Bob"]), "message")]
+    plain = opened(gw, devkeys, "Bob")
+    assert plain["body"] == "New message" and plain["title"] == "#garden"
+    assert "event" not in plain and "from" not in plain
+    named = ev(keys["Ada"], 8572, [["h", "garden"], ["d", "ab" * 32], ["p", pk(keys["Cy"])]], "{}")
+    got = dict(w.handle(named, "groups"))
+    assert got == {pk(keys["Bob"]): "message", pk(keys["Cy"]): "mention"}
+    # a mention of someone outside the group tells nobody outside it
+    dee = ev(keys["Ada"], 8572, [["h", "garden"], ["d", "ab" * 32], ["p", pk(keys["Dee"])]], "x")
+    assert pk(keys["Dee"]) not in dict(w.handle(dee, "groups"))
+    # a silent one (the groups key's answer to a press): nobody
+    quiet = ev(keys["Ada"], 8572, [["h", "garden"], ["d", "ab" * 32], ["silent", "1"]], "x")
+    assert w.handle(quiet, "groups") == []
+
+
+def test_encrypted_filters_only_on_format_3(scene):
+    rsvc, keys, devkeys, relay, gw, w = scene
+    r = push.Runner(rsvc, w)
+    assert all(8572 not in f["kinds"] for f in r.groups_filters(True))
+    assert r.community_filters(True)[0]["kinds"] == [1059]
+    rsvc.settings.encrypted_format = 3
+    assert {"kinds": [8572], "since": r.groups_filters(True)[2]["since"], "limit": 200} in (
+        r.groups_filters(True)
+    )
+    assert r.community_filters(True)[0]["kinds"] == [1059, 8572]
+
+
+def test_announce_tells_the_belfrys_own_8572(scene, monkeypatch):
+    rsvc, keys, devkeys, relay, gw, w = scene
+    cy = pk(keys["Cy"])
+    monkeypatch.setattr(push, "_watcher", w)
+    started = []
+    monkeypatch.setattr(
+        push.threading,
+        "Thread",
+        lambda target, **kw: (
+            started.append(target) or type("T", (), {"start": lambda self: None})()
+        ),
+    )
+    push.announce(rsvc, ev(PrivateKey(), 8572, [["p", cy], ["d", "ab" * 32]], "…"))
+    started[0]()
+    assert opened(gw, devkeys, "Cy")["type"] == "dm"

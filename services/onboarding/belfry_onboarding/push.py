@@ -94,6 +94,8 @@ PRUNE_SECONDS = 3600
 WRAP_WINDOW = 3 * 86400  # gift wraps are backdated up to two days (NIP-59)
 NPUB = re.compile(r"nostr:(npub1[02-9ac-hj-np-z]+)")
 URGENT = {"dm", "mention", "reply", "announcement"}
+ENC_MSG = 8572  # docs/encrypted.md §6: an encrypted message (format 3)
+DM_GAP = 5.0  # seconds: one push per person for a burst of 8572s
 
 
 # ── who asks ────────────────────────────────────────────────────────────────────────────────
@@ -402,6 +404,7 @@ class Watcher:
         self._archived: set[str] = set()  # archived groups (docs/archive.md), as fresh as _groups
         self._people: tuple[float, dict[str, str]] = (0.0, {})
         self._names: dict[str, tuple[float, str]] = {}
+        self._told: dict[str, float] = {}  # account → when it was last told of an 8572
 
     # the relays ──────────────────────────────────────────────────────────────────────────────
     def groups_query(self, filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -510,17 +513,22 @@ class Watcher:
         if not self.first_time(e["id"]):
             return []
         self.remember(e)
+        silent = ["silent", "1"] in [t[:2] for t in e.get("tags", []) if isinstance(t, list)]
         if source == "community":
-            if not live or e.get("kind") != 1059:
+            if not live or e.get("kind") not in (1059, ENC_MSG):
                 return []
             # a wrap its sender marked as only for themselves (a copy of what they sent, a
             # note to self, a confirmation between their own devices; docs/sealed.md §4):
             # nobody is told. A request, not a proof: the message still arrives.
-            if ["silent", "1"] in [t[:2] for t in e.get("tags", []) if isinstance(t, list)]:
+            if silent:
                 return []
-            return self.dm(e)
+            # format 3 (docs/encrypted.md §10): a message is one 8572 per person, so a burst
+            # is told once per person every DM_GAP seconds
+            return self.dm(e, gap=DM_GAP if e.get("kind") == ENC_MSG else 0.0)
         if e.get("created_at", 0) < self.clock() - MAX_AGE:
             return []
+        if e.get("kind") == ENC_MSG:
+            return [] if silent else self.encrypted(e)
         if e.get("kind") in (9, 1111):
             return self.message(e)
         if e.get("kind") == 1985:
@@ -618,10 +626,58 @@ class Watcher:
         rcpt = self._recipients(h, e["pubkey"])
         return self._send_group(e, h, rcpt, {k: "pin" for k in rcpt}, msg)
 
-    def dm(self, e: dict[str, Any]) -> list[tuple[str, str]]:
+    def encrypted(self, e: dict[str, Any]) -> list[tuple[str, str]]:
+        """An 8572 in a private group (docs/encrypted.md §10, §17.14): its content can't be
+        read here. The group's members (never the sender) by their level for the group: a
+        ``mention`` when the outer ``p`` names them, else a ``message``; no text."""
+        from . import followers
+
+        h = _tag(e, "h")
+        if not h:
+            return []
+        _admins, members = self.group(h)
+        rcpt = {k: v for k, v in self._recipients(h, e["pubkey"]).items() if k in members}
+        if not rcpt:
+            return []
+        named = {t[1] for t in _tags(e, "p")}
+        label = followers.channel_label(self.svc, h)
+        domain = self.svc.settings.nip05_domain
+        sent: list[tuple[str, str]] = []
+        for k, devs in rcpt.items():
+            t = allowed(
+                get_settings(self.svc, devs[0]["partner_id"]),
+                h,
+                "mention" if k in named else "message",
+            )
+            if not t:
+                continue
+            plain = {
+                "v": 1,
+                "domain": domain,
+                "type": t,
+                "title": label,
+                "body": "New message",
+                "channel": h,
+                "url": f"https://chat.{domain}/#/c/{h}",
+            }
+            if any([self._deliver(d, plain, h, t in URGENT) for d in devs]):
+                sent.append((k, t))
+        return sent
+
+    def dm(self, e: dict[str, Any], gap: float = 0.0) -> list[tuple[str, str]]:
         from . import followers
 
         keys = {t[1] for t in _tags(e, "p")}
+        if gap:
+            now = self.clock()
+            with self._lock:
+                keys = {k for k in keys if now - self._told.get(k, -gap) >= gap}
+                for k in keys:
+                    self._told[k] = now
+                if len(self._told) > SEEN_MAX:
+                    self._told.clear()
+            if not keys:
+                return []
         people = self.people()
         devs = [d for d in self.svc.odoo.push_devices(sorted(keys)) if d["pubkey"] in people]
         domain = self.svc.settings.nip05_domain
@@ -817,17 +873,24 @@ class Runner:
 
     def groups_filters(self, _first: bool) -> list[dict[str, Any]]:
         since = int(time.time()) - MAX_AGE
-        return [
+        out = [
             {"kinds": [9, 1111], "since": since, "limit": 200},
             {"kinds": [1985], "#L": [PIN_NS], "since": since, "limit": 50},
         ]
+        if _format3(self.svc):  # private groups' encrypted events (docs/encrypted.md §10)
+            out.append({"kinds": [ENC_MSG], "since": since, "limit": 200})
+        return out
 
     def community_filters(self, _first: bool) -> list[dict[str, Any]]:
         keys = sorted({d["pubkey"] for d in self.svc.odoo.push_devices()})
         # nobody has a device yet: a filter that matches nothing, kept open for the next refresh
         keys = keys or ["0" * 64]
         # gift wraps are backdated: a wide `since`, and only the newest one before EOSE
-        return [{"kinds": [1059], "#p": keys, "since": int(time.time()) - WRAP_WINDOW, "limit": 1}]
+        # format 3: 8572s too. A relay with the private-kinds rule (docs/encrypted.md §18.1)
+        # serves them only to the key in their p, so this filter brings none there (the belfry's
+        # own mail is told by ``announce``); the gift wraps are served as before
+        kinds = [1059, ENC_MSG] if _format3(self.svc) else [1059]
+        return [{"kinds": kinds, "#p": keys, "since": int(time.time()) - WRAP_WINDOW, "limit": 1}]
 
     async def work(self) -> None:
         while True:
@@ -872,13 +935,38 @@ class Runner:
         return jobs
 
 
+def _format3(svc: Services) -> bool:
+    return getattr(svc.settings, "encrypted_format", 1) == 3
+
+
+_watcher: Watcher | None = None  # the running watcher (``announce``)
+
+
+def announce(svc: Services, event: dict[str, Any]) -> None:
+    """An 8572 the belfry itself just published for a person (e-mail in, format 3): told as the
+    relay would have shown it, in the background. Nothing when push isn't running."""
+    w = _watcher
+    if w is None or w.svc is not svc:
+        return
+
+    def run() -> None:
+        try:
+            w.handle(event, "community", True)
+        except Exception as exc:  # noqa: BLE001 — a notification is a courtesy
+            log.warning("push: an own 8572 not told: %s", exc)
+
+    threading.Thread(target=run, name="push-announce", daemon=True).start()
+
+
 @contextlib.asynccontextmanager
 async def running(app: FastAPI):
+    global _watcher
     svc = app.state.services
     tasks: list[asyncio.Task[None]] = []
     if enabled(svc):
         try:
-            runner = Runner(svc, Watcher(svc, Gateway(svc)))
+            _watcher = Watcher(svc, Gateway(svc))
+            runner = Runner(svc, _watcher)
             tasks = [asyncio.create_task(job) for job in runner.tasks()]  # type: ignore[arg-type]
             log.info("push: watching, gateway %s", svc.settings.push_gateway_url)
         except Exception as exc:  # noqa: BLE001 — the service runs without push
@@ -886,6 +974,7 @@ async def running(app: FastAPI):
     try:
         yield
     finally:
+        _watcher = None
         for t in tasks:
             t.cancel()
         for t in tasks:
