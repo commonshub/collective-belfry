@@ -42,18 +42,20 @@ async function browser(name, port, email, noJson = false) {
   await send("Network.enable"); await send("Network.setBypassServiceWorker", { bypass: true });
   ws.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.method !== "Fetch.requestPaused") return
     const u = d.params.request.url, cors = [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" }, { name: "Access-Control-Allow-Headers", value: "*" }]
-    if (/link-preview/.test(u)) { previewAsked.push(decodeURIComponent((u.split('url=')[1] || '').split('&')[0])); send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 200, responseHeaders: cors, body: Buffer.from(JSON.stringify({ title: "An outside page", description: "Its description", site_name: "Outside" })).toString("base64") }); return } // (link previews: the asks are recorded)
     if (/belfry\.json/.test(u)) send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 404, responseHeaders: cors, body: Buffer.from("{}").toString("base64") }) // noJson: the format stays unknown
     else send("Fetch.fulfillRequest", { requestId: d.params.requestId, responseCode: 200, responseHeaders: cors, body: Buffer.from(JSON.stringify(removedFor[name] || { removed: false })).toString("base64") }) });
-  await send("Fetch.enable", { patterns: [{ urlPattern: "*sessions/removed*" }, { urlPattern: "*link-preview*" }, ...(noJson ? [{ urlPattern: "*belfry.json*" }] : [])] });
+  await send("Fetch.enable", { patterns: [{ urlPattern: "*sessions/removed*" }, ...(noJson ? [{ urlPattern: "*belfry.json*" }] : [])] });
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  // link previews: answered inside the page (a signed request goes through a CORS preflight the Fetch domain doesn't
+  // see); every ask is recorded in window.__previewAsked
+  await send("Page.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: `(() => { const f = window.fetch; window.__previewAsked = []; window.fetch = (u, o) => { const s = String(u && u.url || u); if (s.includes('/link-preview?')) { window.__previewAsked.push(decodeURIComponent(s.split('url=')[1].split('&')[0])); return Promise.resolve(new Response(JSON.stringify({ title: 'An outside page', description: 'Its description', site_name: 'Outside' }), { status: 200, headers: { 'Content-Type': 'application/json' } })) } return f(u, o) } })()` });
   await send("Page.navigate", { url: base + "?backend=demo" }); await sleep(2500);
   await ev(`(() => { const i = document.querySelector('input[type=email]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, ${JSON.stringify(email)}); i.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('form').requestSubmit() })()`)
   await sleep(3000);
   const shot = async (n) => { const s = await send("Page.captureScreenshot", { format: "png" }); if (s?.data) fs.writeFileSync(`${dir}/enc-${n}.png`, Buffer.from(s.data, "base64")); };
   return { name, ev, send, shot };
 }
-const previewAsked = []; // every link-preview ask, all browsers (the lead: none for encrypted conversations)
 const until = async (f, ms = 20000) => { const t0 = Date.now(); for (;;) { const v = await f(); if (v || Date.now() - t0 > ms) return v; await sleep(500); } };
 const typeSend = async (b, text) => b.ev(`(async () => { const i = document.querySelector('.composer textarea, textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(i, ${JSON.stringify(text)}); i.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 200)); const btn = [...document.querySelectorAll('button')].find((x) => /^Send/i.test(x.getAttribute('aria-label') || '') || x.textContent.trim() === '↑'); btn && btn.click() })()`);
 const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify(text)})`);
@@ -314,11 +316,20 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   await typeSend(S, "Group link https://outside.example/group"); await sleep(3000);
   await S.ev(`location.hash = '#/dm/' + encodeURIComponent(${JSON.stringify("n:" + pkL)})`); await sleep(1200);
   await typeSend(S, "DM link https://outside.example/dm"); await sleep(3000);
-  await S.ev(`location.hash = '#/c/general'`); await sleep(1500);
-  await typeSend(S, "Channel link https://outside.example/channel"); await sleep(3000);
-  check("previews: a plain channel asks and shows one (the control)", previewAsked.includes("https://outside.example/channel") && await S.ev("[...document.querySelectorAll('.og')].some((o) => o.getAttribute('href') === 'https://outside.example/channel')"), previewAsked);
+  // the control: an open channel the relay knows (metadata and members), so the message goes out
+  const plaza = "plaza-open-1a2b";
+  await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([
+    finalizeEvent({ kind: 39000, created_at: Math.floor(Date.now() / 1000), tags: [["d", plaza], ["name", "Plaza"], ["open"], ["public"]], content: "" }, relaySk),
+    finalizeEvent({ kind: 39002, created_at: Math.floor(Date.now() / 1000), tags: [["d", plaza], ["p", pkS], ["p", pkL]], content: "" }, relaySk)]) });
+  await sleep(1500);
+  await S.ev(`location.hash = '#/c/${plaza}'`); await sleep(2500);
+  await typeSend(S, "Channel link https://outside.example/channel"); await sleep(4000);
+  let previewAsked = [...((await S.ev("window.__previewAsked")) || ["(no recorder)"]), ...((await L.ev("window.__previewAsked")) || [])];
+  check("previews: the test's recorder is in both pages", !previewAsked.includes("(no recorder)") && Array.isArray(await L.ev("window.__previewAsked")), previewAsked);
+  check("previews: a plain channel asks and shows one (the control)", previewAsked.includes("https://outside.example/channel") && await S.ev("[...document.querySelectorAll('.og')].some((o) => o.getAttribute('href') === 'https://outside.example/channel')"), { previewAsked, page: await S.ev("document.body.innerText.slice(-300)") });
   check("previews: none asked for in the private group or the encrypted conversation", !previewAsked.some((u) => /outside\.example\/(group|dm)/.test(u)), previewAsked);
   await L.ev(`location.hash = '#/c/${gid}'`); await sleep(2500);
+  previewAsked = (await L.ev("window.__previewAsked")) || ["(no recorder)"];
   check("previews: Lina's side asks nothing either for the group's link", !previewAsked.includes("https://outside.example/group") && await has(L, "Group link"), previewAsked);
   // re-read P1-a: the belfry now says format 1 (a stale cache, a rollback) but Sam has seen a key of the
   // private group: it stays encrypted there, never a clear kind 9

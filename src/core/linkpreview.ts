@@ -4,7 +4,7 @@
 // A message tagged ["preview","none"] gets no preview (the sender's ✕ before sending: the lead's tag,
 // the same on iOS and Android). Only the first outside link of a message gets one.
 import { useEffect, useState } from 'react'
-import { BELFRY, getBackend } from '../config'
+import { BELFRY } from '../config'
 import { target } from './refs'
 import { isLocalOnly, signedFetch } from './sync'
 
@@ -58,7 +58,7 @@ const DEMO: Record<string, Record<string, unknown>> = {
 }
 
 async function load(url: string): Promise<LinkPreview | null> {
-  if (getBackend() === 'demo' || isLocalOnly()) {
+  if (isLocalOnly()) { // (the demo with no relay: its stand-in; a demo session on a real relay asks the belfry)
     await new Promise((r) => setTimeout(r, 400))
     const d = DEMO[url]
     if (!d) return null

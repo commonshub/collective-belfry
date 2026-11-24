@@ -1205,7 +1205,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   const author = authorOf(m.ev)
   // the first link to an outside page: its preview under the message (channels/og-*)
   // (none in a private group or for a message opened from an encrypted one: the lead's privacy ruling)
-  const og = isCard || mail || inMail || privateNow(groupId) || ('sig' in m.ev && m.ev.sig === '') ? undefined : outsideLink(m.text, m.ev.tags, cards.map((c) => c.link ?? ''))
+  const og = isCard || mail || inMail || privateNow(groupId) || (!m.ev.pending && 'sig' in m.ev && m.ev.sig === '') ? undefined : outsideLink(m.text, m.ev.tags, cards.map((c) => c.link ?? ''))
   if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
