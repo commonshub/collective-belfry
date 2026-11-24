@@ -41,6 +41,9 @@ export const pendingCard = (): string => { try { const v = localStorage.getItem(
 export const setPendingCard = (id: string) => { try { if (id) localStorage.setItem(PENDING, id); else localStorage.removeItem(PENDING) } catch { /* private mode */ } }
 /** #/g/<id> (or /g/<id> when no proxy rewrote it): kept until the card is dealt with, the address cleaned. */
 let taken = ''
+let confirmToken: { id: string; token: string } | null = null
+/** The Confirm link's token for card ID, once (then forgotten). */
+export function takeConfirm(id: string): string { const c = confirmToken; confirmToken = null; return c && c.id === id ? c.token : '' }
 /** The card this page was opened for (a malformed one: 'unknown', shown as not known here). */
 export const cardNow = (): string => taken || pendingCard()
 export const cardDone = () => { taken = ''; setPendingCard('') }
@@ -48,7 +51,13 @@ export function takeCardFromUrl(): string {
   const m = /^#\/g\/(.{0,200})$/.exec(location.hash) ?? /^\/g\/(.{0,200})$/.exec(location.pathname)
   if (!m) return ''
   const id = m[1].replace(/\/$/, '').toUpperCase()
-  history.replaceState(history.state, '', '/' + location.search)
+  // the e-mail's Confirm button (?confirm=<token>): kept in memory only, never in history or storage (the lead)
+  const q = new URLSearchParams(location.search)
+  const t = q.get('confirm')
+  if (t && /^[A-Za-z0-9_-]{8,200}$/.test(t)) confirmToken = { id, token: t }
+  q.delete('confirm')
+  const rest = q.toString()
+  history.replaceState(history.state, '', '/' + (rest ? '?' + rest : ''))
   if (!CARD_ID.test(id)) { setPendingCard(''); return (taken = 'unknown') }
   setPendingCard(id)
   return (taken = id)
@@ -178,7 +187,7 @@ export async function hashtagState(hashtag: string): Promise<'free' | 'taken' | 
   } catch { return 'unknown' }
 }
 
-const claimBody = (kind: CardKind, f: CardForm) => ({ title: plainLabel(f.title).slice(0, 80), about: f.about.trim().slice(0, 500), ...(kind === 'topic' ? { hashtag: hashtagSlug(f.hashtag), summary: f.summary === 'monthly' ? 'monthly' : 'weekly' } : {}) })
+const claimBody = (kind: CardKind, f: CardForm) => ({ ...(kind === 'topic' ? {} : { title: plainLabel(f.title).slice(0, 80) }), about: f.about.trim().slice(0, 500), ...(kind === 'topic' ? { hashtag: hashtagSlug(f.hashtag), summary: f.summary === 'monthly' ? 'monthly' : 'weekly' } : {}) })
 
 /** Signed in: start the group or topic now. SEND is sync.signedFetch (signed as the account). */
 export async function claimSignedIn(id: string, kind: CardKind, f: CardForm, send: (url: string, method: string, body: unknown) => Promise<Response>): Promise<string> {
@@ -208,10 +217,38 @@ async function postNew(path: string, body: Record<string, unknown>): Promise<Rec
   return d
 }
 
-/** Not signed in: the code goes to EMAIL (nothing is kept on the belfry yet). */
-export async function claimStart(id: string, email: string): Promise<void> {
+/** Not signed in: the code and the Confirm button go to the e-mail; the belfry keeps the form for 15
+ *  minutes (cards-confirm: the button creates it from there). */
+export async function claimStart(id: string, kind: CardKind, f: CardForm): Promise<void> {
   if (demo()) { const s = demoInfo(id); if (s.state === 'claimed') throw new CardFailed('claimed', { group: s.group, invite: s.invite }); return }
-  await postNew(`/${id}/claim-start`, { email: email.trim() })
+  await postNew(`/${id}/claim-start`, { email: f.email.trim(), name: plainLabel(f.name).slice(0, 100), ...claimBody(kind, f) })
+}
+
+/** The belfry's answer once the claim is made (claim-verify, claim-poll, claim-confirm on this browser). */
+function signedFrom(d: Record<string, unknown>, email: string): { signed: SignedIn; group: string } {
+  if (d.signed_in !== true || typeof d.group !== 'string' || !GROUP.test(d.group)) throw new CardFailed('failed')
+  let signed: SignedIn
+  try { signed = signedInFrom(d, applicantKey(), email) } catch { throw new CardFailed('failed') }
+  return { signed: { ...signed, open: d.group }, group: d.group }
+}
+
+/** The waiting page asks every few seconds whether the e-mail's Confirm button was clicked: null while
+ *  not yet (202), the session once it was (200, once). 410: expired. */
+export async function claimPoll(id: string, email: string): Promise<{ signed: SignedIn; group: string } | null> {
+  if (demo()) return null
+  const d = await postNew(`/${id}/claim-poll`, {})
+  if (d.pending === true) return null
+  return signedFrom(d, email)
+}
+
+/** The e-mail's Confirm button opened this page: the claim is made. On the browser that started it the
+ *  session comes with it; on another one, just "confirmed". */
+export async function claimConfirm(id: string, token: string): Promise<{ group: string; signed?: SignedIn }> {
+  if (demo()) throw new CardFailed('expired')
+  const d = await postNew(`/${id}/claim-confirm`, { token })
+  if (d.confirmed !== true || typeof d.group !== 'string' || !GROUP.test(d.group)) throw new CardFailed('failed')
+  if (d.same_device === true && d.signed_in === true) return signedFrom(d, typeof d.address === 'string' ? d.address : '')
+  return { group: d.group }
 }
 
 /** The code: the group or topic is made now, and this browser is signed in (as the account the
@@ -227,10 +264,7 @@ export async function claimVerify(id: string, kind: CardKind, f: CardForm, code:
     return { signed: { session: { ...demoSession(f.email.trim()), clientSecret: bytesToHex(applicantKey()) }, address: f.email.trim(), open: group, moved: false }, group }
   }
   const d = await postNew(`/${id}/claim-verify`, { email: f.email.trim(), code: code.trim(), name: plainLabel(f.name).slice(0, 100), client: 'belfry-web', ...claimBody(kind, f) })
-  if (d.signed_in !== true || typeof d.group !== 'string' || !GROUP.test(d.group)) throw new CardFailed('failed')
-  let signed: SignedIn
-  try { signed = signedInFrom(d, applicantKey(), f.email) } catch { throw new CardFailed('failed') }
-  return { signed: { ...signed, open: d.group }, group: d.group }
+  return signedFrom(d, f.email)
 }
 
 // ---- demo: cards K7Q2MX (a group card) and T9PC4H (a topic card) are free; CXAWMS is claimed (TPCHAT: a claimed topic card),

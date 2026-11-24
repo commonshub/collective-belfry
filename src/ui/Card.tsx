@@ -8,7 +8,7 @@ import qrcode from 'qrcode-generator'
 import { BELFRY, NAME } from '../config'
 import { setPendingInvite } from '../core/auth'
 import {
-  CardFailed, cardErrorText, cardInfo, claimSignedIn, claimStart, claimVerify, dropForm, hashtagSlug, hashtagState,
+  CardFailed, cardErrorText, cardInfo, claimConfirm, claimPoll, claimSignedIn, claimStart, claimVerify, takeConfirm, dropForm, hashtagSlug, hashtagState,
   cardDone, cardUrl, setCardTopic, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
 } from '../core/cards'
 import type { SignedIn } from '../core/guestjoin'
@@ -30,6 +30,19 @@ export function CardScreen({ id, signedIn, signedEmail, onSignOut, onIn, onInvit
   const [info, setInfo] = useState<CardInfo | null>(null)
   const [offline, setOffline] = useState(false)
   const [tries, setTries] = useState(0)
+  // opened by the e-mail's Confirm button: the claim is made now; this browser signs in when it started it
+  const [confirm] = useState(() => takeConfirm(id))
+  const [confirmed, setConfirmed] = useState<'' | 'asking' | 'elsewhere' | 'failed'>(confirm ? 'asking' : '')
+  const [confirmError, setConfirmError] = useState('')
+  useEffect(() => {
+    if (!confirm) return
+    let live = true
+    claimConfirm(id, confirm).then(async (r) => {
+      if (!live) return
+      if (r.signed) { cardDone(); dropForm(); markMid(r.group, 'started'); await onIn(r.signed) } else { cardDone(); dropForm(); setConfirmed('elsewhere') }
+    }, (e) => { if (live) { setConfirmError(cardErrorText(e instanceof CardFailed ? e : new CardFailed('failed'), 'group')); setConfirmed('failed') } })
+    return () => { live = false }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     let live = true
     setOffline(false)
@@ -50,6 +63,11 @@ export function CardScreen({ id, signedIn, signedEmail, onSignOut, onIn, onInvit
   // a card that can't be started any more: what was typed for it goes (the lead's review)
   useEffect(() => { if (info?.state === 'retired' || info?.state === 'archived' || info?.state === 'unknown') dropForm() }, [info])
 
+  if (confirmed === 'asking') return <div className="screen login card-page"><Logo /><div className="spinner" aria-hidden="true" /><p role="status">Confirming…</p></div>
+  if (confirmed === 'elsewhere') return (
+    <Dead title="Confirmed" onClose={onClose}>It’s created. Go back to the page where you scanned the card: it opens there by itself.</Dead>
+  )
+  if (confirmed === 'failed') return <Dead title="This link didn’t work" onClose={onClose}>{confirmError || 'It may have expired.'} Scan the card again to start over.</Dead>
   if (offline) return (
     <Dead title="No connection" onClose={onClose} again={() => setTries((n) => n + 1)}>
       This page needs the internet to open the card. What you typed stays here.
@@ -144,8 +162,24 @@ function StartForm({ id, kind, signedIn, signedEmail, onSignOut, onIn, onTaken, 
       } catch (e) { fail(e) }
       return
     }
-    try { await claimStart(id, f.email); setCode(''); setSentAt(Date.now() / 1000); setStep('code') } catch (e) { fail(e) }
+    try { await claimStart(id, kind, f); setCode(''); setSentAt(Date.now() / 1000); setStep('code') } catch (e) { fail(e) }
   }
+  // the e-mail's Confirm button, clicked anywhere: this page moves on by itself (claim-poll every 3 s)
+  useEffect(() => {
+    if (step !== 'code' || signedIn) return
+    let live = true, running = false
+    const tick = async () => {
+      if (running || busy) return
+      running = true
+      try {
+        const r = await claimPoll(id, f.email)
+        if (r && live) { cardDone(); dropForm(); markMid(r.group, 'started'); await onIn(r.signed) }
+      } catch (e) { if (live && e instanceof CardFailed && e.code === 'expired') setError(cardErrorText(e, kind)) } // (anything else: asked again)
+      finally { running = false }
+    }
+    const t = setInterval(() => { void tick() }, 3000)
+    return () => { live = false; clearInterval(t) }
+  }, [step, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const verify = async (c: string) => {
     if (busy) return
     setBusy(true); setError(''); setNote('')
@@ -176,11 +210,12 @@ function StartForm({ id, kind, signedIn, signedEmail, onSignOut, onIn, onTaken, 
       <h2>Check your e-mail</h2>
       <p>To create <b>{what}</b>, enter the 6-digit code we sent to <b className="addr">{f.email.trim()}</b>.</p>
       <CodeBoxes value={code} disabled={busy} invalid={!!error} onChange={(v) => { setCode(v); setError(''); if (v.length === 6) void verify(v) }} />
+      <p className="hint">or click <b>Confirm</b> in the e-mail. This page moves on by itself once you have.</p>
       <div className="join-state" role="status" aria-live="polite">
         {busy ? <span className="hint">Creating {what}…</span> : error ? <span className="error" role="alert">{error}</span> : note ? <span className="hint">{note}</span> : null}
       </div>
       <div className="join-links">
-        <Btn className="link" disabled={busy || wait > 0} onClick={async () => { setError(''); try { await claimStart(id, f.email); setSentAt(Date.now() / 1000); setNote('A new code is on its way to your e-mail.') } catch (e) { fail(e) } }}>{wait > 0 ? `Send a new code (in ${wait} s)` : 'Send a new code'}</Btn>
+        <Btn className="link" disabled={busy || wait > 0} onClick={async () => { setError(''); try { await claimStart(id, kind, f); setSentAt(Date.now() / 1000); setNote('A new code is on its way to your e-mail.') } catch (e) { fail(e) } }}>{wait > 0 ? `Send a new code (in ${wait} s)` : 'Send a new code'}</Btn>
         <button type="button" className="link" disabled={busy} onClick={() => { setStep('form'); setError(''); setNote(''); setCode('') }}>Use another address</button>
       </div>
       <p className="hint small">Not there? Look in your spam folder.</p>
