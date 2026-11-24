@@ -72,6 +72,14 @@ let bad = 0; const check = (name, ok, got) => { if (!ok) bad++; console.log(ok ?
   await click("Use it"); await sleep(1500);
   check("Use it: ✓ Available", /✓ Available/.test(await text('.sheet .evf-slug')), await text('.sheet .evf-slug'));
   await shot("4-taken");
+  // the laptop (UI-26, evform-laptop): two columns, Save top right with its line; no bottom button
+  await ev("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); [...document.querySelectorAll('button')].find((x) => x.getAttribute('aria-label') === 'Close')?.click()"); await sleep(400);
+  await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }); await sleep(600);
+  await ev("location.hash = '#/events'"); await sleep(900);
+  await click("New event"); await sleep(800);
+  const lap = await ev(`(() => { const t = document.querySelector('.evf-top .btn'), b = document.querySelector('.evf .btn.evf-bottom'), f = document.querySelector('.evf'); const r = t?.getBoundingClientRect(), fr = f?.getBoundingClientRect(); return { top: !!t && getComputedStyle(t).display !== 'none' && r.top < fr.top + 80 && r.right > fr.right - 60, bottom: !!b && getComputedStyle(b).display === 'none', cols: getComputedStyle(f).gridTemplateColumns.split(' ').length } })()`);
+  check("laptop: Save top right, no bottom button, two columns", lap.top && lap.bottom && lap.cols === 2, lap);
+  await shot("5-laptop");
   console.log(bad ? `== evform2: ${bad} failed` : "== evform2: all ok");
   ws.close(); ch.kill(); await sleep(300); fs.rmSync(prof, { recursive: true, force: true }); process.exit(bad ? 1 : 0);
 })();

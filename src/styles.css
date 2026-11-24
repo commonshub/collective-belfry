@@ -2306,8 +2306,13 @@ form .create-where { margin-bottom: 14px; }
 .evf-tell { margin-bottom: 14px; }
 .cover-pick { position: relative; }
 .cover-pick .cover-change { position: absolute; right: 10px; bottom: 10px; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; padding: 4px 10px; border-radius: 12px; }
+.evf-top { display: none; }
 @media (min-width: 900px) {
   .evf { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  .evf-top { display: flex; grid-column: 1 / -1; align-items: center; justify-content: flex-end; gap: 14px; position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 4px 0 8px; }
+  .evf-top .hint { margin: 0; }
+  .evf-top .btn { width: auto; padding: 0 22px; }
+  .evf .evf-bottom { display: none; }
   dialog:has(.evf) { width: min(980px, 94vw); max-width: 980px; }
 }
 /* the event screen's rows (evview-*): Join online · Event website · Our page */

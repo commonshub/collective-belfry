@@ -344,6 +344,11 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members',
         }
         await save(final())
       }}>
+        {/* the laptop: Save top right, with its line (UI-26, evform-laptop); the phone keeps the button at the bottom */}
+        <div className="evf-top">
+          <p className="hint">{edit ? 'Everyone going is told when the time, the place or the Join online link changes' : postedIn ? `Its card is posted in ${postedIn}.` : 'It gets its own chat, photos and to-dos.'}</p>
+          <button className="btn" disabled={!ok}>{edit ? 'Save' : 'Create the event'}</button>
+        </div>
         <div className="evf-col">
           <div className="evf-card">
             {field('Event website', changedChip('website'), <input className="input" type="url" inputMode="url" placeholder="https://… (optional)" value={n.website ?? ''} onChange={(e) => set({ website: e.target.value })} />)}
@@ -420,8 +425,8 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members',
             {onCohosts && <button type="button" className="act" onClick={onCohosts}><span>Co-hosts</span><small>{[...edit.hosts].filter((k) => k !== edit.creator).map((k) => displayName(k)).join(', ') || 'Invite one'} ›</small></button>}
           </div>}
           {error && <p className="error" role="alert">{error}</p>}
-          <button className="btn" disabled={!ok}>{edit ? 'Save changes' : 'Create the event'}</button>
-          <p className="hint" style={{ marginTop: 10 }}>{edit ? 'Everyone going is told when the time, the place or the Join online link changes.' : postedIn ? `It gets its own chat, photos and to-dos, and its card is posted in ${postedIn}.` : 'It gets its own chat, photos and to-dos.'}</p>
+          <button className="btn evf-bottom" disabled={!ok}>{edit ? 'Save changes' : 'Create the event'}</button>
+          <p className="hint evf-bottom" style={{ marginTop: 10 }}>{edit ? 'Everyone going is told when the time, the place or the Join online link changes.' : postedIn ? `It gets its own chat, photos and to-dos, and its card is posted in ${postedIn}.` : 'It gets its own chat, photos and to-dos.'}</p>
         </div>
       </Form>
     </Sheet>
