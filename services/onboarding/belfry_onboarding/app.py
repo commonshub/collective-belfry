@@ -56,6 +56,7 @@ from . import (
     email_code,
     eudi,
     eventchat,
+    eventdetails,
     events,
     feedback,
     followers,
@@ -356,6 +357,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     mailalias.register(app)  # /api/mail-alias: a channel's address, by an admin (mailalias.py)
     mailfaces.register(app)  # /api/avatar/<hash>: e-mail correspondents' faces (mailfaces.py)
     linkpreview.register(app)  # /api/link-preview: outside links' previews (linkpreview.py)
+    eventdetails.register(app)  # /api/event-details: an event's website read (eventdetails.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
