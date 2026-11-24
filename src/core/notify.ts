@@ -45,7 +45,7 @@ async function load() {
     const r = await signedFetch(`${BELFRY.api}/notifications`, 'POST', {})
     const d = await r.json().catch(() => ({}))
     if (r.status === 409 && d.error === 'unsupported') { cache = { unsupported: true, channels: {}, devices: 0 }; return }
-    if (!r.ok) throw new Error(d.message || `The belfry answered ${r.status}.`)
+    if (!r.ok) throw new Error(`The belfry answered ${r.status}.`)
     let devices = 0
     try {
       const dv = await signedFetch(`${BELFRY.api}/push/devices`, 'POST', {})
@@ -91,7 +91,7 @@ export async function setChoice(channel: string, choice: Choice) {
   try {
     const r = await signedFetch(`${BELFRY.api}/notifications`, 'POST', { set: { channels: { [channel]: level } } })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) throw new Error(d.message || 'Not saved. Try again.')
+    if (!r.ok) throw new Error('Not saved. Try again.')
     cache = { ...cache!, channels: d.channels ?? cache!.channels }
     changed()
   } catch (e) {

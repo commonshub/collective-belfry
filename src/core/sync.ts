@@ -498,7 +498,7 @@ export async function signedFetch(url: string, method = 'GET', body?: unknown): 
 export async function joinWithAccount(token: string): Promise<{ channel: string; already: boolean }> {
   const res = await signedFetch(`${BELFRY.api}/channel-invites/${token}/join`, 'POST', {})
   const body = (await res.json().catch(() => ({}))) as { channel?: string; already?: boolean; message?: string; error?: string }
-  if (!res.ok || !body.channel) throw new Error(body.error === 'name_needed' ? 'This account can\u2019t use invites.' : body.message || 'The invite could not be used just now.')
+  if (!res.ok || !body.channel) throw new Error(body.error === 'name_needed' ? 'This account can\u2019t use invites.' : 'The invite could not be used just now.')
   return { channel: body.channel, already: !!body.already }
 }
 

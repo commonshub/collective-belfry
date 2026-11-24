@@ -747,7 +747,7 @@ async function signedWith(sign: (t: { kind: number; content: string; created_at:
   const auth = await sign({ kind: 27235, content: '', created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', 'POST'], ['payload', bytesToHex(sha256(new TextEncoder().encode(text)))]] })
   const r = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.message || 'That did not work just now. Try again.')
+  if (!r.ok) throw new Error('That did not work just now. Try again.')
   return j
 }
 

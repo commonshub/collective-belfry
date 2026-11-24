@@ -32,7 +32,7 @@ async function load() {
     }
     const r = await signedFetch(url())
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) throw new Error(d.message || `The belfry answered ${r.status}.`)
+    if (!r.ok) throw new Error(`The belfry answered ${r.status}.`)
     const map = new Map<string, Frequency>()
     for (const f of d.follows ?? []) if (f.state === 'active') map.set(f.channel, f.frequency)
     cache = { email: d.email ?? '', map }
@@ -65,7 +65,7 @@ async function setFollow(channel: string, choice: Frequency | 'stop') {
   }
   const r = await signedFetch(url(), 'POST', { channel, frequency: choice })
   const d = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(d.message || 'Not saved.')
+  if (!r.ok) throw new Error('Not saved.')
   if (d.state === 'active') cache!.map.set(channel, d.frequency)
   else cache!.map.delete(channel)
   changed()

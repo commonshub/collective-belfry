@@ -63,7 +63,7 @@ export async function accountFor(groupId: string, n: Named): Promise<string> {
   }
   const r = await signedFetch(`${BELFRY.api}/meeting-guests`, 'POST', { channel: groupId, name: n.name.trim(), ...(n.email?.trim() ? { email: n.email.trim() } : {}) })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok || !j.pubkey) throw new Error(j.message || 'Could not add them just now.')
+  if (!r.ok || !j.pubkey) throw new Error('Could not add them just now.')
   return j.pubkey as string
 }
 
@@ -89,7 +89,7 @@ export async function handOver(groupId: string, pubkey: string, email: string) {
     return
   }
   const r = await signedFetch(`${BELFRY.api}/meeting-guests/transfer`, 'POST', { pubkey, email: email.trim() })
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || 'That did not work.')
+  if (!r.ok) throw new Error('That did not work.')
 }
 
 export const removedFromMeeting = (e: Pick<CalEvent, 'groupId' | 'creator'>) => removedOf(all(me()), e.groupId, e.creator, belfryAdminKeys())

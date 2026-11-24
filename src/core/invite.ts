@@ -38,7 +38,7 @@ export async function inviteMember(groupId: string, pubkey: string): Promise<'ad
   if (isGuest(pubkey)) { // a guest of another channel (a person or an agent): a guest of this one too
     const res = await signedFetch(`${BELFRY.api}/channel-guests`, 'POST', { channel: groupId, pubkey })
     const body = (await res.json().catch(() => ({}))) as { message?: string; member?: boolean }
-    if (!res.ok) throw new Error(body.message || 'Could not add them. Try again.')
+    if (!res.ok) throw new Error('Could not add them. Try again.')
     if (!body.member) return 'guest'
   }
   const name = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '# ' + g.name) : nameOf(groupId)
@@ -60,7 +60,7 @@ export interface MyAgents { agents: { pubkey: string; name: string; since: strin
 async function agentsCall(body: Record<string, unknown>): Promise<MyAgents> {
   const res = await signedFetch(`${BELFRY.api}/agents`, 'POST', body)
   const out = (await res.json().catch(() => ({}))) as MyAgents & { message?: string }
-  if (!res.ok) throw new Error(out.message || 'Could not do that. Try again.')
+  if (!res.ok) throw new Error('Could not do that. Try again.')
   return { agents: Array.isArray(out.agents) ? out.agents : [], limit: Number(out.limit) || 0 }
 }
 /** My agents and how many I can have (demo: my own agents as belfry.json says, one at most). */

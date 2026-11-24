@@ -410,7 +410,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members',
             <div className="field"><span>Page on {community}’s website{changedChip('slug')}</span></div>
             <p className="hint">Your community’s page for this event, with RSVP, tickets and the chat. Share this one.</p>
             <div className="url-field"><span className="pre">{BELFRY.domain}/events/</span>
-              <input className="input" aria-label="Page address" value={n.slug} placeholder={edit?.d ?? 'open-day'} maxLength={40} autoCapitalize="none" autoCorrect="off" spellCheck={false} readOnly={!pick}
+              <input className="input" aria-label="Page address" value={n.slug} placeholder="open-day" maxLength={40} autoCapitalize="none" autoCorrect="off" spellCheck={false} readOnly={!pick}
                 onChange={(e) => { setSlugEdited(true); set({ slug: typingSlug(e.target.value).slice(0, 40) }) }} /></div>
             <p className={'hint evf-slug' + (slugState.free === false ? ' error' : '')} role="status">
               {slugState.checking ? 'Checking…' : slugState.problem ? slugState.problem : slugState.free ? '✓ Available' : slugState.free === false ? (takenBy

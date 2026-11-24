@@ -93,7 +93,7 @@ export async function fetchEvent(link: string, signed = true): Promise<ApiEvent>
   const r = signed && me() ? await signedFetch(url) : await fetch(url)
   const d = await r.json().catch(() => ({}))
   if (r.status === 403) throw new Error('members_only')
-  if (!r.ok) throw new Error(d.message || 'not_found')
+  if (!r.ok) throw new Error(typeof d.error === 'string' ? d.error : 'not_found')
   return d as ApiEvent
 }
 
@@ -453,7 +453,7 @@ export async function slugFree(name: string, d = ''): Promise<{ free: boolean; s
   }
   const r = await signedFetch(`${BELFRY.api}/events/slug?name=${encodeURIComponent(name)}${d ? '&event=' + encodeURIComponent(d) : ''}`)
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.message || 'Could not check the URL.')
+  if (!r.ok) throw new Error('Could not check the URL.')
   return j
 }
 async function claimSoon(d: string, slug: string) {
@@ -467,7 +467,7 @@ export async function claimSlug(d: string, slug: string) {
   if (isLocalOnly()) return
   const r = await signedFetch(`${BELFRY.api}/events/${d}/slug`, 'PUT', { slug })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new SlugError(j.message || 'That URL could not be set.', j.error)
+  if (!r.ok) throw new SlugError('That URL could not be set.', j.error)
 }
 
 /** Cancel (with a line to the guests) or reopen: a label in the group and a new version. */
@@ -544,7 +544,7 @@ export async function takeTicket(e: CalEvent, t: Ticket): Promise<void> {
   if (isLocalOnly()) { demoIssue(e, me(), t.d); await rsvp(e, 'accepted', t.d); return }
   const r = await signedFetch(`${BELFRY.api}/events/${e.d}/join`, 'POST', { ticket: t.d })
   const j = (await r.json().catch(() => ({}))) as JoinAnswer
-  if (!r.ok) throw new Error(j.message || 'That did not work. Try again.')
+  if (!r.ok) throw new Error('That did not work. Try again.')
   remote.delete(e.d); remote.delete(eventLinkOf(e)); touch()
 }
 
@@ -556,7 +556,7 @@ export async function applyFor(e: CalEvent, t: Ticket, answer: string, waitlist:
   const request = await currentSigner().sign({ kind: 9021, content: answer.slice(0, 2000), tags, created_at: Math.floor(Date.now() / 1000) })
   const r = await signedFetch(`${BELFRY.api}/events/${e.d}/apply`, 'POST', { ticket: t.d, request })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.message || 'Your application did not go through. Try again.')
+  if (!r.ok) throw new Error('Your application did not go through. Try again.')
   addEvents([request])
   remote.delete(e.d); touch()
 }
@@ -568,7 +568,7 @@ export async function decide(e: CalEvent, pubkey: string, action: 'approve' | 'd
   // a guest co-host, or a co-host by role (zooid refuses their 9000 / 9001): through the belfry
   if (amGuest() || (!isLocalOnly() && !relayAdmin(e.groupId))) {
     const r = await signedFetch(`${BELFRY.api}/events/${e.d}/decide`, 'POST', { pubkey, action, ticket: ticketD })
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || 'That did not work.')
+    if (!r.ok) throw new Error('That did not work.')
     return
   }
   if (action === 'decline') return void (await enqueue('groups', { kind: 9001, tags: [['h', e.groupId], ['p', pubkey]] }))
@@ -586,7 +586,7 @@ export async function coHostLink(e: CalEvent): Promise<string> {
   if (isLocalOnly()) return `https://chat.${BELFRY.domain}/join/demo-cohost-${e.d}`
   const r = await signedFetch(`${BELFRY.api}/channel-invites`, 'POST', { channel: e.groupId, role: 'host', people: 1, link_days: 1 })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.message || 'The link could not be made.')
+  if (!r.ok) throw new Error('The link could not be made.')
   return String(j.url)
 }
 

@@ -51,7 +51,7 @@ export function Connections({ session }: { session: Session }) {
     try {
       const r = await signedFetch(url)
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.message || `The belfry answered ${r.status}.`)
+      if (!r.ok) throw new Error(`The belfry answered ${r.status}.`)
       setRows(d.sessions ?? [])
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
@@ -62,7 +62,7 @@ export function Connections({ session }: { session: Session }) {
     setBusy(c.bunker_pubkey)
     try {
       const r = await signedFetch(url + '/revoke', 'POST', { bunker_pubkey: c.bunker_pubkey })
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || 'Not ended.')
+      if (!r.ok) throw new Error('Not ended.')
       await load()
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy('') }
   }

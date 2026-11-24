@@ -109,7 +109,7 @@ export async function saveBranding(change: Partial<Branding>): Promise<Branding>
   if (getBackend() === 'demo') { setBranding({ ...brand, ...change }); return brand } // tests: this device only
   const res = await signedFetch(`${BELFRY.api}/branding`, 'POST', change)
   const body = (await res.json().catch(() => ({}))) as Partial<Branding> & { message?: string }
-  if (!res.ok) throw new Error(body.message || 'The branding could not be saved just now.')
+  if (!res.ok) throw new Error('The branding could not be saved just now.')
   setBranding(body)
   return brand
 }

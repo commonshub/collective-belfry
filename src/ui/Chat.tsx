@@ -1701,7 +1701,8 @@ const isCardLine = (m: Message) => m.ev.pubkey === belfryGroupsKey() && m.ev.tag
 function CardLine({ m, groupId }: { m: Message; groupId: string }) {
   const who = m.ev.tags.find((t) => t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? ''))?.[1]
   const word = group(groupId)?.isPod ? 'group' : 'topic'
-  const cardId = m.ev.tags.find((t) => t[0] === 'card' && /^[A-Z0-9]{6}$/.test(t[1] ?? ''))?.[1]
+  // the card's id: ["card_id", ID] (the lead, Belfry 9b4482b); ["card", "1"] alone: a line from before it
+  const cardId = m.ev.tags.find((t) => (t[0] === 'card_id' || t[0] === 'card') && /^[A-HJKMNP-Z2-9]{6}$/.test(t[1] ?? ''))?.[1]
   return (
     <div className="join-line" role="note">
       {/* (Cards v87: "You created the group from card K7Q2MX"; the card's id when the line carries it) */}

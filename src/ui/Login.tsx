@@ -356,7 +356,7 @@ export function ApplyForm({ email: known }: { email?: string }) {
       try {
         const r = await fetch(`${BELFRY.api}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), motivation: why.trim(), agreed: [...ticked], website: trap.current?.value ?? '' }) })
         const j = await r.json().catch(() => ({}))
-        if (!r.ok) throw new Error(j.message || 'That did not go through. Try again.')
+        if (!r.ok) throw new Error('That did not go through. Try again.')
         setSent(true)
       } catch (x) { setError(x instanceof TypeError ? 'No connection to the belfry. Try again.' : x instanceof Error ? x.message : String(x)) }
     }}>
