@@ -216,7 +216,6 @@ function StartForm({ id, kind, signedIn, onIn, onTaken, onStarted, onRetired }: 
             <input className="input" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required placeholder="you@example.org" value={f.email} onChange={set('email')} /></label>
           <p className="hint small">We’ll send a 6-digit code to confirm it. Already have an account on {community}? Use its e-mail address.</p>
         </>}
-        {kind === 'topic' && <SummaryChoice value={f.summary ?? 'weekly'} onChange={(v) => setF((o) => ({ ...o, summary: v }))} />}
         {error && <div className="error" role="alert">{error}</div>}
         <button className="btn" disabled={!ready}>Start the {word}</button>
       </Form>
