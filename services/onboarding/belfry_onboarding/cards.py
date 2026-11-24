@@ -368,8 +368,11 @@ def make_group(
             log.warning("cards: %s not announced in #%s", group, PARENT)
     name = who["name"] or "Somebody"
     what = "topic" if topic else "group"
-    line = f"{name} started this {what} from a printed card"
-    if not events.publish(svc, 9, [["h", group], ["p", who["pubkey"]], ["card", "1"], by], line):
+    line = f"{name} created the {what} from card {card['id']}"
+    # ["card", "1"] marks the line (apps take its p as the creator for groups made before `by`);
+    # ["card_id", id] names the card, which the apps show as the approved boards draw it
+    tags = [["h", group], ["p", who["pubkey"]], ["card", "1"], ["card_id", card["id"]], by]
+    if not events.publish(svc, 9, tags, line):
         log.warning("cards: no first line in %s", group)
 
 

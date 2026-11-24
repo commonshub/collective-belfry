@@ -244,10 +244,13 @@ def test_a_member_starts_a_group_from_a_card(land):
         st = checkin.group_state(rsvc, group)
         assert pk(bob) in st.admins and pk(bob) in st.members
         line = land.of(9, group)
-        assert [e["content"] for e in line] == ["Bob Baker started this group from a printed card"]
-        assert line[0]["tags"] == [["h", group], ["p", pk(bob)], ["card", "1"], by]
+        assert [e["content"] for e in line] == [f"Bob Baker created the group from card {card}"]
+        assert line[0]["tags"] == [
+            ["h", group], ["p", pk(bob)], ["card", "1"], ["card_id", card], by
+        ]
         assert by in put[0]["tags"]
-        assert not any(card in str(e) for e in w.grp.events)
+        # the card's id appears only on the group's first line (as the approved boards draw it)
+        assert [e for e in w.grp.events if card in str(e)] == line
         # the card is the group's guest link now: no end date, no number of people
         land.mirror(group)
         got = get(c, f"/cards/{card}").json()
@@ -449,7 +452,7 @@ def test_a_visitor_with_a_new_address_becomes_a_guest_and_the_steward(land):
         assert ["guest", end] in put[0]["tags"] and ["name", "Vera Visitor"] in put[0]["tags"]
         assert out["pubkey"] in checkin.group_state(rsvc, group).admins
         assert [e["content"] for e in land.of(9, group)] == [
-            "Vera Visitor started this group from a printed card"
+            f"Vera Visitor created the group from card {card}"
         ]
         assert rsvc.odoo.card_get(card)["state"] == "claimed"
         # the code is used
@@ -653,7 +656,7 @@ def test_a_topic_card_makes_a_channel_named_by_its_hashtag(land):
         link = followers.chat_link(rsvc, "bread")
         assert not link or link in said[0]["content"]
         assert [e["content"] for e in land.of(9, "bread")] == [
-            "Bob started this topic from a printed card"
+            f"Bob created the topic from card {card}"
         ]
         assert pk(bob) in checkin.group_state(rsvc, "bread").admins
         assert get(c, "/cards/hashtag/bread").json() == {"state": "taken"}
