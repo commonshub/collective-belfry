@@ -1290,3 +1290,288 @@ def test_a_cards_link_makes_only_so_many_new_accounts_a_day(land, monkeypatch, c
         for p in rsvc.odoo.search_read("belfry.pass", [["guest_channel", "=", group]], ["id"]):
             rsvc.odoo.write("belfry.pass", [p["id"]], {"create_date": "2026-01-01 00:00:00"})
         assert call(c, PrivateKey(), f"/channel-invites/{token}/join", {}).status_code == 200
+
+
+# ── the form with the code mail, and the mail's Confirm button ──────────────────────────────
+def _mail_parts(msg):
+    text = msg.get_body(preferencelist=("plain",)).get_content()
+    html = msg.get_body(preferencelist=("html",)).get_content()
+    return text, html
+
+
+def _confirm_mail():
+    """The code (shown as 427 913) and the Confirm link's token of the last mail."""
+    text, _html = _mail_parts(mailer.SENT[-1])
+    code = re.search(r"\b(\d{3}) (\d{3})\b", text)
+    token = re.search(r"\?confirm=([A-Za-z0-9_-]+)", text)
+    return code.group(1) + code.group(2), token.group(1)
+
+
+START = {"email": "vera@example.org", "name": "Vera Visitor", **FORM}
+
+
+def test_the_mail_has_the_code_and_a_confirm_button(land):
+    rsvc = land.rsvc
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        key = PrivateKey()
+        for body, field in (
+            ({**START, "name": ""}, "name"),
+            ({**START, "title": ""}, "title"),
+            ({**START, "email": "no"}, "email"),
+        ):
+            r = call(c, key, f"/cards/{card}/claim-start", body)
+            assert r.status_code == 422 and r.json()["field"] == field, r.text
+        evil = {**START, "name": "<b>Vera</b> & co", "title": "Bread <script>x</script>"}
+        r = call(c, key, f"/cards/{card}/claim-start", evil)
+        assert r.status_code == 202 and r.json() == {"sent": True}
+        msg = mailer.SENT[-1]
+        assert msg["Subject"] == "Confirm your group: Bread <script>x</script>"
+        text, html = _mail_parts(msg)
+        assert "Hi <b>Vera</b> & co," in text
+        assert "to create the group Bread <script>x</script>, enter this code on the page" in text
+        assert "Or confirm with one click:" in text
+        assert "The code and the button work for 15 minutes." in text
+        assert "Didn't scan a card? Ignore this e-mail: nothing happens." in text
+        # the names are escaped in the HTML and never in the URL
+        assert "<script>" not in html and "&lt;script&gt;" in html and "&lt;b&gt;Vera" in html
+        url = re.search(r'href="([^"]+confirm=[^"]+)"', html).group(1)
+        assert re.fullmatch(rf"https://chat\.[^/]+/g/{card}\?confirm=[A-Za-z0-9_-]{{43}}", url)
+        assert "Vera" not in url and "Bread" not in url and ">Confirm</a>" in html
+        _code_, token = _confirm_mail()
+        # stored hashed, never as it is
+        row = rsvc.odoo.card_claim_get(card, pk(key))
+        assert row["state"] == "pending" and token not in str(row)
+        assert row["form"]["name"] == "<b>Vera</b> & co"
+        # nothing is made before the proof
+        assert not land.of(9007)
+        assert not rsvc.odoo.search_read("res.partner", [["email", "=", "vera@example.org"]], [])
+        # the topic's mail
+        topic = land.card("topic")
+        r = call(c, key, f"/cards/{topic}/claim-start", {**START, "title": "", "hashtag": "rye"})
+        assert r.status_code == 202, r.text
+        assert mailer.SENT[-1]["Subject"] == "Confirm your topic: #rye"
+        assert "to create the topic #rye, enter this code" in _mail_parts(mailer.SENT[-1])[0]
+
+
+def test_the_code_with_the_stored_form(land):
+    rsvc = land.rsvc
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        key = PrivateKey()
+        r = call(c, key, f"/cards/{card}/claim-start", START)
+        assert r.status_code == 202
+        code, token = _confirm_mail()
+        r = call(c, key, f"/cards/{card}/claim-verify", {"email": START["email"], "code": code})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out["signed_in"] is True and out["group"].startswith("pod-sourdough-starters-")
+        assert ["name", "Sourdough starters"] in land.of(9002, out["group"])[0]["tags"]
+        # one claim only: the button now answers expired, and so does the code
+        r = call(c, PrivateKey(), f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 410 and r.json()["error"] == "expired"
+        r = call(c, key, f"/cards/{card}/claim-verify", {"email": START["email"], "code": code})
+        assert r.status_code == 410
+        assert len(land.of(9007)) == 1
+
+
+def test_the_form_in_verify_wins_over_the_stored_one(land):
+    card = land.card()
+    with TestClient(create_app(land.rsvc)) as c:
+        key = PrivateKey()
+        call(c, key, f"/cards/{card}/claim-start", START)
+        code, _token = _confirm_mail()
+        body = {**START, "code": code, "title": "Another name"}
+        r = call(c, key, f"/cards/{card}/claim-verify", body)
+        assert r.status_code == 200, r.text
+        assert ["name", "Another name"] in land.of(9002, r.json()["group"])[0]["tags"]
+
+
+def test_confirm_on_the_same_device_signs_it_in(land, monkeypatch):
+    rsvc = land.rsvc
+    bound = []
+    real = rsvc.keycast.create_bunker
+
+    def create(token, label, client_pubkey=None):
+        bound.append(client_pubkey)
+        return real(token, label, client_pubkey)
+
+    monkeypatch.setattr(rsvc.keycast, "create_bunker", create)
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        key = PrivateKey()
+        call(c, key, f"/cards/{card}/claim-start", START)
+        _code_, token = _confirm_mail()
+        r = call(c, key, f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out["confirmed"] is True and out["same_device"] is True
+        assert out["signed_in"] is True and out["bunker_url"].startswith("bunker://")
+        assert out["group"] == rsvc.odoo.card_get(card)["group"]
+        assert bound == [pk(key)]
+        assert out["pubkey"] in checkin.group_state(rsvc, out["group"]).admins
+        # handed out: the waiting page has nothing more to take, the link is used
+        r = call(c, key, f"/cards/{card}/claim-poll")
+        assert r.status_code == 410
+        r = call(c, key, f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 410 and r.json()["error"] == "expired"
+
+
+def test_confirm_on_another_device_hands_the_session_to_the_waiting_page_once(land, monkeypatch):
+    rsvc = land.rsvc
+    bound = []
+    real = rsvc.keycast.create_bunker
+
+    def create(token, label, client_pubkey=None):
+        bound.append(client_pubkey)
+        return real(token, label, client_pubkey)
+
+    monkeypatch.setattr(rsvc.keycast, "create_bunker", create)
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        key, phone = PrivateKey(), PrivateKey()
+        r = call(c, key, f"/cards/{card}/claim-poll")
+        assert r.status_code == 404
+        call(c, key, f"/cards/{card}/claim-start", START)
+        code, token = _confirm_mail()
+        r = call(c, key, f"/cards/{card}/claim-poll")
+        assert r.status_code == 202 and r.json() == {"pending": True}
+        r = call(c, phone, f"/cards/{card}/claim-poll")
+        assert r.status_code == 404
+        r = call(c, phone, f"/cards/{card}/claim-confirm", {"token": "x" * 43})
+        assert r.status_code == 410
+        r = call(c, phone, f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out == {"confirmed": True, "group": out["group"], "same_device": False}
+        assert bound == [pk(key)]  # the session is the waiting page's, never the phone's
+        r = call(c, key, f"/cards/{card}/claim-poll")
+        assert r.status_code == 200, r.text
+        got = r.json()
+        assert got["signed_in"] is True and got["bunker_url"].startswith("bunker://")
+        assert got["group"] == out["group"]
+        assert call(c, key, f"/cards/{card}/claim-poll").status_code == 410
+        # the session is forgotten once handed out
+        assert rsvc.odoo.card_claim_get(card, pk(key))["result"] is None
+        # the code works no more
+        r = call(c, key, f"/cards/{card}/claim-verify", {"email": START["email"], "code": code})
+        assert r.status_code == 410
+
+
+def test_an_expired_claim_and_link(land, monkeypatch):
+    rsvc = land.rsvc
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        key = PrivateKey()
+        call(c, key, f"/cards/{card}/claim-start", START)
+        _code_, token = _confirm_mail()
+        later = time.time() + cards.CLAIM_SECONDS + 1
+        monkeypatch.setattr(cards.time, "time", lambda: later)
+        r = call(c, PrivateKey(), f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 410 and r.json()["error"] == "expired"
+        r = call(c, key, f"/cards/{card}/claim-poll")
+        assert r.status_code == 410
+        assert not land.of(9007)
+
+
+def test_a_new_claim_start_replaces_the_link_before(land):
+    card = land.card()
+    with TestClient(create_app(land.rsvc)) as c:
+        key = PrivateKey()
+        call(c, key, f"/cards/{card}/claim-start", START)
+        _c1, old = _confirm_mail()
+        call(c, key, f"/cards/{card}/claim-start", START)
+        _c2, new = _confirm_mail()
+        assert old != new
+        r = call(c, key, f"/cards/{card}/claim-confirm", {"token": old})
+        assert r.status_code == 410
+        r = call(c, key, f"/cards/{card}/claim-confirm", {"token": new})
+        assert r.status_code == 200, r.text
+
+
+def test_someone_else_claimed_meanwhile(land):
+    rsvc = land.rsvc
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    card = land.card()
+    with TestClient(create_app(rsvc)) as c:
+        key = PrivateKey()
+        call(c, key, f"/cards/{card}/claim-start", START)
+        _code_, token = _confirm_mail()
+        r = call(c, bob, f"/cards/{card}/claim", FORM)
+        assert r.status_code == 200
+        r = call(c, PrivateKey(), f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 409 and r.json()["error"] == "claimed"
+        assert r.json()["group"] == rsvc.odoo.card_get(card)["group"]
+        assert len(land.of(9007)) == 1
+        assert not rsvc.odoo.search_read("res.partner", [["email", "=", "vera@example.org"]], [])
+
+
+def test_the_code_and_the_button_race_and_one_wins(land, monkeypatch):
+    rsvc = land.rsvc
+    card = land.card()
+    key = pk(PrivateKey())
+    cards.claim_start(rsvc, card, key, dict(START), "198.51.100.7")
+    code, token = _confirm_mail()
+    both = threading.Barrier(2, timeout=10)
+    real = cards._refuse_taken
+    mine = threading.local()
+
+    def taken(c):
+        real(c)
+        if not getattr(mine, "waited", False):  # both are past their first check
+            mine.waited = True
+            both.wait()
+
+    monkeypatch.setattr(cards, "_refuse_taken", taken)
+    results: list = []
+
+    def run(fn, *a):
+        try:
+            results.append(fn(*a))
+        except ApiError as exc:
+            results.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=run,
+            args=(cards.claim_verify, rsvc, card, key, {"email": START["email"], "code": code}),
+        ),
+        threading.Thread(target=run, args=(cards.claim_confirm, rsvc, card, key, {"token": token})),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    won = [r for r in results if isinstance(r, dict)]
+    lost = [r for r in results if isinstance(r, ApiError)]
+    assert len(won) == 1 and len(lost) == 1, results
+    assert lost[0].status == 410 and lost[0].error == "expired"
+    assert len(land.of(9007)) == 1 and len(land.of(9000)) == 1
+
+
+def test_a_topic_without_a_title_is_named_by_its_hashtag(land):
+    rsvc = land.rsvc
+    card = land.card("topic")
+    with TestClient(create_app(rsvc)) as c:
+        key = PrivateKey()
+        body = {
+            "email": "vera@example.org",
+            "name": "Vera",
+            "about": "Rye and spelt",
+            "hashtag": "bread",
+        }
+        r = call(c, key, f"/cards/{card}/claim-start", body)
+        assert r.status_code == 202, r.text
+        _code_, token = _confirm_mail()
+        r = call(c, key, f"/cards/{card}/claim-confirm", {"token": token})
+        assert r.status_code == 200, r.text
+        assert r.json()["group"] == "bread" and r.json()["summary"] == "weekly"
+        assert land.of(9002, "bread")[0]["tags"][1:3] == [
+            ["name", "bread"],
+            ["about", "Rye and spelt"],
+        ]
+        said = land.of(9, "general")[0]["content"]
+        assert said.startswith("# New topic: #bread · Rye and spelt")
+        assert "Rye and spelt · " not in said
+        assert _follows(rsvc, "bread")
+        assert rsvc.odoo.card_get(card)["title"] == "bread"

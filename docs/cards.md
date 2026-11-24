@@ -61,7 +61,9 @@ as not archived: joining refuses an archived group anyway).
 
 NIP-98 by the account's key. Body `{"title", "about"?, "hashtag"?}`:
 
-- `title`: 1–80 characters (spaces collapsed);
+- `title`: 1–80 characters (spaces collapsed). **Optional on a topic card** (the new form asks
+  for the hashtag and a description only): without one the topic's name is its hashtag and its
+  description is `about` alone; with one (older chats) the description is `<title> · <about>`;
 - `about`: up to 500 characters, may be empty;
 - `hashtag`: topic cards only, and required there: 2–30 of `a–z`, `0–9` and `-`, not starting or
   ending with a dash, already lower case (the server does not clean it). Ignored on a group card.
@@ -73,7 +75,9 @@ Who may: a member, or a guest who has saved their account (a name and a proven e
 1. makes the group: `9007` then `9002`, with the tags the chat's own "New group" writes
    (`["open"]`, `["public"]`, `name`, `about`). Its id is `pod-<slug of the title, 24 at
    most>-<4 random characters>`. A **topic** is a channel as the chat's "New channel" makes one
-   (`9007` `[["h", id]]`, `9002` with `name` and `about`, no access tags) whose id is the hashtag;
+   (`9007` `[["h", id]]`, `9002` with `name` and `about`, no access tags) whose id and name are
+   the hashtag. A topic is announced in `general` as `# New topic: #<hashtag> · <about>` (with an
+   older chat's title: `# New topic: #<hashtag> · <title> · <about>`), with its chat link;
 2. puts the person in with the admin role: one `9000` with `["p", <key>, "admin"]`,
    `["role", "admin"]`, `["by", <key>]`, `["name", <their name>]`, and for a guest
    `["guest", "2099-12-31"]` (their pass of this group has no end, §4; the shape `/group-roles` and co-host links write);
@@ -109,21 +113,47 @@ Steps 3 and 4 are best effort (a relay that refuses them does not undo the group
 | `422 invalid` + `field` (`title` \| `about` \| `hashtag`) | the form |
 | `503 relay`, `503 signer` | try again |
 
-### 2.3 A visitor claims: e-mail, code, then the group
+### 2.3 A visitor claims: e-mail, then the code or the mail's Confirm button
 
-Both requests are NIP-98 signed by a key the browser just made (the same kind of key
-`/apply/*` and `/login/*` take). That key becomes the session's key.
+The requests are NIP-98 signed by a key the browser just made (the same kind of key `/apply/*`
+and `/login/*` take): the **claim-start key**. That key becomes the session's key, whichever way
+the address is proven (Cards canvas, boards onb-code and onb-mail).
 
-`POST /cards/<id>/claim-start` `{"email"}` → `202 {"sent": true}`: mails a 6-digit code (10
-minutes, 5 tries, only the newest works; purpose `card`, tied to this card and this key) and
-stores nothing else. The same answer whether the address has an account or not. Errors:
-`404 not_found`, `409 claimed` + `group`, `invite`, `409 retired`, `422 invalid` +
-`field: "email"`, `429 too_many` (the limits of `/apply/start` and `/login/start`: 20 code mails
-an hour per client address, shared with them, and the register's per address and per key).
+`POST /cards/<id>/claim-start` `{"email", "name", "title"?, "about"?, "hashtag"?, "summary"?,
+"client"?}` → `202 {"sent": true}`. The form is checked as `claim-verify` checks it (below; a
+topic's hashtag must be free: `409 hashtag_taken`). Nothing is **created**: the form is kept in
+the register with the pending claim (table `card_claims`, one per card and key; a new
+claim-start replaces the one before, and that one's link stops working), for 15 minutes. Then
+one mail with a 6-digit code (15 minutes, 5 tries, only the newest works; purpose `card`, tied
+to this card and this key) and a Confirm button:
 
-`POST /cards/<id>/claim-verify` `{"email", "code", "name", "title", "about"?, "hashtag"?,
-"client"?}`: `name` is the **person's** name (1–100); `title`, `about`, `hashtag` as in §2.2;
-`client` as elsewhere (`belfry-web` | `belfry-ios` | `belfry-android`, names the session).
+- subject `Confirm your group: <title>`, for a topic `Confirm your topic: #<hashtag>`;
+- "Hi <name>, to create the group <title> (the topic #<hashtag>), enter this code on the page
+  where you scanned the card: 427 913. Or confirm with one click: [Confirm]. The code and the
+  button work for 15 minutes. Didn't scan a card? Ignore this e-mail: nothing happens." Text and
+  HTML parts; the person's own words are escaped in the HTML and never put in the URL;
+- the button: `https://chat.<domain>/g/<id>?confirm=<token>`, the token 32 random bytes
+  (base64url, 43 characters), single use, stored hashed, bound to the card, the address and the
+  claim-start key.
+
+The same answer whether the address has an account or not. Errors: `404 not_found`,
+`409 claimed` + `group`, `invite`, `409 retired`, `409 hashtag_taken`, `422 invalid` + `field`,
+`429 too_many` (the limits of `/apply/start` and `/login/start`: 20 code mails an hour per client
+address, shared with them, and the register's per address and per key).
+
+Older chats send `{"email"}` alone (none of `name`, `title`, `about`, `hashtag`): the mail then
+has the code only (subject `<code> is your code for <community>`), nothing is kept, and the form
+comes with `claim-verify`.
+
+**The page then waits** ("…or click Confirm in the e-mail. This page moves on by itself once you
+have"): it polls `claim-poll` and takes the code.
+
+`POST /cards/<id>/claim-verify` `{"email", "code", "name"?, "title"?, "about"?, "hashtag"?,
+"summary"?, "client"?}`: with any of `name`, `title`, `about`, `hashtag` in the body the whole
+form is read from it (older chats; it wins over the kept one): `name` is the **person's** name
+(1–100); `title`, `about`, `hashtag` as in §2.2. Without them the form kept by `claim-start` is
+used (`email` may then be left out too). `client` as elsewhere (`belfry-web` | `belfry-ios` |
+`belfry-android`, names the session).
 
 The form, the card's state and (for a topic) the hashtag are checked **before** the code is
 spent. Then, on the right code, under the card's lock:
@@ -135,12 +165,13 @@ spent. Then, on the right code, under the card's lock:
   session is the signing key;
 - then the claim of §2.2 by that account.
 
-`200 {"signed_in": true, "bunker_url", "pubkey", "npub", "nip05"?, "group"}`.
+`200 {"signed_in": true, "bunker_url", "pubkey", "npub", "nip05"?, "group"}` (+ `summary` for a
+topic).
 
 | Error | |
 |---|---|
 | `400 wrong_code` + `tries_left` | (status 400 here; `/login/verify` and `/guest/save/verify` use 422) |
-| `410 expired` | no live code for this address, key and card |
+| `410 expired` | no live code for this address, key and card; also when the mail's button started the group already |
 | `409 claimed` + `group`, `invite` | someone was first. Seen before the code: the code is not spent. Seen after (a race): the code is spent, nobody is signed in, no account is made; join through `invite` |
 | `409 retired` | |
 | `409 hashtag_taken` | before the code is spent |
@@ -150,9 +181,41 @@ spent. Then, on the right code, under the card's lock:
 | `422 invalid` + `field` (`name` \| `email` \| `title` \| `about` \| `hashtag`) | |
 | `503 signer`, `503 relay` | the code is spent: ask for a new one |
 
-One lock per card; the first proven claim wins. The loser's group is never made, and a visitor
-who lost gets no account. When the relay refuses after a new guest was made, their pass is
-closed and their signer account suspended; the card stays unclaimed.
+`POST /cards/<id>/claim-confirm` `{"token"}`, NIP-98 by whatever key the browser that opened the
+link has (the chat page at `/g/<id>?confirm=<token>` sends it; 20 a minute per client address).
+A valid token proves the address: the claim happens exactly as `claim-verify`'s would (the
+account that has the address or a new guest, the group, the steward, the post in `general`, a
+topic followed with `summary`, weekly by default), and the **session is bound to the
+claim-start key** (the page that waits), never to the clicking key. The code of that address and
+key stops working.
+
+`200 {"confirmed": true, "group", "same_device"}`: `same_device` is true when the clicking key
+is the claim-start key, and only then the answer also carries the signed-in body (`signed_in`,
+`bunker_url`, `pubkey`, `npub`, `nip05`?, `summary`?): that browser has it, and `claim-poll`
+then answers `410`. Otherwise the session waits for the claim-start page.
+
+| Error | |
+|---|---|
+| `410 expired` | unknown, expired or used token; a newer claim-start replaced it; the code was quicker (one claim only) |
+| `409 claimed` + `group`, `invite` | someone else was first: nothing is made |
+| `409 hashtag_taken`, `409 retired`, `409 own_key`, `409 agent`, `409 key_taken` | as for `claim-verify` |
+| `404 not_found` | no such card |
+| `429 too_many` | |
+| `503 signer`, `503 relay` | nothing is used: the same link can be opened again |
+
+`POST /cards/<id>/claim-poll` `{}`, NIP-98 by the claim-start key, 30 a minute per key:
+
+- `202 {"pending": true}` while the claim waits (15 minutes from `claim-start`);
+- `200` with the `claim-verify` body (`signed_in`, `bunker_url`, `pubkey`, `npub`, `nip05`?,
+  `group`, `summary`?) once the button was clicked on another device: handed out **once**, then
+  forgotten (kept at most 15 minutes after the claim ran out);
+- `410 expired`: the claim ran out, the session was handed out already, it was confirmed on
+  this same device, or the code started the group;
+- `404 not_found`: no claim of this key for this card (or no such card); `429 too_many`.
+
+One lock per card; the first proven claim wins, by code or by button. The loser's group is
+never made, and a visitor who lost gets no account. When the relay refuses after a new guest was
+made, their pass is closed and their signer account suspended; the card stays unclaimed.
 
 ### 2.4 A topic's hashtag: `GET /cards/hashtag/<name>`
 
@@ -297,7 +360,8 @@ group, still asks for an e-mail address and a code (§2.3).
 Following a topic by e-mail (docs/followers.md): `claim` and `claim-verify` take `summary`
 (`weekly`, the default, or `monthly`) and the person who starts a topic follows it at that
 frequency; a visitor who joins a topic with the card's guest link follows it with `summary` on
-`/guest/save/verify`.
+`/guest/save/verify`. A visitor's `summary` rides with `claim-start` (kept with the form) or
+`claim-verify`.
 
 ## 6. The proxy
 

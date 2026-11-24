@@ -81,6 +81,7 @@ NEEDS_ODOO = "This needs the Odoo add-on (billing and shifts are not in the belf
 INVITE_DAYS = 14
 INVITES_PER_MEMBER = 3
 CODE_MINUTES, CODE_TRIES, CODES_PER_EMAIL, CODES_PER_KEY, CODE_WINDOW = 10, 5, 5, 10, 30
+CARD_CODE_MINUTES = 15  # a printed card's code and its Confirm button (cards.py)
 WELCOME_HOURS = 24
 # the phone apps, as the welcome mail links them
 ANDROID_APP = "https://belfry.sh/android"
@@ -174,6 +175,11 @@ class Register(OdooApi):
                 made_by INTEGER, made_at INTEGER NOT NULL,
                 claimed_by INTEGER, claimed_key TEXT, claimed_at INTEGER);
             CREATE INDEX IF NOT EXISTS group_cards_group ON group_cards (group_id);
+            CREATE TABLE IF NOT EXISTS card_claims (
+                card_id TEXT NOT NULL, pubkey TEXT NOT NULL, email TEXT NOT NULL,
+                form TEXT NOT NULL, token_hash TEXT NOT NULL, expires_at INTEGER NOT NULL,
+                state TEXT NOT NULL, result TEXT, PRIMARY KEY (card_id, pubkey));
+            CREATE INDEX IF NOT EXISTS card_claims_token ON card_claims (token_hash);
             """
         )
         # cards made before a batch chose how many go on a sheet: four (A6), as they were printed
@@ -1671,6 +1677,69 @@ class Register(OdooApi):
             )
             return str((self._get("belfry.invite", inv_id) or {}).get("token") or "")
 
+    # a visitor's claim of a card between the code mail and the proof (cards.py): the form they
+    # filled in, the hash of the Confirm link's token, and once confirmed by the link the session
+    # for the waiting page (handed out once, then forgotten)
+    CLAIM_FIELDS = "card_id, pubkey, email, form, token_hash, expires_at, state, result"
+
+    def _claim_row(self, row: tuple) -> dict[str, Any]:
+        out = dict(zip(self.CLAIM_FIELDS.split(", "), row, strict=True))
+        out["form"] = json.loads(out["form"] or "{}")
+        out["result"] = json.loads(out["result"]) if out["result"] else None
+        return out
+
+    def card_claim_put(
+        self,
+        card_id: str,
+        pubkey: str,
+        email: str,
+        form: dict[str, Any],
+        token_hash: str,
+        expires_at: int,
+    ) -> None:
+        """The pending claim of CARD_ID by PUBKEY; one per card and key: it replaces the one
+        before (and that one's link). Claims long gone are cleared on the way."""
+        with self._lock:
+            self._db.execute(
+                "DELETE FROM card_claims WHERE expires_at < ?", (int(time.time()) - 3600,)
+            )
+            self._db.execute(
+                "INSERT OR REPLACE INTO card_claims "
+                f"({self.CLAIM_FIELDS}) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL)",
+                (card_id, pubkey, email, json.dumps(form), token_hash, int(expires_at)),
+            )
+
+    def card_claim_get(self, card_id: str, pubkey: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {self.CLAIM_FIELDS} FROM card_claims WHERE card_id = ? AND pubkey = ?",
+                (card_id, pubkey),
+            ).fetchone()
+        return self._claim_row(row) if row else None
+
+    def card_claim_by_token(self, card_id: str, token_hash: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {self.CLAIM_FIELDS} FROM card_claims "
+                "WHERE card_id = ? AND token_hash = ?",
+                (card_id, token_hash),
+            ).fetchone()
+        return self._claim_row(row) if row else None
+
+    def card_claim_move(
+        self, card_id: str, pubkey: str, was: str, to: str, result: dict[str, Any] | None = None
+    ) -> bool:
+        """State WAS → TO (``pending`` → ``confirmed`` | ``done``, ``confirmed`` → ``done``),
+        only when it is still WAS. RESULT: what the waiting page gets (kept only while
+        ``confirmed``)."""
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE card_claims SET state = ?, result = ? "
+                "WHERE card_id = ? AND pubkey = ? AND state = ?",
+                (to, json.dumps(result) if result else None, card_id, pubkey, was),
+            )
+            return bool(cur.rowcount)
+
     def card_invite_uses(self, token: str | None) -> int:
         with self._lock:
             for inv in self._all("belfry.invite") if token else []:
@@ -2165,7 +2234,10 @@ class Register(OdooApi):
             ):
                 self._write("belfry.key.code", [c["id"]], {"expires_at": stamp()})
         code = f"{secrets.randbelow(10**6):06d}"
-        expires = stamp(now() + dt.timedelta(minutes=CODE_MINUTES))
+        minutes = CARD_CODE_MINUTES if purpose == "card" else CODE_MINUTES
+        expires = stamp(now() + dt.timedelta(minutes=minutes))
+        # the words of a card's mail ride along with DATA, but are never kept with the code
+        card_mail = data.pop("mail", None) if isinstance(data, dict) else None
         cid = self._create(
             "belfry.key.code",
             {
@@ -2182,6 +2254,9 @@ class Register(OdooApi):
         )
         self._write("belfry.key.code", [cid], {"code_hash": self._hash(cid, code)})
         app = (app_name or "").strip()[:60]
+        if purpose == "card" and isinstance(card_mail, dict):
+            self._card_code_mail(email, code, card_mail)
+            return {"state": "sent", "expires_at": expires}
         if purpose in ("apply", "login", "card"):  # card: a printed card's first scan (cards.py)
             what = (
                 f"to apply to {self.mailer.name}"
@@ -2193,7 +2268,7 @@ class Register(OdooApi):
                 f"{code} is your code {what}",
                 [
                     f"Your code {what}: {code}",
-                    f"It works for {CODE_MINUTES} minutes. If you did not ask for it, "
+                    f"It works for {minutes} minutes. If you did not ask for it, "
                     "ignore this mail.",
                 ],
             )
@@ -2210,6 +2285,46 @@ class Register(OdooApi):
             ],
         )
         return {"state": "sent", "expires_at": expires}
+
+    def _card_code_mail(self, email: str, code: str, words: dict[str, Any]) -> None:
+        """The mail of a printed card's first scan (Cards canvas, board onb-mail): the code and a
+        Confirm button, both good for CARD_CODE_MINUTES. WORDS: ``name`` (the person's), ``kind``,
+        ``title`` / ``hashtag`` (what they typed: escaped by the mailer, never in the URL) and
+        ``url`` (the Confirm link)."""
+        topic = words.get("kind") == "topic"
+        what = f"#{words.get('hashtag') or ''}" if topic else str(words.get("title") or "")
+        noun = "topic" if topic else "group"
+        spaced = f"{code[:3]} {code[3:]}"
+        self.mailer.send(
+            email,
+            f"Confirm your {noun}: {what}",
+            [
+                f"Hi {words.get('name') or 'there'},",
+                f"to create the {noun} {what}, enter this code on the page where you scanned "
+                "the card:",
+                spaced,
+                "Or confirm with one click:",
+            ],
+            button=(str(words.get("url") or ""), "Confirm"),
+            after=[
+                f"The code and the button work for {CARD_CODE_MINUTES} minutes. Didn't scan a "
+                "card? Ignore this e-mail: nothing happens."
+            ],
+        )
+
+    def key_code_expire(self, email: str, pubkey: str, purpose: str) -> None:
+        """Every unused code of EMAIL for PUBKEY and PURPOSE stops working (a card claimed by its
+        Confirm button: its code may not claim again)."""
+        email, pubkey = self._clean(email, pubkey)
+        with self._lock:
+            for c in self._all("belfry.key.code"):
+                if (
+                    c["email"].lower() == email.lower()
+                    and c["pubkey"] == pubkey
+                    and c.get("purpose") == purpose
+                    and not c.get("used_at")
+                ):
+                    self._write("belfry.key.code", [c["id"]], {"used_at": stamp()})
 
     def check_key_code(
         self, email: str, pubkey: str, code: str, purpose: str | None = None

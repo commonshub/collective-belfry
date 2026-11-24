@@ -11,7 +11,9 @@ group and brings people in through the card's guest link, the same path as any g
 - ``POST /api/cards/<id>/claim`` (NIP-98 by a signed-in account): start the group.
 - ``POST /api/cards/<id>/claim-start`` and ``/claim-verify`` (NIP-98 by a key the browser just
   made): a visitor proves an e-mail address with a 6-digit code, is signed in (as the account
-  that has the address, or as a new guest) and starts the group.
+  that has the address, or as a new guest) and starts the group. The mail also has a Confirm
+  button: ``/claim-confirm`` (any browser) starts the group the same way, the session bound to
+  the claim-start key, which ``/claim-poll`` hands to the page that waits.
 - ``GET /api/cards/hashtag/<name>``: whether a topic's hashtag is free.
 - Claiming a topic takes ``summary``: ``weekly`` (also when missing) | ``monthly``: the person who
   claims follows the new topic by e-mail at that frequency (followers.py, their proven address).
@@ -29,6 +31,7 @@ in memory: one process serves the API (as everywhere here).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -211,9 +214,10 @@ def _text(value: Any) -> str:
 
 
 def form_of(kind: str, data: dict[str, Any]) -> dict[str, str]:
-    """``{"title", "about", "hashtag"}``, checked; 422 ``invalid`` with the ``field``."""
+    """``{"title", "about", "hashtag"}``, checked; 422 ``invalid`` with the ``field``. A topic
+    needs no title (its name is its hashtag); older chats still send one."""
     title = _text(data.get("title"))
-    if not title or len(title) > TITLE_MAX:
+    if (not title and kind != "topic") or len(title) > TITLE_MAX:
         raise _invalid("title", f"A name, up to {TITLE_MAX} characters.")
     about = data.get("about")
     about = about.strip() if isinstance(about, str) else ""
@@ -333,7 +337,8 @@ def make_group(
         # a topic is named by its hashtag (#bread), as every channel is; the topic in words leads
         # its description
         name = form["hashtag"] if topic else title
-        desc = about if not topic else (f"{title} · {about}" if about else title)
+        # a topic without a title (the new form): its description alone
+        desc = about if not topic or not title else (f"{title} · {about}" if about else title)
         _publish(svc, 9002, [["h", group], ["name", name], ["about", desc], *access, by])
         tags = [["h", group], ["p", who["pubkey"], "admin"], ["role", "admin"]]
         tags.append(["by", who["pubkey"]])
@@ -351,7 +356,8 @@ def make_group(
     if topic:
         from .followers import chat_link
 
-        text = f"# New topic: #{group} · {title}{' · ' + about if about else ''}"
+        words = " · ".join(x for x in (title, about) if x)
+        text = f"# New topic: #{group}{' · ' + words if words else ''}"
         link = chat_link(svc, group)
         tags = [["h", PARENT], ["t", "new-topic"], ["channel", group], by]
         if not events.publish(svc, 9, tags, f"{text}\n{link}" if link else text):
@@ -397,7 +403,13 @@ def start(
             svc.odoo.write("belfry.pass", [int(pass_id)], {"state": "active"})
         token = svc.odoo.card_invite(who["partner"], who["pubkey"], group, guests.DAYS)
         ok = svc.odoo.card_claim(
-            card["id"], group, token, form["title"], who["partner"], who["pubkey"], int(time.time())
+            card["id"],
+            group,
+            token,
+            form["title"] or form["hashtag"],
+            who["partner"],
+            who["pubkey"],
+            int(time.time()),
         )
     except Exception:
         if who["guest"]:
@@ -443,25 +455,75 @@ def _follow_topic(
     return {"summary": summary}
 
 
-# ── a visitor: an e-mail address, a code, then the group ────────────────────────────────────
+# ── a visitor: an e-mail address, a code or the mail's Confirm button, then the group ────────
 PURPOSE = "card"
+CLAIM_SECONDS = 15 * 60  # the code and the Confirm button (register.CARD_CODE_MINUTES)
+POLLS = Limiter(30, 60)  # POST /cards/<id>/claim-poll, per key
+CONFIRMS = Limiter(20, 60)  # POST /cards/<id>/claim-confirm, per client address
+FORM_FIELDS = ("name", "title", "about", "hashtag")
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _email_of(data: dict[str, Any]) -> str:
+    email = _text(data.get("email"))
+    if not EMAIL.fullmatch(email) or len(email) > 200:
+        raise _invalid("email", "That is not an e-mail address.")
+    return email
+
+
+def _visitor_form(svc: Services, card: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """What a visitor fills in before the code: the card's form, their name, the topic's summary
+    and the client; 422 ``invalid`` (``field``), 409 ``hashtag_taken``."""
+    from . import followers
+
+    form: dict[str, Any] = dict(form_of(card["kind"], data))
+    name = _text(data.get("name"))
+    if not name or len(name) > NAME_MAX:
+        raise _invalid("name", "Your name, please.")
+    form["name"] = name
+    form["summary"] = followers.summary_choice(data)
+    form["client"] = str(data.get("client") or "")[:40]
+    if card["kind"] == "topic" and hashtag_state(svc, form["hashtag"]) != "free":
+        raise ApiError(409, "hashtag_taken", "This hashtag is taken. Try another one.")
+    return form
 
 
 def claim_start(
     svc: Services, card_id: str, key: str, data: dict[str, Any], ip: str
 ) -> dict[str, Any]:
-    """Only mails the 6-digit code: nothing is kept before it is right."""
+    """Mails the 6-digit code and a Confirm button. Nothing is made before the proof; the form
+    (``name``, ``title``, ``about``, ``hashtag``) is kept with the pending claim for 15 minutes, so
+    that the button can start the group. Older chats send the e-mail address alone (and the form
+    with the code): their mail has the code only."""
     from . import applyverified
 
     _need_own(svc)
     card = _card(svc, card_id)
     _refuse_taken(card)
-    email = _text(data.get("email"))
-    if not EMAIL.fullmatch(email) or len(email) > 200:
-        raise _invalid("email", "That is not an e-mail address.")
+    email = _email_of(data)
+    legacy = not any(f in data for f in FORM_FIELDS)
+    words: dict[str, Any] = {"card": card["id"]}
+    if not legacy:
+        form = _visitor_form(svc, card, data)
+        token = secrets.token_urlsafe(32)
+        svc.odoo.card_claim_put(
+            card["id"], key, email, form, _hash(token), int(time.time()) + CLAIM_SECONDS
+        )
+        words["mail"] = {
+            "kind": card["kind"],
+            "name": form["name"],
+            "title": form["title"],
+            "hashtag": form["hashtag"],
+            "url": f"{card_url(svc, card['id'])}?confirm={token}",
+        }
     try:
-        applyverified._send(svc, email, key, PURPOSE, {"card": card["id"]}, ip)
+        applyverified._send(svc, email, key, PURPOSE, words, ip)
     except ApiError as exc:
+        if not legacy:  # no mail: no link that could confirm it
+            svc.odoo.card_claim_move(card["id"], key, "pending", "done")
         if exc.error == "invalid":
             exc.extra["field"] = "email"
         raise
@@ -562,40 +624,131 @@ def _new_guest(
     return who, opened, pass_id
 
 
+def _expired() -> ApiError:
+    return ApiError(410, "expired", "That code expired. Send a new one.")
+
+
+def _make(
+    svc: Services, card: dict[str, Any], form: dict[str, Any], email: str, key: str
+) -> tuple[dict, dict, str]:
+    """The proven visitor starts CARD's group (the card's lock is held, the card is unclaimed):
+    signed in as the account that has EMAIL, or as a new guest, the session bound to KEY →
+    (who, the signed-in body, the group)."""
+    from . import applyverified
+
+    member = applyverified._account(svc, email)
+    with _ids_lock:
+        group = choose_group(svc, card, form)
+        if member is not None:
+            who, opened = _existing(svc, member, key, form["client"])
+            start(svc, card, form, who, group)
+        else:
+            who, opened, pass_id = _new_guest(svc, group, form["name"], email, key, form["client"])
+            start(svc, card, form, who, group, pass_id)
+    return who, opened, group
+
+
+def _done_claim(claim: dict[str, Any] | None) -> bool:
+    """A pending claim that started its group already (by its code or its button)."""
+    return claim is not None and claim["state"] in ("confirmed", "done")
+
+
 def claim_verify(svc: Services, card_id: str, key: str, data: dict[str, Any]) -> dict[str, Any]:
     """The code: the visitor is signed in (the account that has the address, or a new guest whose
     first session is KEY) and starts the group → ``{"signed_in": true, "bunker_url", "pubkey",
-    "npub", "nip05"?, "group"}``. The form is checked before the code is spent."""
-    from . import applyverified, followers
-
+    "npub", "nip05"?, "group"}``. The form comes from claim-start, or from this body (older
+    chats: it wins when it is there); it is checked before the code is spent. 410 ``expired``
+    when the mail's Confirm button started it already."""
     _need_own(svc)
     card = _card(svc, card_id)
-    form = form_of(card["kind"], data)
-    summary = followers.summary_choice(data)
-    name = _text(data.get("name"))
-    if not name or len(name) > NAME_MAX:
-        raise _invalid("name", "Your name, please.")
-    email = _text(data.get("email"))
-    if not EMAIL.fullmatch(email) or len(email) > 200:
-        raise _invalid("email", "That is not an e-mail address.")
-    client = str(data.get("client") or "")[:40]
+    claim = svc.odoo.card_claim_get(card["id"], key)
+    if _done_claim(claim):
+        raise _expired()
+    stored = claim if claim is not None and claim["state"] == "pending" else None
+    if any(f in data for f in FORM_FIELDS) or stored is None:
+        form = _visitor_form(svc, card, data)
+        email = _email_of(data)
+    else:
+        form = dict(stored["form"])
+        email = _email_of(data) if data.get("email") else stored["email"]
+        if card["kind"] == "topic" and hashtag_state(svc, form["hashtag"]) != "free":
+            raise ApiError(409, "hashtag_taken", "This hashtag is taken. Try another one.")
+    if "client" in data:
+        form["client"] = str(data.get("client") or "")[:40]
+    _refuse_taken(card)
+    _check_code(svc, email, key, str(data.get("code") or ""), card["id"])
+    with _card_lock(card["id"]):
+        if _done_claim(svc.odoo.card_claim_get(card["id"], key)):
+            raise _expired()  # the button was quicker
+        card = _card(svc, card["id"])
+        _refuse_taken(card)  # someone was first: nobody is made, nothing is started
+        who, opened, group = _make(svc, card, form, email, key)
+        if claim is not None:
+            svc.odoo.card_claim_move(card["id"], key, "pending", "done")
+    follow = _follow_topic(svc, card, who, group, form["summary"])
+    return {**opened, "group": group, **follow}
+
+
+def claim_confirm(
+    svc: Services, card_id: str, clicker: str, data: dict[str, Any]
+) -> dict[str, Any]:
+    """The mail's Confirm button, opened by any browser (CLICKER): the address is proven by the
+    link, and the claim happens as the code's would, the session bound to the key that started
+    it (the page that waits) → ``{"confirmed": true, "group", "same_device"}``, and the
+    signed-in body too when CLICKER is that key. 410 ``expired`` (also when used, or when the
+    code was quicker), 409 ``claimed``."""
+    _need_own(svc)
+    card = _card(svc, card_id)
+    token = data.get("token")
+    if not isinstance(token, str) or not 20 <= len(token) <= 100:
+        raise _expired()
+    claim = svc.odoo.card_claim_by_token(card["id"], _hash(token))
+    if claim is None or claim["state"] != "pending" or claim["expires_at"] <= time.time():
+        raise _expired()
+    starter, email, form = claim["pubkey"], claim["email"], dict(claim["form"])
     _refuse_taken(card)
     if card["kind"] == "topic" and hashtag_state(svc, form["hashtag"]) != "free":
         raise ApiError(409, "hashtag_taken", "This hashtag is taken. Try another one.")
-    _check_code(svc, email, key, str(data.get("code") or ""), card["id"])
+    same = clicker == starter
     with _card_lock(card["id"]):
+        now = svc.odoo.card_claim_by_token(card["id"], _hash(token))
+        if now is None or now["state"] != "pending" or now["expires_at"] <= time.time():
+            raise _expired()
         card = _card(svc, card["id"])
-        _refuse_taken(card)  # someone was first: nobody is made, nothing is started
-        member = applyverified._account(svc, email)
-        with _ids_lock:
-            group = choose_group(svc, card, form)
-            if member is not None:
-                who, opened = _existing(svc, member, key, client)
-                start(svc, card, form, who, group)
-            else:
-                who, opened, pass_id = _new_guest(svc, group, name, email, key, client)
-                start(svc, card, form, who, group, pass_id)
-    return {**opened, "group": group, **_follow_topic(svc, card, who, group, summary)}
+        _refuse_taken(card)
+        who, opened, group = _make(svc, card, form, email, starter)
+        # one claim only: the code of this address and key works no more
+        svc.odoo.key_code_expire(email, starter, PURPOSE)
+        follow = _follow_topic(svc, card, who, group, form["summary"])
+        result = {**opened, "group": group, **follow}
+        if same:  # the page that waits gets nothing more: this browser has it
+            svc.odoo.card_claim_move(card["id"], starter, "pending", "done")
+        else:
+            svc.odoo.card_claim_move(card["id"], starter, "pending", "confirmed", result)
+    log.info("cards: %s confirmed by its link (same device: %s)", card["id"], same)
+    out: dict[str, Any] = {"confirmed": True, "group": group, "same_device": same}
+    return {**out, **result} if same else out
+
+
+def claim_poll(svc: Services, card_id: str, key: str) -> tuple[dict[str, Any], int]:
+    """The page that waits (the key that started the claim): 202 ``{"pending": true}``, then
+    once the mail's button was clicked elsewhere the signed-in body (200), handed out once. 410
+    ``expired`` (the claim ran out, or its session was handed out already), 404 (no claim of
+    this key)."""
+    _need_own(svc)
+    card = _card(svc, card_id)
+    if not POLLS.allow("key:" + key):
+        raise ApiError(429, "too_many", "Too many requests for now. Try again in a minute.")
+    claim = svc.odoo.card_claim_get(card["id"], key)
+    if claim is None:
+        raise ApiError(404, "not_found", "No claim of this card is waiting here.")
+    # a confirmed session waits for the page as long again as the code worked
+    if claim["state"] == "confirmed" and claim["expires_at"] + CLAIM_SECONDS > time.time():
+        if svc.odoo.card_claim_move(card["id"], key, "confirmed", "done"):
+            return dict(claim["result"] or {}), 200
+    if claim["state"] == "pending" and claim["expires_at"] > time.time():
+        return {"pending": True}, 202
+    raise _expired()
 
 
 # ── for the group's stewards ────────────────────────────────────────────────────────────────
@@ -709,6 +862,19 @@ def register(app: FastAPI) -> None:
         out = await retries.run(claim_verify, svc(request), card_id, key, body)
         return JSONResponse(out, headers=NO_STORE)
 
+    @app.post(API + "/{card_id}/claim-confirm")
+    async def card_claim_confirm(request: Request, card_id: str) -> JSONResponse:
+        limited(request, CONFIRMS)
+        key, body = await signed(request, "POST", f"{API}/{card_id}/claim-confirm")
+        out = await retries.run(claim_confirm, svc(request), card_id, key, body)
+        return JSONResponse(out, headers=NO_STORE)
+
+    @app.post(API + "/{card_id}/claim-poll")
+    async def card_claim_poll(request: Request, card_id: str) -> JSONResponse:
+        key, _body = await signed(request, "POST", f"{API}/{card_id}/claim-poll")
+        out, status = await run_in_threadpool(claim_poll, svc(request), card_id, key)
+        return JSONResponse(out, status_code=status, headers=NO_STORE)
+
     @app.post(API + "/{card_id}/retire")
     async def card_retire(request: Request, card_id: str) -> JSONResponse:
         key, _body = await signed(request, "POST", f"{API}/{card_id}/retire")
@@ -722,4 +888,14 @@ def register(app: FastAPI) -> None:
         return JSONResponse(out, headers=NO_STORE)
 
 
-__all__ = ["register", "info", "claim", "claim_start", "claim_verify", "retire", "group_card"]
+__all__ = [
+    "register",
+    "info",
+    "claim",
+    "claim_start",
+    "claim_verify",
+    "claim_confirm",
+    "claim_poll",
+    "retire",
+    "group_card",
+]
