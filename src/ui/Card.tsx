@@ -8,7 +8,7 @@ import qrcode from 'qrcode-generator'
 import { BELFRY, NAME } from '../config'
 import { loadSession, setPendingInvite } from '../core/auth'
 import {
-  CardFailed, cardErrorText, cardInfo, claimConfirm, claimPoll, claimSignedIn, claimStart, claimVerify, takeConfirm, dropForm, hashtagSlug, hashtagState,
+  CardFailed, cardErrorText, cardInfo, claimConfirm, claimPoll, claimSignedIn, claimStart, claimVerify, takeConfirm, dropForm, hashtagSlug, hashtagState, typingSlug,
   cardDone, cardUrl, setCardTopic, groupCard, keepForm, keptForm, markMid, retireCard, type CardForm, type GroupCard, type CardInfo, type CardKind,
 } from '../core/cards'
 import type { SignedIn } from '../core/guestjoin'
@@ -236,7 +236,7 @@ function StartForm({ id, kind, signedIn, signedEmail, onSignOut, onIn, onTaken, 
       <p>Nobody has scanned this card yet. The {word} starts with you.</p>
       <Form className="start-form card-form" onSubmit={start}>
         {kind === 'topic' ? <label className="field"><span>Hashtag</span>
-          <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required autoFocus onChange={set('hashtag')} placeholder="tool-library" /></span>
+          <span className="card-hash"><b aria-hidden="true">#</b><input className="input" value={f.hashtag} maxLength={31} autoCapitalize="none" spellCheck={false} required autoFocus onChange={(e) => { const v = typingSlug(e.target.value); setF((o) => ({ ...o, hashtag: v })) }} onBlur={() => setF((o) => ({ ...o, hashtag: o.hashtag.replace(/-+$/, '') }))} placeholder="tool-library" /></span>
           <small className={'card-tag ' + tag} role="status" aria-live="polite">{tag === 'free' ? '✓ Available · this is the channel’s name' : tag === 'taken' ? 'Taken: try another one' : tag === 'invalid' ? 'Letters, digits and dashes, 2 to 30' : tag === 'checking' ? 'Checking…' : tag === 'unknown' ? <>Couldn’t check just now · <button type="button" className="link" onClick={() => setRecheck((n) => n + 1)}>Try again</button></> : ''}</small>
         </label>
         : <label className="field"><span>Group name</span>

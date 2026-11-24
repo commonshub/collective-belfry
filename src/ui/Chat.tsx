@@ -1,3 +1,4 @@
+import { typingSlug } from '../core/cards'
 import { NO_PREVIEW, outsideLink } from '../core/linkpreview'
 import { ComposerPreview, OgCard } from './LinkPreview'
 import { GroupName } from './GroupName'
@@ -482,7 +483,7 @@ function NewChannel({ onClose, category }: { onClose: () => void; /** made from 
           <textarea className="input" rows={3} placeholder="What is this channel about?" value={about} onChange={(e) => setAbout(e.target.value)} /></label>
         {pick ? <label className="field"><span>Address · its mail is {address}@{BELFRY.domain}</span>
           <input className="input" aria-label="Channel address" placeholder={slug(name || 'channel')} value={d.address} autoCapitalize="none" spellCheck={false}
-            onChange={(e) => setD((x) => ({ ...x, address: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))} /></label>
+            onChange={(e) => setD((x) => ({ ...x, address: typingSlug(e.target.value) }))} onBlur={() => setD((x) => ({ ...x, address: x.address.replace(/-+$/, '') }))} /></label>
           : name.trim() && <p className="hint">Its address will be {slug(name)}-····, with 4 random characters (the belfry's admins choose plain ones).</p>}
         {taken && <p className="error">#{address} exists already: pick another address.</p>}
         <p className="hint">🔒 New channels are for members only. Its admins can make it public later, in its settings.</p>

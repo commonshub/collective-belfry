@@ -97,6 +97,11 @@ export function keptForm(id: string): CardForm | null {
 export const keepForm = (id: string, f: CardForm) => { try { localStorage.setItem(FORM, JSON.stringify({ id, ...f })) } catch { /* private mode */ } }
 export const dropForm = () => { try { localStorage.removeItem(FORM) } catch { /* private mode */ } }
 
+/** As a hashtag is typed (Xavier, 24 Nov, every app): lower case, accents folded (é → e, ß → ss), spaces
+ *  → one "-", nothing but a–z, 0–9 and "-", no "-" first, no "--", 30 at most. A "-" at the end stays while
+ *  typing (the next word follows); hashtagSlug trims it when leaving the field or sending. */
+export const typingSlug = (s: string) => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss').replace(/æ/g, 'ae').replace(/œ/g, 'oe').replace(/ø/g, 'o').replace(/ł/g, 'l').toLowerCase()
+  .replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/-{2,}/g, '-').replace(/^-+/, '').slice(0, 30)
 /** The hashtag as a channel id: lower case, letters, digits and dashes (2–30). */
 export const hashtagSlug = (s: string) => s.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30).replace(/-+$/, '') // (trimmed again after the cut: no dash at the end, belfry-android)
 /** The Nth suggestion when SLUG is taken: "<slug>-N", cut to 30 with no dash before the number. */

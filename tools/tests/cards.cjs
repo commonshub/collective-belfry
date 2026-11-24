@@ -42,6 +42,7 @@ let ok = 0, fail = 0; const check = (c, m) => { if (c) ok++; else { fail++; cons
   await click('Create the group'); await sleep(800);
   s = await text();
   check(/Check your e-mail/.test(s) && /To create Sourdough starters, enter the 6-digit code we sent to lina@example\.org\./.test(s), "A: onb-code's words " + s.slice(0, 200));
+  check(/or click Confirm in the e-mail\. This page moves on by itself once you have\./.test(s), "A: the Confirm-in-the-e-mail line");
   check(/Send a new code \(in \d+ s\)/.test(s) && /Use another address/.test(s) && /Not there\? Look in your spam folder\./.test(s), "A: resend in N s, another address, the spam hint");
   await type('.code-boxes input', '111111'); await sleep(800);
   check(/2 tries left/.test(await text()), "A: a wrong code says how many tries are left");
@@ -81,6 +82,18 @@ let ok = 0, fail = 0; const check = (c, m) => { if (c) ok++; else { fail++; cons
   const acct = await ev(`document.querySelector('.card-account')?.innerText||''`);
   check(/Log out/.test(acct) && !/^You\b/.test(acct) && await ev(`!!document.querySelector('.card-form .btn + .card-account')`), "B: the account box below Create, with Log out: " + acct);
   check(/You’ll look after this topic\./.test(s) && !/6-digit code/.test(s), "B: the foot (no code when signed in)");
+  // Xavier (24 Nov): the hashtag cleans itself as it's typed or pasted
+  const hv = () => ev(`${field('Hashtag')}.querySelector('input').value`);
+  await typeIn('Hashtag', 'Café Crème & Co!'); await sleep(100);
+  check(await hv() === 'cafe-creme-co', "B: accents folded, spaces → '-', punctuation dropped: " + await hv());
+  await typeIn('Hashtag', ' - Straße   der  Tools--x'); await sleep(100);
+  check(await hv() === 'strasse-der-tools-x', "B: no '-' first, ß → ss, no '--': " + await hv());
+  await typeIn('Hashtag', 'tools-'); await sleep(100);
+  check(await hv() === 'tools-', "B: a '-' at the end stays while typing");
+  await ev(`${field('Hashtag')}.querySelector('input').dispatchEvent(new FocusEvent('focusout', { bubbles: true }))`); await sleep(200);
+  check(await hv() === 'tools', "B: …and goes when leaving the field: " + await hv());
+  await typeIn('Hashtag', 'a'.repeat(40)); await sleep(100);
+  check((await hv()).length === 30, "B: 30 at most");
   await typeIn('Hashtag', 'general'); await sleep(900);
   check(/Taken/.test(await ev(`document.querySelector('.card-tag').textContent`)), "B: #general is taken");
   await typeIn('Hashtag', 'Sourdough'); await sleep(900);
@@ -114,6 +127,13 @@ let ok = 0, fail = 0; const check = (c, m) => { if (c) ok++; else { fail++; cons
   check(/is retired/.test(await text()), "B2: retired");
   await open('#/g/T9PC4H');
   check(/closed to new people/.test(await text()), "B2: the retired card says closed");
+
+  // C0. the e-mail's Confirm button: the token leaves the address at once (never in history); a link that
+  // can't be confirmed (the demo has no server) says so
+  await fresh(); await send("Page.navigate", { url: "about:blank" }); await sleep(200);
+  await send("Page.navigate", { url: `http://127.0.0.1:${web}/?backend=demo&confirm=tok_ABCdef123456#/g/K7Q2MX` }); await sleep(2500);
+  check(!(await ev("location.href")).includes("confirm=") && !(await ev("location.href")).includes("tok_ABC"), "C0: the token is gone from the address: " + await ev("location.href"));
+  check(/This link didn’t work/.test(await text()), "C0: a link that can't be confirmed says so: " + (await text()).slice(0, 160));
 
   // C. dead ends
   await open('#/g/RETRDX'); s = await text();
