@@ -12,17 +12,19 @@ to scan a card starts it and looks after it, everyone after joins. Asked by the 
   "On create topic flow for the hashtag input text it should automatically turn white spaces
   into dashes and prevent special chars like punctuation and co." (owner, 2026-11-24)
   The result must satisfy the server's rule: 2–30 of `a–z`, `0–9`, `-`, lower case, no dash at
-  either end (capitals are lowered; several dashes in a row collapse to one; to confirm: the
-  server does not clean, it only refuses). → docs/cards.md §2.2, §2.4
+  either end: capitals are lowered, accents folded, several spaces/dashes become one dash, a
+  trailing dash is trimmed on leaving the field, ≤ 30 (lead's rule sent to all apps, 2026-11-24;
+  the server does not clean, it only refuses). → docs/cards.md §2.2, §2.4
 - **CARD-2** [apps] The field checks the hashtag live (free / taken / invalid, with the reason)
   before the form can be sent; taken names include channels, usernames, mail aliases and the
   reserved names (`general`, `charter`, `website`, `hello`, `pod-`…). → GET /cards/hashtag/<name>
-- **CARD-3** [apps] The start-topic form order: Topic → suggested hashtag → Description.
-  (owner, Cards canvas v41; to confirm: "topic start form order" was still listed as pending
-  with the owner on 2026-11-24.) A topic without a title is named by its hashtag.
+- **CARD-3** [apps] The start-topic form asks the Hashtag directly (it is the channel's name), then
+  the Description, your name, your e-mail; no topic-in-words field (owner approved the onb-* boards,
+  Cards canvas v87–v90, 2026-11-24; changed from Topic → suggested hashtag of v41). A topic
+  without a title is named by its hashtag; its description is used as typed.
 - **CARD-4** [apps] No Summary row on the topic start form (owner, Cards v80, 2026-11-24). The
-  server still accepts `summary` and defaults the starter's follow to weekly. (to confirm which
-  wins: the form no longer asks, so the starter follows weekly.)
+  server still accepts `summary` and, when absent, the starter follows weekly; the choice lives in
+  the topic's notification settings and on the follow form.
 
 ## The card
 

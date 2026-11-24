@@ -85,8 +85,8 @@ Teaching page: the "How encryption works" explainer (private preview).
   sender-built preview whose picture is encrypted (docs/link-previews-v2.md). (to confirm: the
   lead's brief said "no previews in encrypted conversations" for all; the v2 contract allows
   phone previews with an encrypted picture.)
-- **ENC-41** [all] No typing indicators in encrypted conversations (v1 rule; to confirm for
-  format 3).
+- **ENC-41** [all] No typing indicators in encrypted conversations, version 1 and format 3
+  (docs/encrypted.md §6).
 - **ENC-42** [all] Events, tickets, check-in and proposals exist only outside private groups in
   this version; announcements by e-mail and mention digests don't exist for a private group.
 

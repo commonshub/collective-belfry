@@ -61,7 +61,7 @@ Encryption rules are in encryption.md.
   retried, never delays a message); never a notification, sound or unread count.
 - **MSG-42** [apps] A device setting "Show others when I'm typing", on by default.
 - **MSG-43** [apps] No typing events in Notes or in end-to-end encrypted conversations (v1 sealed
-  rule; to confirm for format 3, the contract says nothing), not in archived channels, not from
+  and format 3, docs/encrypted.md §6), not in archived channels, not from
   reading guests.
 
 ## Link previews
