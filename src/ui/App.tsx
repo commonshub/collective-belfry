@@ -665,7 +665,7 @@ function demoGuestReading(channel: string, pubkey?: string, name?: string) {
 /** Demo only: a group in PARENT made by someone else (Ana) or by me (ADMIN), announced there with
  *  its card; MEMBER puts me in it; APPLICANTS people ask to join (with an answer); VOUCHED of
  *  them got a vouch from Ben (a member). Returns the group id. */
-function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; private?: boolean; vouches?: number; admin?: boolean; member?: boolean; applicants?: number; vouched?: number } = {}) {
+function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; private?: boolean; vouches?: number; admin?: boolean; member?: boolean; applicants?: number; vouched?: number; about?: string } = {}) {
   const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
   const now = Math.floor(Date.now() / 1000)
   const { name = 'Garden club', parent = 'general', closed = true, private: inviteOnly = false, vouches = 0, admin = false, member = false, applicants = 0, vouched = 0 } = opts
@@ -676,7 +676,7 @@ function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; pri
   const members = [owner, ben.pk, ...(member && !admin ? [me()] : [])]
   const evs: Record<string, unknown>[] = [ana.ev, ben.ev,
     { id: hex(32), pubkey: owner, sig: hex(64), kind: 9007, created_at: now - 800, tags: [['h', id]], content: '' },
-    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9002, created_at: now - 800, tags: [['h', id], ['name', name], ['about', 'We grow vegetables on the roof. **Wednesdays** at 6.'], closed ? ['closed'] : ['open'], closed && inviteOnly ? ['private'] : ['public'], ...(closed ? [['prompt', 'What would you like to grow?']] : []), ...(vouches ? [['vouches', String(vouches)]] : [])], content: '' },
+    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9002, created_at: now - 800, tags: [['h', id], ['name', name], ['about', opts.about ?? 'We grow vegetables on the roof. **Wednesdays** at 6.'], closed ? ['closed'] : ['open'], closed && inviteOnly ? ['private'] : ['public'], ...(closed ? [['prompt', 'What would you like to grow?']] : []), ...(vouches ? [['vouches', String(vouches)]] : [])], content: '' },
     { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39001, created_at: now - 790, tags: [['d', id], ['p', owner, 'admin']], content: '' },
     { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39002, created_at: now - 790, tags: [['d', id], ...members.map((p) => ['p', p])], content: '' },
   ]

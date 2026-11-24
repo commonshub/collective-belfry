@@ -145,10 +145,22 @@ export function midFacts(g: Group, mine = me()): string {
 
 /** The mid part: two lines of description (More opens the whole menu), the facts, ⌃ folds, ⌄ opens. */
 function GroupMid({ g, welcome, onFold, onMore }: { g: Group; welcome?: 'started' | 'joined'; onFold: () => void; onMore: () => void }) {
+  // More only when the two-line clamp really cut the description (Xavier, Cards v73)
+  const about = useRef<HTMLDivElement>(null)
+  const [cut, setCut] = useState(false)
+  useLayoutEffect(() => {
+    const el = about.current?.firstElementChild as HTMLElement | null
+    if (!el) { setCut(false); return }
+    const measure = () => setCut(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    ro?.observe(el)
+    return () => ro?.disconnect()
+  }, [g.about])
   return (
     <div className="gmid">
-      {g.about && <Markdown className="gmid-about" text={g.about} />}
-      {g.about && <button className="link gmid-more" onClick={onMore}>More</button>}
+      {g.about && <div ref={about}><Markdown className="gmid-about" text={g.about} /></div>}
+      {g.about && cut && <button className="link gmid-more" onClick={onMore}>More</button>}
       <div className="gmid-facts">{midFacts(g)}</div>
       {welcome && <div className="gmid-welcome" role="status"><b>Welcome to {g.isPod ? g.name : '# ' + g.name}!</b> {g.isPod
         ? (welcome === 'started' ? 'You started it. Say hi and share something to get it going: a photo, a tip, a question.' : 'Say hi and share something: a photo, a tip, a question.')
