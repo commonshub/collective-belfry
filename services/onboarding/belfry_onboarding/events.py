@@ -507,6 +507,7 @@ class Event:
     location: str = ""
     links: list[str] = field(default_factory=list)
     cover: str = ""
+    website: str = ""  # the event's own outside site (["website", url]); never the r link
     visibility: str = "members"
     status: str = "scheduled"
     status_reason: str = ""
@@ -542,6 +543,25 @@ class Event:
 
     def guest_until(self) -> str:
         return (self.last_day() + dt.timedelta(days=GUEST_DAYS_AFTER)).isoformat()
+
+
+WEBSITE_MAX = 2000
+
+
+def website_of(e: dict[str, Any]) -> str:
+    """The event's own outside site, its ``["website", "<https url>"]`` tag: https only, at
+    most 2000 characters, one word with a host; else none. Distinct from the ``r`` tag (the
+    Join online link, only for people going) and from the page's slug."""
+    raw = str(tag(e, "website") or "").strip()
+    if not raw or len(raw) > WEBSITE_MAX or not raw.startswith("https://"):
+        return ""
+    if any(c.isspace() or ord(c) < 32 or c in '<>"\\' for c in raw):
+        return ""
+    try:
+        host = urlparse(raw).hostname
+    except ValueError:
+        return ""
+    return raw if host and "." in host else ""
 
 
 def _when(value: str | None, all_day: bool) -> dt.datetime | dt.date | None:
@@ -630,6 +650,7 @@ def load(svc: Services, d: str) -> Event | None:
             if t[:1] == ["r"] and len(t) > 1 and str(t[1]).startswith("https://")
         ],
         cover=tag(latest, "image") or "",
+        website=website_of(latest),
         visibility=visibility if visibility in VISIBILITIES else "members",
         status="cancelled" if tag(latest, "status") == "cancelled" else "scheduled",
     )
@@ -798,8 +819,13 @@ class People:
         return sum(1 for p, t in self.holders.items() if t == ticket_d and p not in self.tests)
 
     def going(self) -> int:
+        return len(self.going_keys())
+
+    def going_keys(self) -> list[str]:
+        """Who is going: ticket holders and people who answered Going, less anyone whose own
+        latest answer is not Going (the count the apps show as "N going")."""
         keys = set(self.holders) | {k for k, s in self.rsvps.items() if s == "accepted"}
-        return sum(1 for k in keys if self.rsvps.get(k, "accepted") == "accepted")
+        return sorted(k for k in keys if self.rsvps.get(k, "accepted") == "accepted")
 
 
 def people(svc: Services, ev: Event) -> People:
@@ -1055,6 +1081,8 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         "location": ev.location,
         "online": bool(ev.links),
         "links": ev.links if inside else [],
+        # the event's own outside site: for everyone who may read the event (never the r link)
+        "website": ev.website or None,
         "cover": f"{url_of(svc, ev)}/cover" if ev.cover else None,
         "visibility": ev.visibility,
         "status": ev.status,
@@ -1476,7 +1504,15 @@ def watch(svc: Services) -> dict[str, int]:
     since = int(st.param("watch.since", str(now - 3600)))
     found = groups(svc, [{"kinds": [9000, 9001, 1985], "since": max(0, since - 120)}])
     mailer = Mailer(svc.settings)
-    done = {"going": 0, "declined": 0, "cancelled": 0, "reminded": 0, "invited": 0}
+    done = {
+        "going": 0,
+        "declined": 0,
+        "cancelled": 0,
+        "reminded": 0,
+        "invited": 0,
+        "changed": 0,
+        "join_links": 0,
+    }
     cache: dict[str, Event | None] = {}
 
     def event(d: str) -> Event | None:
@@ -1514,6 +1550,13 @@ def watch(svc: Services) -> dict[str, int]:
         done["invited"] = invite(svc, mailer, st, recent)
     except Exception as exc:  # noqa: BLE001 — the next round tries again; the rest is done
         log.warning("events: invitations not told: %s", exc)
+    from . import eventmails
+
+    for name, job in (("changed", eventmails.changes), ("join_links", eventmails.join_links)):
+        try:
+            done[name] = job(svc, mailer, st, recent)
+        except Exception as exc:  # noqa: BLE001 — the next round tries again
+            log.warning("events: %s not sent: %s", name, exc)
     return done
 
 
@@ -1527,12 +1570,9 @@ def _ticket_issued(svc: Services, ev: Event, pubkey: str, mailer: Any) -> None:
             svc.odoo.write("belfry.pass", [p["id"]], {"state": "active"})
     email = _email_of(svc, pubkey, ev.group)
     if guest and email:
-        mailer.send(
-            email,
-            f"You're going: {ev.title}",
-            [f"You have a place at {ev.title}, {when_text(ev)}.", _where_text(ev)],
-            button=(chat_url(svc, ev), "Open the event"),
-        )
+        from .eventmails import going_mail
+
+        going_mail(svc, ev, email, mailer)
     partner = next((m2o_id(p.get("partner_id")) for p in rows if p.get("partner_id")), None)
     from . import sitenotify
 
@@ -1983,11 +2023,27 @@ def event_page(svc: Services, ev: Event) -> str:
 <p class="when">{E(when_text(ev))}</p>
 {f'<p class="where">{E(where)}</p>' if where else ""}
 <p class="hosts">Hosted by {hosts} · {ppl.going()} going</p>
+{_website_html(ev)}
 {action}<a class="ghost" href="{E(url)}.ics">Add to calendar</a>
 {ticket_rows}
 <div class="about">{_paragraphs(ev.about)}</div>
 </article>"""
     return _page(ev.title, body, head)
+
+
+def website_text(url: str) -> str:
+    """How an event's website reads in a page or a mail: no scheme, no trailing slash."""
+    out = url.removeprefix("https://").rstrip("/")
+    return out if len(out) <= 80 else out[:79] + "…"
+
+
+def _website_html(ev: Event) -> str:
+    if not ev.website:
+        return ""
+    return (
+        f'<p class="website">Event website: <a href="{E(ev.website)}" '
+        f'rel="noopener nofollow">{E(website_text(ev.website))}</a></p>'
+    )
 
 
 def public_events(svc: Services) -> list[Event]:

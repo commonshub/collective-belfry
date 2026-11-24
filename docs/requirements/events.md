@@ -28,6 +28,10 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   page on the community's website (`<domain>/events/<slug>`). "we need to make it clearer the
   difference between the online url … versus the official website of the event, versus the custom
   url on the public website" (owner, 2026-11-24). → Event form canvas Vo1xJ8QzZQ4PPqWbD2UmkF
+  → Server: the Event website is the tag `["website", "<https url>"]`, `website` in
+  `GET /api/v1/events/<link>`, "Event website" on the public page and in the mails; the Join
+  online link stays the `r` tag (built 2026-11-24, docs/checkin.md "An event's links, and what
+  people going are told")
 - **EV-61** [apps, server] The form asks the Event website first; pasting it fills in the rest
   (cover, title, dates, place, description) from that page, fetched and cached by a belfry service,
   with "Fetching event details…" while it works; the person checks and changes anything. The Join
@@ -44,6 +48,14 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   canvas's open point, 2026-11-24, to confirm with the owner).
 - **EV-62** [apps] The description comes after the links that follow from Where (owner, Event form
   v6, 2026-11-24).
+- **EV-63** [apps, server] Saving an edit asks first, listing what changed, with a switch "Tell the
+  N people going" (a line in the event's chat and an e-mail); the switch starts on only when the
+  date, the time, the place or the Join online link changed. The e-mail lists only what changed
+  ("Starts 11:00 (was 10:00)", "Join online: a new link"). People going get the Join online link by
+  e-mail 1 hour before. (owner, Event form canvas evform-edit-confirm / evmail-change /
+  evmail-rsvp, 2026-11-24, approved) → Server: `["notify", "1"]` and `["changed", field]` on the
+  version, the change mail and the 1-hour link mail (built 2026-11-24, docs/checkin.md "An event's
+  links, and what people going are told"); the chat line is the apps'.
 
 ## Hosts and invitations
 

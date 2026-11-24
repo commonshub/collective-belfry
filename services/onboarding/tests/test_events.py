@@ -409,7 +409,7 @@ def test_an_application_from_someone_new_and_the_hosts_answer(rsvc, world, keyca
         assert done["going"] == 1
         assert rsvc.odoo.read_one("belfry.pass", row["id"], ["state"])["state"] == "active"
         assert mailer.SENT[-1]["To"] == "gus@example.org"
-        assert "You're going: Garden day" in mailer.SENT[-1]["Subject"]
+        assert "You're going to Garden day" in mailer.SENT[-1]["Subject"]
         assert events.watch(rsvc)["going"] == 0  # once
         assert call(c, gus, "GET", f"/{D}").json()["me"]["ticket"] == f"{D}:sp"
 
@@ -569,7 +569,7 @@ def test_cancellation_and_reminder_mails(rsvc, world, keycast):
         mailer.SENT.clear()
         done = events.watch(rsvc)
         subjects = [m["Subject"] for m in mailer.SENT]
-        assert done["going"] == 1 and "You're going: Garden day" in subjects
+        assert done["going"] == 1 and "You're going to Garden day" in subjects
         assert done["reminded"] == 1 and "Tomorrow: Garden day" in subjects
         assert events.watch(rsvc)["reminded"] == 0
         world.put(

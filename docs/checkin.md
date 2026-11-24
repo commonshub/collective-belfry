@@ -176,6 +176,79 @@ Limits: the watcher looks at events with a version of the last 120 days, as the 
 There is no setting of its own: the push follows the person's Mentions switch and the event's
 level (`off` = none); the e-mail is always sent.
 
+### An event's links, and what people going are told (2026-11-24)
+
+Event form canvas (evmail-rsvp, evmail-change, evform-edit-confirm, evview-*), EV-60 and EV-63.
+Built in `events.py` and `eventmails.py` (tests `tests/test_event_mails.py`).
+
+**Three links, never mixed up.**
+
+- **Join online** = the `r` tag(s) on the NIP-52 version (https only), the call link. Unchanged:
+  `GET /api/v1/events/<link>` gives `links` only to hosts, ticket holders, the group's members
+  and the community's members (`online` true/false for everyone); the public page
+  `<domain>/events/<slug>` never shows it (it says "online").
+- **Event website** = new tag `["website", "<https url>"]`: the event's own outside site (a
+  conference site). Read only when it starts with `https://`, has a host with a dot, is at most
+  2000 characters and has no space, control character, `<`, `>`, `"` or `\`
+  (`events.website_of`); anything else counts as none. `GET /api/v1/events/<link>` returns
+  `website` (string or `null`) to whoever may read the event (members-only events stay
+  members-only). The public page shows "Event website: <address>" as a link with
+  `rel="noopener nofollow"`.
+- **Our page** = `<domain>/events/<slug>`, as before.
+
+**The RSVP mail** (to a guest who got a place; members are not mailed, as before): subject
+"You're going to <title>"; "You're going to <title>.", "When: …", "Where: <place>", "Join
+online: we'll e-mail you the link 1 hour before." (a timed event with an `r` link; an all-day
+one: "the link is in the event."), "Event website: <address>" (a link); button "Open the event
+page" to `<domain>/events/<slug>` for a public or by-link event, else "Open the event" to the
+chat; under it "<page address> · Add to calendar (.ics attached)", and `event.ics` attached.
+The call link itself is never in this mail.
+
+**Who is going** (change and link mails): ticket holders and people whose RSVP is Going, less
+anyone whose own latest RSVP is not Going (`People.going_keys`, the "N going" count), with an
+address (`_email_of`: the event pass's address, else the contact's). Never the signer of the
+version, for a change mail. The mails greet "Hi <name>," when the person has a profile name.
+
+**A change: tags on the new version.** The app saves a new version (same `d`, newer
+`created_at`, signed by someone who may edit the event: `events.load`'s rule) with:
+
+- `["notify", "1"]`: tell the people going ("Tell the N people going" in the Save sheet; the
+  app turns it on by default only when the date, the time, the place or the Join online link
+  changed). Without it nobody is mailed.
+- `["changed", "<field>"]` (zero or more; start, end, location, online, title, website…): a
+  hint for apps. The belfry does not trust it: it computes the change from the versions.
+
+The watcher (`eventmails.changes`, every round) keeps, per event, the id of the version it last
+saw as the event (`events.sqlite` params, `change.base.<d>`). When the event's version is a new
+one, upcoming, not cancelled, carries `notify=1` and was made less than an hour ago, it compares
+it with that last-seen version (the first time: the host version just before it) and lists only
+what changed, in this order and these words:
+
+- "Starts: 11:00 (was 10:00)" (the date too when the day changed: "Friday 29 January 2027, 11:00
+  (was Thursday 28 January 2027, 10:00)"), "Ends: …" the same way;
+- "Where: <new> (was <old>)";
+- "Join online: A new link: <address>" (a link: the mail goes to people going only), or "No online
+  link any more";
+- "Title: <new> (was <old>)";
+- "Event website: <address>", or "none any more".
+
+A description, cover, tickets or co-hosts alone send nothing. Subject: "<title> now starts at
+11:00" when the start moved (all-day: "<title> is now on <date>"), else "<title> has changed".
+The mail: "<title> changed:", the lines, the page button (as the RSVP mail), then "Sent to
+everyone going, by <host>. The calendar file is updated." (`<host>` = the signer's name, else
+"Somebody"; never a key), with the updated `event.ics`. Once per (version, person): key
+`change:<version id>:<pubkey>` in table `sent`. A version more than an hour old when first seen
+(a restart after a long stop) sends nothing; several saves between two rounds make one mail
+about the newest one, compared with what people were last told about. No push (the reminder has
+none either); the line in the event's chat is the app's.
+
+**The Join online link, one hour before** (`eventmails.join_links`): for a timed, not cancelled
+event with an `r` link, in the hour before its start, everyone going gets, once (key
+`joinlink:<d>:<pubkey>`): subject "In 1 hour: <title>"; "<title> starts at 10:00
+(<zone>).", "Join online: <address>" (a link), button "Join online" (the link), then a link to the
+event's page. Someone who starts going within the hour gets it at the next round. The day-before
+reminder ("Tomorrow: <title>", holders, 30 h before) is unchanged.
+
 ## 2. Tickets and their QR
 
 Who holds a ticket: a 9000 with a `ticket` tag (not taken back by a later 9001); on an event that
