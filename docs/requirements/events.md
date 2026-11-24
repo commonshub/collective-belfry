@@ -21,6 +21,23 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
 - **EV-6** [all] Events, meetings, proposals and tickets can't be made inside a private group in
   this version ("Not available in private groups yet").
 
+## Creating and editing an event (Event form canvas, draft)
+
+- **EV-60** [apps] Three distinct links on an event, named the same everywhere (form, event screen,
+  mails): "Join online" (the call link), "Event website" (the event's own outside site), and the
+  page on the community's website (`<domain>/events/<slug>`). "we need to make it clearer the
+  difference between the online url … versus the official website of the event, versus the custom
+  url on the public website" (owner, 2026-11-24). → Event form canvas Vo1xJ8QzZQ4PPqWbD2UmkF
+- **EV-61** [apps, server] The form asks the Event website first; pasting it fills in the rest
+  (cover, title, dates, place, description) from that page, fetched and cached by a belfry service,
+  with "Fetching event details…" while it works; the person checks and changes anything. The Join
+  online link is never taken from a site. "ask for event website at the top and automatically fetch
+  details with a new service on the belfry to fetch and cache event details based on their URL by
+  scraping them. It should show a loading indicator" (owner, Event form v6, 2026-11-24; boards
+  still DRAFT)
+- **EV-62** [apps] The description comes after the links that follow from Where (owner, Event form
+  v6, 2026-11-24).
+
 ## Hosts and invitations
 
 - **EV-10** [all] "Host" = the event's or meeting's maker only; co-hosts by role read "Co-host";
