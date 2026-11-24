@@ -44,6 +44,10 @@ invite pages, print views) and the canvas, unless the line says otherwise.
 - **UI-18** [apps] A server error is shown with the app's own words chosen by the `error` code;
   never the server's `message` text. → every contract's error tables
 
+- **UI-26** [apps] A form on a phone has ONE main button, at the bottom (Create / Save changes),
+  never repeated in the header. On a laptop, where a form has no bottom bar, Save sits top right.
+  "remove, just at the bottom enough" (owner, Event form canvas, 2026-11-24)
+
 ## Navigation
 
 - **UI-20** [apps] A ‹ back button never pushes a screen: it goes back one step when that step is
