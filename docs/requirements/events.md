@@ -35,6 +35,11 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   details with a new service on the belfry to fetch and cache event details based on their URL by
   scraping them. It should show a loading indicator" (owner, Event form v6, 2026-11-24; boards
   still DRAFT)
+- **EV-63** [apps] Saving changes to an event: the switch "Tell the N people going" (a line in the
+  event's chat + an e-mail) starts ON when the date, time, place or Join online link changed, OFF
+  for any other change (title, description, cover, Event website, tickets, co-hosts); the host can
+  always flip it. "turn off by default unless there is a change of date time or location or online
+  url" (owner, Event form canvas evform-edit-confirm, 2026-11-24)
 - **EV-62** [apps] The description comes after the links that follow from Where (owner, Event form
   v6, 2026-11-24).
 
