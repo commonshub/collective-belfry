@@ -276,6 +276,9 @@ def change(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:
             raise ApiError(403, "not_yours", "Only its member or an admin removes an agent.")
         for r in rows:
             core.revoke_pass(svc, r["id"], "removed by its member")
+        from . import devices
+
+        svc.odoo.set_param(devices.READS_PARAM + target, "")  # never back by itself (§11)
     return mine(svc, caller)
 
 
