@@ -22,6 +22,12 @@ home.
 - **CH-5** [apps] Belfry admins order channels and categories (hold and drag); the order is
   shared by everyone. → `belfry:channel-order`
 
+## Header
+
+- **CH-5** [apps] Under a channel's, group's or topic's description in the header, "More" shows
+  only when the description is too long and was cut off. "only show more if the description is
+  too long and had to be cut off" (owner, Cards v73, 2026-11-24)
+
 ## Pins
 
 - **CH-10** [all] Pin for everyone (belfry admins) and Pin for me (anyone); a person's own pins
