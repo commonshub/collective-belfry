@@ -318,7 +318,11 @@ def chat_names(svc: Services) -> set[str]:
 
     chat = app_url(svc.settings, "chat")
     names = {"Chat", GUEST_CHAT, *NATIVE_APPS.values(), *NATIVE_CLIENTS.values()}
-    return names | ({display_name(svc, chat), own_title(svc, chat)} - {"", address(chat)})
+    # sessions made before the chat had its own title were named by its address
+    # (chat.<domain>, earlier apps.<domain>/chat): only the chat itself lives there
+    domain = getattr(svc.settings, "nip05_domain", "") or ""
+    legacy = {address(chat), f"apps.{domain}/chat"} if chat and domain else set()
+    return names | legacy | ({display_name(svc, chat), own_title(svc, chat)} - {""})
 
 
 def session_label(svc: Services, uri: str, client_id: str = "") -> str:

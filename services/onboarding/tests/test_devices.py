@@ -415,3 +415,18 @@ def test_looking_at_devices_never_makes_a_signer_account(m, odoo, keycast):
     before = dict(keycast.users)
     assert devices.refresh(m, pk) == "unknown"
     assert keycast.users == before and lists(m, pk) == []
+
+
+def test_old_web_sessions_named_by_the_chat_address_are_devices():
+    """Sessions opened before the chat had its own title were named by its address
+    ("chat.<domain> · Safari on iPhone", earlier "apps.<domain>/chat"): they are chat devices."""
+    from types import SimpleNamespace
+
+    from belfry_onboarding import apps, discovery
+
+    svc = SimpleNamespace(settings=SimpleNamespace(nip05_domain="belfry.test"))
+    names = apps.chat_names(svc)
+    for name in ("chat.belfry.test · Safari on iPhone", "apps.belfry.test/chat · Chrome on iPhone"):
+        assert discovery.chat_session(svc, {"application_name": name, "redirect_origin": ""}, names)
+    for name in ("other.example · Safari", "belfry.test/website · Firefox"):
+        assert not discovery.chat_session(svc, {"application_name": name, "redirect_origin": ""}, names)
