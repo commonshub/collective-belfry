@@ -48,7 +48,7 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   canvas's open point, 2026-11-24, to confirm with the owner).
 - **EV-62** [apps] The description comes after the links that follow from Where (owner, Event form
   v6, 2026-11-24).
-- **EV-63** [apps, server] Saving an edit asks first, listing what changed, with a switch "Tell the
+- **EV-65** [apps, server] Saving an edit asks first, listing what changed, with a switch "Tell the
   N people going" (a line in the event's chat and an e-mail); the switch starts on only when the
   date, the time, the place or the Join online link changed. The e-mail lists only what changed
   ("Starts 11:00 (was 10:00)", "Join online: a new link"). People going get the Join online link by
