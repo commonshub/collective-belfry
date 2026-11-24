@@ -31,8 +31,11 @@ Teaching page: the "How encryption works" explainer (private preview).
 - **ENC-13** [all] For earlier messages a new device asks; my other devices show ONE card: the
   addition, with "Share earlier messages" (the button) or "Remove this device". No hand-over by
   the other person's devices in v1. (owner, 2026-11-23)
-- **ENC-14** [all] A device's first screen after sign-in lists the devices already on the account
-  with the date each was added and Remove ("These devices can read your messages").
+- **ENC-14** [all] Withdrawn on 2026-11-24: the "These devices can read your messages" first screen
+  / card after sign-in. Instead, Notes to myself's header carries the subline "Encrypted for your N
+  devices"; tapping the header opens Who can read this. "I'd just remove this message altogether.
+  I'd just have as a subline in the header of notes to myself 'encrypted for your x devices'"
+  (owner, 2026-11-24). Who can read this and Me › Devices still list every device with Remove.
 - **ENC-15** [all] At most 20 devices per person (a 21st is not listed and says "Remove one to read
   encrypted messages here"; nothing is evicted); at most 100 devices per encrypted conversation.
   Idle is never removal: a device leaves the list only when its session is revoked, signed out
