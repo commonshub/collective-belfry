@@ -29,8 +29,10 @@ to scan a card starts it and looks after it, everyone after joins. Asked by the 
 ## The card
 
 - **CARD-10** [all] A card's QR holds `https://chat.<domain>/g/<id>`; the id is 6 characters
-  without look-alikes (no 0 O 1 I L) and is printed nowhere as text. (owner, Cards v29,
-  2026-11-23) Card lookups are rate-limited because short ids can be guessed.
+  without look-alikes (no 0 O 1 I L) and is not printed as text on the paper card (owner, Cards
+  v29, 2026-11-23). In the apps, the approved boards show it as a small "Card ‹id›" chip on the
+  start forms, the done screen and the steward's settings; never in chat lines (owner, onb-*
+  boards, 2026-11-24). Card lookups are rate-limited because short ids can be guessed.
 - **CARD-11** [all] Two kinds: a group card (upright) "Scan to join this group", a topic card
   (on its side) "Scan to contribute to this topic · No account required". (owner, 2026-11-23)
 - **CARD-12** [all] An unused card leaves nothing on the relay: no group exists until someone
