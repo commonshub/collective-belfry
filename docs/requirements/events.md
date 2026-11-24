@@ -33,8 +33,7 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   with "Fetching event details…" while it works; the person checks and changes anything. The Join
   online link is never taken from a site. "ask for event website at the top and automatically fetch
   details with a new service on the belfry to fetch and cache event details based on their URL by
-  scraping them. It should show a loading indicator" (owner, Event form v6, 2026-11-24; boards
-  still DRAFT)
+  scraping them. It should show a loading indicator" (owner, Event form v6, 2026-11-24; boards approved v16)
 - **EV-63** [apps] Saving changes to an event: the switch "Tell the N people going" (a line in the
   event's chat + an e-mail) starts ON when the date, time, place or Join online link changed, OFF
   for any other change (title, description, cover, Event website, tickets, co-hosts); the host can

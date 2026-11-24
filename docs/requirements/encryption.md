@@ -66,9 +66,10 @@ Teaching page: the "How encryption works" explainer (private preview).
   never sends unencrypted; what can't be encrypted is held on the device with its text kept and
   words that say why. An unencrypted event in an encrypted conversation is marked "Not
   encrypted" and never acts on anything.
-- **ENC-32** [all] A device out of the list never sends into an encrypted conversation: its
-  composer is replaced by the locked line, and queued items wait with the same words.
-  (lead, 2026-11-22)
+- **ENC-32** [all] A device out of the list never sends into an encrypted conversation. Format 3:
+  the composer stays; what it sends is held with "This device isn't set up for encrypted messages
+  yet · Try again" (docs/encrypted.md §3); no version-1 lock UI on a format-3 belfry. Version 1:
+  the composer was replaced by the locked line. (lead, 2026-11-22 / 2026-11-24)
 - **ENC-33** [apps] The states, with words, never a blank or a spinner without end: Opening ·
   Can't be read on this device (Ask for earlier messages) · Held (Try again; text kept) · Not
   encrypted (no lock). A locked view names the device that can unlock it and when it was asked.
