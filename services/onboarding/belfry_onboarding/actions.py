@@ -23,12 +23,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
+import sqlite3
+import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -314,6 +318,23 @@ class Answerer:
             return None  # the author's button (or no such button)
         if await run_in_threadpool(self._answered, press):
             return None
+        result = await self.decide(press, message, button)
+        await run_in_threadpool(
+            self.relay.publish, self.sign(answer_event(press, result)), self.sign
+        )
+        log.info(
+            "actions: %s by %s… → %s %s",
+            button["action"],
+            press["pubkey"][:8],
+            result.status,
+            result.code,
+        )
+        return result
+
+    async def decide(
+        self, press: dict[str, Any], message: dict[str, Any], button: dict[str, str]
+    ) -> Result:
+        """The answer to PRESS on BUTTON of MESSAGE: too old, too many, or the handler's."""
         if self.clock() - press["created_at"] > MAX_AGE:
             result = Result.error("expired")
         elif self._too_many(press["pubkey"]):
@@ -328,17 +349,146 @@ class Answerer:
                 except Exception as exc:  # noqa: BLE001 — every press gets an answer
                     log.warning("actions: %s failed: %r", button["action"], exc)
                     result = Result.error("failed")
-        await run_in_threadpool(
-            self.relay.publish, self.sign(answer_event(press, result)), self.sign
-        )
+        return result
+
+    # ── a private group, format 3 (docs/encrypted.md §24) ─────────────────────────────────
+    def copy_of(self, rumor: dict[str, Any]) -> tuple[dict, dict, dict[str, str]] | None:
+        """(press, message, button) of the copy of a press sent to the groups key, or None when
+        it isn't one: kind 1985 ``belfry/action`` with ``h``, ``["e", press id, "", "press"]``,
+        the message as JSON in the content (its id not recomputed: imeta keys are stripped)
+        naming the same group, and the pressed ``belfry:`` button among its tags."""
+        if rumor.get("kind") != 1985:
+            return None
+        tags = [t for t in rumor.get("tags", []) if isinstance(t, list)]
+        if ["L", PRESS_NS] not in [t[:2] for t in tags]:
+            return None
+        bid = next((t[1] for t in tags if len(t) > 2 and t[0] == "l" and t[2] == PRESS_NS), "")
+        group = _tag(rumor, "h")
+        press_ids = [t[1] for t in tags if len(t) > 3 and t[0] == "e" and t[3] == "press"]
+        targets = [
+            t[1] for t in tags if len(t) > 1 and t[0] == "e" and (len(t) < 4 or t[3] != "press")
+        ]
+        if not BUTTON_ID.fullmatch(bid or "") or not group or len(press_ids) != 1:
+            return None
+        try:
+            message = json.loads(rumor.get("content") or "")
+        except ValueError:
+            return None
+        if (
+            not isinstance(message, dict)
+            or not isinstance(message.get("id"), str)
+            or message.get("kind") not in MESSAGE_KINDS
+            or not isinstance(message.get("tags"), list)
+            or _tag(message, "h") != group
+            or (targets and targets[0] != message["id"])
+        ):
+            return None
+        button = next((b for b in parse_buttons(message["tags"]) if b["id"] == bid), None)
+        if button is None or not button["action"].startswith("belfry:"):
+            return None
+        press = {
+            "id": press_ids[0],
+            "pubkey": rumor["pubkey"],
+            "button": bid,
+            "message": message["id"],
+            "group": group,
+            "created_at": int(rumor.get("created_at") or 0),
+        }
+        return press, message, button
+
+    async def handle_copy(self, event: dict[str, Any]) -> Result | None:
+        """An 8572 to the groups key on the community relay: the copy of a press in a private
+        group. Opened as the groups key and judged as the apps judge it; the presser must be in
+        the group's member list (39002); the action's own rules as in clear. The answer goes
+        into the group as an 8572 by the groups key (enc.send_group), told to nobody."""
+        from . import enc
+
+        secret = enc.groups_secret(self.svc)
+        if secret is None or not isinstance(event, dict) or not self._mark(str(event.get("id"))):
+            return None
+        try:
+            rumor = await run_in_threadpool(enc.open_for, self.svc, secret, event)
+        except enc.Later:
+            self.seen.pop(str(event.get("id")), None)  # looked at again on the next catch-up
+            return None
+        except ValueError:
+            return None
+        found = self.copy_of(rumor)
+        if found is None:
+            return None
+        press, message, button = found
+        if not self._mark("press:" + press["id"]) or await run_in_threadpool(
+            _answered_before, self.svc, press["id"]
+        ):
+            return None
+        try:
+            members = await run_in_threadpool(enc.group_members, self.svc, press["group"])
+            private = await run_in_threadpool(enc.is_private, self.svc, press["group"])
+        except Exception as exc:  # noqa: BLE001 — not known now: looked at again later
+            log.info("actions: group of a copy not read: %r", exc)
+            self.seen.pop(str(event.get("id")), None)
+            self.seen.pop("press:" + press["id"], None)
+            return None
+        if not private:
+            return None  # copies exist for private groups only
+        if press["pubkey"] not in members:
+            # not in the group: its press can't be in the group either, and an answer there
+            # would reach only the members, never them. Nothing is done.
+            log.info(
+                "actions: a copy from %s…, not in %s: left", press["pubkey"][:8], press["group"]
+            )
+            return None
+        result = await self.decide(press, message, button)
+        answer = {**answer_event(press, result), "pubkey": enc.pubkey_of(secret)}
+        try:
+            await run_in_threadpool(
+                lambda: enc.send_group(self.svc, secret, answer, press["group"], silent=True)
+            )
+        except Exception as exc:  # noqa: BLE001 — the press is answered when it can be
+            log.warning("actions: an encrypted answer not sent: %r", exc)
+            return None
+        _answered_now(self.svc, press["id"])
         log.info(
-            "actions: %s by %s… → %s %s",
+            "actions: %s by %s… (private group) → %s %s",
             button["action"],
             press["pubkey"][:8],
             result.status,
             result.code,
         )
         return result
+
+
+# presses answered in private groups: the answer is encrypted, so the relay can't be asked (as
+# ``_answered`` does in clear); kept next to the register for a restart
+_answered_lock = threading.Lock()
+_answered_dbs: dict[str, sqlite3.Connection] = {}
+
+
+def _answered_db(svc: Services) -> sqlite3.Connection:
+    path = str(Path(svc.settings.register_path).with_name("presses.sqlite"))
+    with _answered_lock:
+        if path not in _answered_dbs:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+            db.execute("CREATE TABLE IF NOT EXISTS answered (press TEXT PRIMARY KEY, at INTEGER)")
+            _answered_dbs[path] = db
+        return _answered_dbs[path]
+
+
+def _answered_before(svc: Services, press_id: str) -> bool:
+    db = _answered_db(svc)
+    with _answered_lock:
+        return (
+            db.execute("SELECT 1 FROM answered WHERE press = ?", (press_id,)).fetchone() is not None
+        )
+
+
+def _answered_now(svc: Services, press_id: str) -> None:
+    db = _answered_db(svc)
+    with _answered_lock:
+        db.execute(
+            "INSERT OR IGNORE INTO answered (press, at) VALUES (?, ?)", (press_id, int(time.time()))
+        )
 
 
 def filters(_first: bool) -> list[dict[str, Any]]:
@@ -350,6 +500,30 @@ def trusted_keys(svc: Services) -> set[str]:
     from .webthreads import _groups_pubkey
 
     return {k for k in (_groups_pubkey(svc), belfry_pubkey(svc.settings)) if k}
+
+
+def copies_job(svc: Services, answerer: Answerer) -> Awaitable[None] | None:
+    """Format 3 (docs/encrypted.md §24): the copies of presses in private groups, 8572s to the
+    groups key on the community relay (which serves them only to that key, §18.1)."""
+    from . import enc, push
+
+    secret = enc.groups_secret(svc)
+    if not enc.format3(svc) or secret is None or not svc.settings.relay_url:
+        return None
+    me = enc.pubkey_of(secret)
+
+    def copy_filters(_first: bool) -> list[dict[str, Any]]:
+        return [{"kinds": [enc.MSG], "#p": [me], "since": int(time.time()) - CATCHUP}]
+
+    async def on_copy(e: dict[str, Any], _live: bool, _first: bool) -> None:
+        try:
+            await answerer.handle_copy(e)
+        except Exception as exc:  # noqa: BLE001 — one copy never stops the rest
+            log.warning("actions: a copy %s… failed: %r", str(e.get("id"))[:8], exc)
+
+    return push.subscribe(
+        svc.settings.relay_url, copy_filters, lambda t: enc.sign(secret, t), on_copy
+    )
 
 
 @contextlib.asynccontextmanager
@@ -384,8 +558,13 @@ async def running(app: FastAPI):
                     with contextlib.suppress(Exception):
                         answerer.seen.pop(str(e.get("id")), None)  # tried again on reconnect
 
+        jobs = [work(), push.subscribe(relay.url, filters, sign, on_event)]
+        copies = copies_job(svc, answerer)
+        if copies is not None:
+            jobs.append(copies)
+
         async def both() -> None:
-            await asyncio.gather(work(), push.subscribe(relay.url, filters, sign, on_event))
+            await asyncio.gather(*jobs)
 
         async def start() -> None:
             from . import website

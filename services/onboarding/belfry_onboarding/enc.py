@@ -813,7 +813,12 @@ def _guests(svc: Any) -> set[str]:
 
 
 def group_events(
-    svc: Any, sender: bytes, rumor: dict, group: str, mentions: Iterable[str] = ()
+    svc: Any,
+    sender: bytes,
+    rumor: dict,
+    group: str,
+    mentions: Iterable[str] = (),
+    silent: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], str, str]:
     """(envelopes, message, K, device set) carrying RUMOR into the private group GROUP from the
     service key SENDER, all signed by it (§10, §24). Members: the 39002 list; each member's
@@ -854,12 +859,20 @@ def group_events(
     r = {**rumor, "pubkey": me}
     if _one(r, "h") != group:
         raise ValueError("the rumor is not for this group")
-    msg = sign(sender, group_message(sender, r, K, group, mentions=mentions))
+    template = group_message(sender, r, K, group, mentions=mentions)
+    if silent:  # nobody is told (push.py): the groups key's answer to a press
+        template["tags"].append(list(SILENT))
+    msg = sign(sender, template)
     return envs, msg, K, dset
 
 
 def send_group(
-    svc: Any, sender: bytes, rumor: dict, group: str, mentions: Iterable[str] = ()
+    svc: Any,
+    sender: bytes,
+    rumor: dict,
+    group: str,
+    mentions: Iterable[str] = (),
+    silent: bool = False,
 ) -> dict[str, Any]:
     """group_events published on the groups relay (envelopes first); the message."""
     from . import followers
@@ -868,7 +881,7 @@ def send_group(
     if got is None:
         raise Held("no groups relay")
     relay, _ = got
-    envs, msg, K, dset = group_events(svc, sender, rumor, group, mentions)
+    envs, msg, K, dset = group_events(svc, sender, rumor, group, mentions, silent)
     publish = _as(sender)
     for e in [*envs, msg]:
         relay.publish(e, publish)
