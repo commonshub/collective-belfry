@@ -31,7 +31,9 @@ chained by a counter and the id of the list before:
 - **Switch.** ``DEVICE_LISTS`` (off by default): off, nothing is published and the check does
   nothing. What a revoke records for ``GET /api/sessions/removed`` (§16.6) is kept either way.
 
-Readers (``["device", <agent>, "reader"]``, §11) are not written here yet.
+- **Readers** (§11): a member's own agent they let read (``POST /api/agents {pubkey, reads}``,
+  agents.py) is listed as ``["device", <agent>, "reader"]`` after the devices, not counted in
+  the 20.
 """
 
 from __future__ import annotations
@@ -274,8 +276,9 @@ def entries_for(svc: Any, account: str) -> list[tuple[str, ...]]:
     from . import apps, discovery
 
     rows, _ = sessions_of(svc, account)
+    readers = [(k, "reader") for k in readers_of(svc, account)]
     if rows is None:
-        return [(account, "self")]
+        return [(account, "self"), *readers]
     names = apps.chat_names(svc)
     chat = [
         (i, r)
@@ -291,7 +294,33 @@ def entries_for(svc: Any, account: str) -> list[tuple[str, ...]]:
         if k not in keys:
             keys.append(k)
     store(svc).seen(keys, account)
-    return [(k,) for k in sorted(keys[:MAX_DEVICES])]
+    return [*[(k,) for k in sorted(keys[:MAX_DEVICES])], *readers]
+
+
+READS_PARAM = "belfry.agent_reads."  # + the agent's key: "1" while its member lets it read (§11)
+
+
+def reads(svc: Any, agent: str) -> bool:
+    param = getattr(svc.odoo, "param", None)
+    return bool(callable(param) and param(READS_PARAM + agent) == "1")
+
+
+def readers_of(svc: Any, account: str) -> list[str]:
+    """§11: the account's own agents it lets read its encrypted conversations, sorted. Listed as
+    ``["device", <agent>, "reader"]``, outside the 20 devices. Only active agents of this
+    member count (an agent whose pass closed drops off at the next check)."""
+    agents_of = getattr(svc.odoo, "agents_of", None)
+    if not callable(agents_of):
+        return []
+    partner = _partner_of(svc, account)
+    if not partner:
+        return []
+    found = {
+        str(a.get("pubkey") or "").lower()
+        for a in agents_of(partner)
+        if is_key(str(a.get("pubkey") or "").lower())
+    }
+    return sorted(k for k in found if k != account and reads(svc, k))
 
 
 def accounts(svc: Any) -> list[str]:

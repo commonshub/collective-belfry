@@ -9,6 +9,9 @@ also bring an agent of their own, which is a member for as long as they are one:
   the member who invited it (or an admin, for themselves) can do that, within their limit
   (none for an admin).
 - ``{"pubkey", "mine": false}``: the agent is removed (its member, or an admin).
+- ``{"pubkey", "reads": true|false}`` by the agent's own member (docs/encrypted.md §11): the
+  agent may read the member's encrypted conversations, as a ``reader`` on their device list.
+  ``{"pubkey", "reads"}`` back; 403 ``not_owner``, 404 ``unknown``, 409 ``not_agent``.
 - ``{"limit": n}`` by an admin: how many agents each member can bring (0 to 20).
 - A link made with ``"agent": true`` (guests.py) brings a new agent in as the inviter's own.
 - An agent can also ask to join by itself (agentrequests.py, ``/agents.md``): an admin who lets
@@ -221,12 +224,17 @@ def _owner(svc: Services, caller: str) -> int:
 
 
 def mine(svc: Services, caller: str) -> dict[str, Any]:
-    from . import apps
+    from . import apps, devices
 
     owner = _owner(svc, caller)
     out: dict[str, Any] = {
         "agents": [
-            {"pubkey": a["pubkey"], "name": a["name"], "since": a["since"]}
+            {
+                "pubkey": a["pubkey"],
+                "name": a["name"],
+                "since": a["since"],
+                "reads": devices.reads(svc, a["pubkey"]),
+            }
             for a in svc.odoo.agents_of(owner)
         ],
         "limit": svc.odoo.agents_limit(owner),
@@ -271,6 +279,30 @@ def change(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:
     return mine(svc, caller)
 
 
+def set_reads(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:
+    """§11 (docs/encrypted.md): the caller's own agent TARGET may (or may no longer) read their
+    encrypted conversations: listed as a reader on the caller's device list."""
+    from . import devices
+    from .holder_invites import ApiError
+
+    owner = _owner(svc, caller)
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", target]],
+        ["tier", "agent_owner"],
+    )
+    if not rows:
+        raise ApiError(404, "unknown", "No one here has this key.")
+    agents = [r for r in rows if r.get("tier") == "agent"]
+    if not agents:
+        raise ApiError(409, "not_agent", "This is not a member's agent.")
+    if any(m2o_id(r.get("agent_owner")) != owner for r in agents):
+        raise ApiError(403, "not_owner", "Only its member decides what their agent reads.")
+    svc.odoo.set_param(devices.READS_PARAM + target, "1" if on else "")
+    devices.schedule(svc, caller)
+    return {"pubkey": target, "reads": on}
+
+
 def set_limit(svc: Services, caller: str, limit: Any) -> int:
     from . import apps
     from .holder_invites import ApiError
@@ -304,6 +336,12 @@ def register(app: FastAPI) -> None:
             raise ApiError(400, "invalid_json", "Send a JSON object.")
         if "limit" in data:
             await run_in_threadpool(set_limit, s, caller, data["limit"])
+        if "reads" in data:
+            target = str(data.get("pubkey") or "").lower()
+            if not HEX.match(target) or not isinstance(data.get("reads"), bool):
+                raise ApiError(400, "invalid", 'Send {"pubkey": "<hex>", "reads": true|false}.')
+            out = await run_in_threadpool(set_reads, s, caller, target, data["reads"])
+            return JSONResponse(out, headers={"Cache-Control": "no-store"})
         if "pubkey" in data:
             target = str(data.get("pubkey") or "").lower()
             if not HEX.match(target) or not isinstance(data.get("mine"), bool):

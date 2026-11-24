@@ -240,3 +240,53 @@ def test_an_agent_with_only_the_link_learns_everything(world):
         )
         assert r.status_code == 200, r.text
         assert c.get(f"/invite/{token}.md").status_code == 410
+
+
+def test_a_member_lets_their_own_agent_read(world, monkeypatch):
+    """docs/encrypted.md §11: POST /api/agents {pubkey, reads} by the agent's own member; the
+    agent becomes a reader on the member's device list, outside the 20 devices."""
+    from belfry_onboarding import devices
+
+    rsvc, published, left = world
+    ada, ada_id = member(rsvc, "ada@belfry.test", "Ada")
+    bob, _ = member(rsvc, "bob@belfry.test", "Bob")
+    refreshed: list[str] = []
+    monkeypatch.setattr(
+        devices, "schedule", lambda svc, account, delay=0.0: refreshed.append(account)
+    )
+    with TestClient(create_app(rsvc)) as c:
+        bot = guest_agent(c, rsvc, ada, ada_id)
+        # a guest agent, not yet Ada's own: not an agent's pass
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bot), "reads": True})
+        assert r.status_code == 409 and r.json()["error"] == "not_agent"
+        time.sleep(1.1)
+        assert post(c, ada, "/api/agents", {"pubkey": pk(bot), "mine": True}).status_code == 200
+        time.sleep(1.1)
+        r = post(c, bob, "/api/agents", {"pubkey": pk(bot), "reads": True})
+        assert r.status_code == 403 and r.json()["error"] == "not_owner"
+        r = post(c, ada, "/api/agents", {"pubkey": "1" * 64, "reads": True})
+        assert r.status_code == 404
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bot), "reads": "yes"})
+        assert r.status_code == 400
+        time.sleep(1.1)
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bot), "reads": True})
+        assert r.status_code == 200 and r.json() == {"pubkey": pk(bot), "reads": True}
+        assert refreshed == [pk(ada)]
+        assert post(c, ada, "/api/agents", {}).json()["agents"][0]["reads"] is True
+        # the list's entries: Ada's devices, then the agent as a reader
+        phone = "d" * 64
+        rows = [{"client_pubkey": phone, "name": "Chat · Safari on iPhone"}]
+        monkeypatch.setattr(devices, "sessions_of", lambda svc, a: (rows, "t"))
+        monkeypatch.setattr("belfry_onboarding.discovery.chat_session", lambda *a: True)
+        devices._stores.clear()
+        assert devices.entries_for(rsvc, pk(ada)) == [(phone,), (pk(bot), "reader")]
+        event = devices.event_for(pk(ada), 1, None, devices.entries_for(rsvc, pk(ada)), 1)
+        assert ["device", pk(bot), "reader"] in event["tags"]
+        # an own-key member: their key as self, and the reader beside it
+        monkeypatch.setattr(devices, "sessions_of", lambda svc, a: (None, None))
+        assert devices.entries_for(rsvc, pk(ada)) == [(pk(ada), "self"), (pk(bot), "reader")]
+        time.sleep(1.1)
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bot), "reads": False})
+        assert r.json() == {"pubkey": pk(bot), "reads": False}
+        assert devices.entries_for(rsvc, pk(ada)) == [(pk(ada), "self")]
+        assert devices.readers_of(rsvc, pk(bob)) == []
