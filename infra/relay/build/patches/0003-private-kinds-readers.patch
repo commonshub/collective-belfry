@@ -1,0 +1,248 @@
+From d274e39beec4c952dc969e3d2121a7fe220cd5cb Mon Sep 17 00:00:00 2001
+From: belfry <belfry@localhost>
+Date: Tue, 24 Nov 2026 09:35:21 +0100
+Subject: [PATCH] Private kinds: readers served every event of these kinds
+ (Belfry)
+
+---
+ extensions/src/private_kinds.rs | 171 +++++++++++++++++++++++++++++++-
+ 1 file changed, 169 insertions(+), 2 deletions(-)
+
+diff --git a/extensions/src/private_kinds.rs b/extensions/src/private_kinds.rs
+index cfb7091..dc2b044 100644
+--- a/extensions/src/private_kinds.rs
++++ b/extensions/src/private_kinds.rs
+@@ -9,12 +9,17 @@
+ //! kinds is refused when its `created_at` is more than `max_skew` seconds from the relay's
+ //! clock.
+ //!
++//! A connection authenticated as one of `readers` (hex pubkeys; the belfry's own key) is served
++//! these kinds without the `p` rule, stored and live, and its REQs on them need no `#p`.
++//! COUNT and NEG-OPEN are not widened for readers.
++//!
+ //! Enabled only when the `[private_kinds]` section is present:
+ //!
+ //! ```toml
+ //! [private_kinds]
+ //! kinds = [8571, 8572, 8573]
+ //! max_skew = 300
++//! readers = []
+ //! ```
+ 
+ use crate::auth::AuthState;
+@@ -34,6 +39,8 @@ pub struct PrivateKindsSetting {
+     /// Largest allowed distance, in seconds, between an event's `created_at` and the relay's clock.
+     #[serde(deserialize_with = "nostr_relay::setting::deserialize_scalar")]
+     pub max_skew: u64,
++    /// Pubkeys (hex) served every event of these kinds, whatever their `p` tags.
++    pub readers: Vec<String>,
+ }
+ 
+ impl Default for PrivateKindsSetting {
+@@ -41,11 +48,29 @@ impl Default for PrivateKindsSetting {
+         Self {
+             kinds: vec![8571, 8572, 8573],
+             max_skew: 300,
++            readers: vec![],
+         }
+     }
+ }
+ 
+ impl PrivateKindsSetting {
++    fn is_reader(&self, me: Option<&str>) -> bool {
++        me.is_some_and(|me| self.readers.iter().any(|r| r.eq_ignore_ascii_case(me)))
++    }
++
++    /// Lowercases the readers and refuses anything that is not a 64-character hex pubkey.
++    fn normalize(&mut self) -> Result<()> {
++        for r in self.readers.iter_mut() {
++            if r.len() != 64 || !r.bytes().all(|b| b.is_ascii_hexdigit()) {
++                return Err(nostr_relay::Error::Str(
++                    "private_kinds.readers: each reader must be a 64-character hex pubkey",
++                ));
++            }
++            r.make_ascii_lowercase();
++        }
++        Ok(())
++    }
++
+     fn is_private(&self, kind: u16) -> bool {
+         self.kinds.contains(&kind)
+     }
+@@ -74,7 +99,8 @@ impl PrivateKindsSetting {
+     /// A REQ is refused when one of its filters asks only for private kinds and is not
+     /// limited to the caller's own `#p`.
+     fn refuse_req(&self, filters: &[Filter], me: Option<&str>) -> bool {
+-        filters
++        !self.is_reader(me)
++            && filters
+             .iter()
+             .any(|f| self.only_private(f) && !Self::own_only(f, me))
+     }
+@@ -151,6 +177,9 @@ impl PrivateKinds {
+                 let Some(me) = me else {
+                     return false;
+                 };
++                if setting.is_reader(Some(me)) {
++                    return true;
++                }
+                 event
+                     .tags
+                     .iter()
+@@ -171,7 +200,9 @@ impl Extension for PrivateKinds {
+ 
+     fn setting<'a>(&'a mut self, setting: &mut Setting) -> Result<SettingUpdate<'a>> {
+         let parsed: Option<PrivateKindsSetting> = if setting.extra.contains_key(self.name()) {
+-            Some(setting.parse_extension(self.name())?)
++            let mut s: PrivateKindsSetting = setting.parse_extension(self.name())?;
++            s.normalize()?;
++            Some(s)
+         } else {
+             None
+         };
+@@ -607,6 +638,142 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn readers_setting() -> Result<()> {
++        let s: PrivateKindsSetting = serde_json::from_value(json!({})).unwrap();
++        assert!(s.readers.is_empty());
++        let mut ext = PrivateKinds::new();
++        let mut setting = nostr_relay::Setting::default();
++        setting
++            .extra
++            .insert("private_kinds".into(), json!({"readers": [A.to_uppercase()]}));
++        ext.setting(&mut setting)?();
++        assert_eq!(ext.setting.as_ref().unwrap().readers, vec![A.to_owned()], "lowercased");
++        for bad in [json!(["abc"]), json!([format!("{A}0")]), json!([A.replace('a', "g")])] {
++            setting
++                .extra
++                .insert("private_kinds".into(), json!({"readers": bad}));
++            assert!(ext.setting(&mut setting).is_err(), "{bad}");
++        }
++        assert_eq!(ext.setting.as_ref().unwrap().readers, vec![A.to_owned()], "kept on error");
++        Ok(())
++    }
++
++    #[test]
++    fn readers_rule() {
++        let s = PrivateKindsSetting {
++            readers: vec![B.to_owned()],
++            ..Default::default()
++        };
++        let ext = PrivateKinds {
++            setting: Some(s.clone()),
++            needles: vec!["8571".into(), "8572".into(), "8573".into()],
++        };
++        let to_a = format!(
++            r#"["EVENT","sub",{}]"#,
++            json!({"id": "00", "pubkey": A, "created_at": 1, "kind": 8572,
++                   "tags": [["p", A]], "content": "", "sig": "00"})
++        );
++        assert!(ext.deliver(&s, &to_a, Some(B)), "reader gets another's event");
++        assert!(ext.deliver(&s, &to_a, Some(&B.to_uppercase())));
++        assert!(ext.deliver(&s, &to_a, Some(A)), "recipient still gets it");
++        assert!(!ext.deliver(&s, &to_a, None), "unauthenticated: never");
++        let other = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
++        assert!(!ext.deliver(&s, &to_a, Some(other)), "non-reader: p rule");
++        let refuse = |f: Value, me| s.refuse_req(&[filter(f)], me);
++        assert!(!refuse(json!({"kinds": [8572]}), Some(B)));
++        assert!(!refuse(json!({"kinds": [8571, 8572, 8573], "#p": [A]}), Some(B)));
++        assert!(refuse(json!({"kinds": [8572]}), Some(A)), "non-reader still closed");
++        assert!(refuse(json!({"kinds": [8572]}), None));
++        // aggregates are not widened for readers
++        let agg = |f: Value, me| s.refuse_aggregate(&[&filter(f)], me);
++        assert!(agg(json!({"kinds": [8572]}), Some(B)));
++        assert!(!agg(json!({"kinds": [8572], "#p": [B]}), Some(B)));
++    }
++
++    fn reload_private(app: &nostr_relay::App, readers: &[&str]) {
++        let mut candidate = app.setting.read().clone();
++        candidate.extra.insert(
++            "private_kinds".to_owned(),
++            json!({"kinds": [8571, 8572, 8573], "max_skew": 300, "readers": readers}),
++        );
++        app.extensions
++            .write()
++            .call_setting(&app.setting, candidate)
++            .unwrap();
++    }
++
++    #[actix_rt::test]
++    async fn readers_end_to_end() -> Result<()> {
++        let mut rng = thread_rng();
++        let (r, a, b) = (
++            Keypair::new_global(&mut rng),
++            Keypair::new_global(&mut rng),
++            Keypair::new_global(&mut rng),
++        );
++        let (hr, ha, hb) = (hex_of(&r), hex_of(&a), hex_of(&b));
++        let app = app_with("private-kinds-readers", &[&hr, &ha, &hb], true)?;
++        reload_private(&app, &[hr.as_str()]);
++        let app2 = app.clone();
++        let mut srv = actix_test::start(move || create_web_app(app2.clone()));
++
++        let mut wr = srv.ws_at("/").await.unwrap();
++        login(&mut wr, Some(&r)).await?;
++        let mut wa = srv.ws_at("/").await.unwrap();
++        login(&mut wa, Some(&a)).await?;
++        let mut wb = srv.ws_at("/").await.unwrap();
++        login(&mut wb, Some(&b)).await?;
++
++        // the reader's REQ without #p is served (live, opened before anything is written)
++        assert_eq!(req(&mut wr, "live", json!({"kinds": [8572]})).await?, Ok(vec![]));
++
++        let p = |h: &str| vec!["p".to_owned(), h.to_owned()];
++        let to_a = Event::create(&b, now(), 8572, vec![p(&ha)], "x".into())?;
++        let to_b = Event::create(&a, now(), 8572, vec![p(&hb)], "x".into())?;
++        assert_eq!(publish(&mut wb, &to_a).await?[2], json!(true));
++        assert_eq!(next_live(&mut wr, "live").await?, to_a.id_str());
++        assert_eq!(publish(&mut wa, &to_b).await?[2], json!(true));
++        assert_eq!(next_live(&mut wr, "live").await?, to_b.id_str());
++
++        // stored: the reader gets both
++        let mut got = req(&mut wr, "s1", json!({"kinds": [8572]})).await?.unwrap();
++        got.sort();
++        let mut want = vec![to_a.id_str(), to_b.id_str()];
++        want.sort();
++        assert_eq!(got, want);
++        let got = req(&mut wr, "s2", json!({"kinds": [8572], "#p": [ha]})).await?;
++        assert_eq!(got, Ok(vec![to_a.id_str()]));
++
++        // members: still only their own
++        let r1 = req(&mut wa, "m1", json!({"kinds": [8572]})).await?;
++        assert!(r1.unwrap_err().starts_with("restricted:"));
++        assert_eq!(
++            req(&mut wa, "m2", json!({"kinds": [8572], "#p": [ha]})).await?,
++            Ok(vec![to_a.id_str()])
++        );
++        let ids = req(&mut wb, "m3", json!({"ids": [to_a.id_str(), to_b.id_str()]})).await?;
++        assert_eq!(ids, Ok(vec![to_b.id_str()]));
++
++        // unauthenticated: nothing
++        let mut wu = srv.ws_at("/").await.unwrap();
++        login(&mut wu, None).await?;
++        let ru = req(&mut wu, "u", json!({"kinds": [8572]})).await?;
++        assert!(ru.is_err(), "{ru:?}");
++
++        // reload without readers: the old reader is an ordinary member again
++        reload_private(&app, &[]);
++        let r2 = req(&mut wr, "s3", json!({"kinds": [8572]})).await?;
++        assert!(r2.unwrap_err().starts_with("restricted:"));
++        let ids = req(&mut wr, "s4", json!({"ids": [to_a.id_str(), to_b.id_str()]})).await?;
++        assert_eq!(ids, Ok(vec![]));
++        // and a reload that names a member makes it a reader
++        reload_private(&app, &[ha.as_str()]);
++        let mut got = req(&mut wa, "m4", json!({"kinds": [8572]})).await?.unwrap();
++        got.sort();
++        assert_eq!(got, want);
++        Ok(())
++    }
++
+     #[actix_rt::test]
+     async fn unauthenticated_reader_without_read_whitelist() -> Result<()> {
+         let mut rng = thread_rng();
+-- 
+2.43.0
+

@@ -53,8 +53,9 @@ pubkey_whitelist = []  # belfry:whitelist
 [auth.event]
 pubkey_whitelist = []  # belfry:whitelist
 
-# Private kinds (Belfry patch 0001 in infra/relay/build, docs/encrypted.md §18.1). Only the
-# image built from infra/relay/build knows this section; the official rnostr image ignores it.
+# Private kinds (Belfry patches 0001 and 0003 in infra/relay/build, docs/encrypted.md §18.1).
+# Only the image built from infra/relay/build knows this section; the official rnostr image
+# ignores it.
 # Events of these kinds (conversation keys, messages, key packs) are delivered, stored and live,
 # only to a connection authenticated (NIP-42) as one of the pubkeys in the event's "p" tags; an
 # event without a "p" tag reaches nobody. A REQ whose filter asks only for these kinds must carry
@@ -65,6 +66,10 @@ pubkey_whitelist = []  # belfry:whitelist
 [private_kinds]
 kinds = [8571, 8572, 8573]
 max_skew = 300
+# Keys served every event of these kinds, whatever their p tags (onboarding renders the
+# belfry's own key here). Needs belfry-relay:private-2f21979-2 or newer: older images refuse
+# the unknown field.
+readers = []  # belfry:readers
 
 [rate_limiter]
 enabled = true

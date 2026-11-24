@@ -49,9 +49,11 @@ authenticated as one of its `p` pubkeys. `build/` makes that image:
   right after `Auth` (it reads the authenticated pubkey Auth keeps in the session), with its tests.
 - `patches/0002-optional-search-negentropy.patch`: makes search and negentropy features of the
   binary so it builds without them.
+- `patches/0003-private-kinds-readers.patch`: the `readers` setting of `[private_kinds]`, with
+  its tests (since `belfry-relay:private-2f21979-2`).
 
 The rule, on when the `[private_kinds]` section is present (`kinds`, default 8571–8573; `max_skew`,
-default 300 s):
+default 300 s; `readers`, default none):
 
 1. An EVENT message of these kinds, stored or live, goes only to a connection AUTHed as a pubkey
    in one of the event's `p` tags. No `p` tag, or no AUTH: nobody.
@@ -61,12 +63,20 @@ default 300 s):
    events left out. COUNT and NEG-OPEN that could match a private kind need the same own form.
 3. Writing one is refused (`OK false "invalid: …"`) when `created_at` is more than `max_skew`
    seconds from the relay's clock, either way.
+4. A connection AUTHed as one of `readers` (64-hex pubkeys, case-insensitive; anything else makes
+   the config invalid, and a reload keeps the previous one) is served every event of these kinds,
+   stored and live, whatever its `p` tags, and its REQs on them need no `#p`. COUNT and NEG-OPEN
+   are not widened. The template's line `readers = []  # belfry:readers` is rendered by the
+   onboarding service with the belfry's own key (it sends the push notifications for these
+   kinds); the readers are also put on the whitelist. `-1` images refuse the `readers` field
+   (unknown field): the image must be `-2` or newer before the template with that line is
+   rendered on a box, or the relay keeps its previous config on reload and fails at start.
 
 Build (on a box with disk; never on a small dev machine), tests first:
 
 ```
 docker build --target test infra/relay/build                       # unit + websocket tests
-docker build -t belfry-relay:private-2f21979-1 infra/relay/build
+docker build -t belfry-relay:private-2f21979-2 infra/relay/build
 ```
 
 To move to a newer rnostr: change `RNOSTR_COMMIT`, check the patches still apply, regenerate

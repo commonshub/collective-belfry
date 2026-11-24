@@ -227,6 +227,8 @@ def _build_services(settings: Settings) -> Services:
                     if k
                 ),
                 community=settings.community_name or "",
+                # the belfry's key reads every private-kinds event (it sends their pushes)
+                readers=homepage.belfry_pubkey(settings),
             )
             if settings.relay_config_path
             else None

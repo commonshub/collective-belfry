@@ -346,7 +346,8 @@ services:
   # relay/rnostr.toml once, then the onboarding service rewrites it from that template with the
   # pubkeys of all active passes and rnostr (--watch) reloads it. See relay/README.md.
   # RELAY_IMAGE (set per box in infra/.env after its one-time export/import, relay/README.md):
-  # belfry-relay:private-<commit>-<n>, Belfry's rnostr with the private-kinds rule. Unset = the
+  # belfry-relay:private-<commit>-<n>, Belfry's rnostr with the private-kinds rule (now
+  # belfry-relay:private-2f21979-2: -2 adds [private_kinds] readers, which -1 refuses). Unset = the
   # official v0.4.9 image, unchanged.
   relay-init:
     image: ${RELAY_IMAGE:-rnostr/rnostr:latest@sha256:c022e4384f8fe1eb6023d497fe0c5cf9cd13d239f62160713546de4522f69214}

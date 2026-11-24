@@ -169,3 +169,65 @@ def test_the_relay_is_named_after_the_community():
     assert 'description = "Community relay. Members only (NIP-42)."' in render(
         TEMPLATE.read_text(), []
     )
+
+
+def readers_of(text: str) -> list[list[str]]:
+    out = []
+    for m in re.finditer(r"^\s*readers\s*=\s*\[(.*)\]\s*#\s*belfry:readers", text, re.M):
+        out.append(re.findall(r'"([0-9a-f]{64})"', m.group(1)))
+    return out
+
+
+def test_template_marks_the_private_kinds_readers():
+    text = TEMPLATE.read_text()
+    assert readers_of(text) == [[]]
+    section = text.split("[private_kinds]", 1)[1].split("\n[", 1)[0]
+    assert "readers = []  # belfry:readers" in section
+
+
+def test_render_fills_the_readers_line_and_leaves_it_empty_without_a_key():
+    template = (
+        "[auth.req]\npubkey_whitelist = []  # belfry:whitelist\n"
+        "[private_kinds]\nkinds = [8572]\nreaders = []  # belfry:readers\n"
+    )
+    out = render(template, [A, B], readers=[B.upper(), "garbage"])
+    assert readers_of(out) == [[B]]
+    assert whitelists(out) == [[A, B]]
+    assert readers_of(render(template, [A])) == [[]]
+    assert readers_of(render(template, [A], readers=[])) == [[]]
+    # a template without the marker is rendered as before
+    assert "readers" not in render("[auth.req]\npubkey_whitelist = []  # belfry:whitelist\n", [A])
+
+
+def test_sync_renders_the_belfry_key_as_reader_and_whitelists_it(tmp_path):
+    config = tmp_path / "rnostr.toml"
+    wl = RelayWhitelist(str(TEMPLATE), str(config), extra_pubkeys="", readers=B)
+    result = wl.sync([A])
+    text = config.read_text()
+    assert readers_of(text) == [[B]]
+    assert whitelists(text) == [[A, B], [A, B]]
+    assert result["pubkeys"] == 2
+    # no belfry key: empty readers
+    RelayWhitelist(str(TEMPLATE), str(config)).sync([A])
+    assert readers_of(config.read_text()) == [[]]
+
+
+def test_the_app_names_the_belfry_key_as_reader(settings, tmp_path):
+    from belfry_onboarding import homepage
+    from belfry_onboarding.app import build_services
+
+    s = settings.model_copy(
+        update={
+            "belfry_nsec": "01" * 32,
+            "relay_config_template": str(TEMPLATE),
+            "relay_config_path": str(tmp_path / "rnostr.toml"),
+        }
+    )
+    key = homepage.belfry_pubkey(s)
+    assert len(key) == 64
+    wl = build_services(s).whitelist
+    assert wl is not None and wl.readers == [key]
+    wl.sync([A])
+    text = (tmp_path / "rnostr.toml").read_text()
+    assert readers_of(text) == [[key]]
+    assert key in whitelists(text)[0]

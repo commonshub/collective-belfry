@@ -2,8 +2,10 @@
 
 Odoo is the source of truth (plan: "the relay whitelist ... derived from it"). The template
 (``infra/relay/rnostr.toml``) marks the lists to fill with a trailing ``# belfry:whitelist``
-comment; everything else is copied verbatim. The rendered file is rewritten *in place* because
-rnostr's ``--watch`` only reacts to data modifications of the config path, not to a rename.
+comment; the ``[private_kinds]`` readers (keys served every event of those kinds: the belfry's
+own key) are marked ``# belfry:readers``. Everything else is copied verbatim. The rendered file
+is rewritten *in place* because rnostr's ``--watch`` only reacts to data modifications of the
+config path, not to a rename.
 """
 
 from __future__ import annotations
@@ -19,6 +21,11 @@ log = logging.getLogger(__name__)
 MARKER = "belfry:whitelist"
 _LINE = re.compile(
     r"^(?P<prefix>\s*pubkey_whitelist\s*=\s*)\[[^\]]*\](?P<suffix>\s*#\s*" + MARKER + r".*)$",
+    re.MULTILINE,
+)
+READERS_MARKER = "belfry:readers"
+_READERS = re.compile(
+    r"^(?P<prefix>\s*readers\s*=\s*)\[[^\]]*\](?P<suffix>\s*#\s*" + READERS_MARKER + r".*)$",
     re.MULTILINE,
 )
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -52,13 +59,22 @@ def _toml_str(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")[:200]
 
 
-def render(template: str, pubkeys: list[str], community: str = "") -> str:
-    """Replace every marked ``pubkey_whitelist`` list in ``template`` with ``pubkeys``, and the
-    relay's NIP-11 name and description (lines marked ``# belfry:info``) with the community's."""
+def _toml_list(keys: list[str]) -> str:
+    return "[" + ", ".join(f'"{k}"' for k in keys) + "]"
+
+
+def render(
+    template: str, pubkeys: list[str], community: str = "", readers: list[str] | None = None
+) -> str:
+    """Replace every marked ``pubkey_whitelist`` list in ``template`` with ``pubkeys``, every
+    ``readers`` list marked ``# belfry:readers`` with ``readers``, and the relay's NIP-11 name and
+    description (lines marked ``# belfry:info``) with the community's."""
     if not _LINE.search(template):
         raise WhitelistTemplateError(f"template has no line marked '# {MARKER}'")
-    rendered = "[" + ", ".join(f'"{k}"' for k in pubkeys) + "]"
+    rendered = _toml_list(pubkeys)
     out = _LINE.sub(lambda m: f"{m.group('prefix')}{rendered}{m.group('suffix')}", template)
+    listed = _toml_list(normalize_pubkeys(readers))
+    out = _READERS.sub(lambda m: f"{m.group('prefix')}{listed}{m.group('suffix')}", out)
     if community.strip():
         name = _toml_str(community.strip())
         values = {
@@ -93,17 +109,26 @@ class RelayWhitelist:
     """Renders ``template_path`` into ``config_path``. Both are regular files."""
 
     def __init__(
-        self, template_path: str, config_path: str, extra_pubkeys: str = "", community: str = ""
+        self,
+        template_path: str,
+        config_path: str,
+        extra_pubkeys: str = "",
+        community: str = "",
+        readers: str = "",
     ):
         self.template_path = Path(template_path)
         self.config_path = Path(config_path)
         self.extra_pubkeys = normalize_pubkeys(extra_pubkeys.split(","))
         self.community = community
+        # served every event of the private kinds; also put on the whitelist so they can AUTH
+        self.readers = normalize_pubkeys(readers.split(","))
 
     def sync(self, pubkeys: list[str]) -> dict[str, Any]:
-        keys = normalize_pubkeys([*pubkeys, *self.extra_pubkeys])
+        keys = normalize_pubkeys([*pubkeys, *self.extra_pubkeys, *self.readers])
         template = self.template_path.read_text(encoding="utf-8")
-        changed = write_in_place(self.config_path, render(template, keys, self.community))
+        changed = write_in_place(
+            self.config_path, render(template, keys, self.community, self.readers)
+        )
         if changed:
             log.info("relay whitelist: %s rewritten with %d pubkeys", self.config_path, len(keys))
         return {"pubkeys": len(keys), "changed": changed, "path": str(self.config_path)}
