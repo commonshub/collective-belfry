@@ -599,3 +599,84 @@ own relay build now, §18.1).
   states in a private group.
 - A group that was ever encrypted on this device is written encrypted whatever the cached format
   says; with the format unknown and an encrypted object ever seen, writes hold.
+
+## 27. Server as built (2026-11-24)
+
+Branch `e2e-server-parts`. Everything below runs only with `ENCRYPTED_FORMAT=3` unless said;
+format 1 is unchanged (the existing tests of mail, push, buttons and agents pass as they were).
+
+- **The rules** (`services/onboarding/belfry_onboarding/enc.py`): a port of the web's
+  `src/core/enc/core.ts` (enc-v3) for lists (8570 reading, chains, `listedAt`, `signsAt`), names
+  (alias, lists hash, device set, people), key rumors, people and group envelopes, seals, people
+  and group messages, and the receiver's checks. `tests/test_enc.py` runs the shared vectors
+  (`tests/data/encrypted.json` = the web's `vectors/encrypted.json`, sha256 16efbbc8…42fe):
+  sections `lists.valid`, `lists.chains`, `invalid_above`, `signs_at` (and `_gap`, `_relisted`,
+  `_slow_clock`, `_behind`), `listed_at` (and `_gap`), `group_key_slow_clock`, `alias`,
+  `lists_hash`, `people_of`, `people_key` (open, accept), `group_key` (find, wrong group, set,
+  accept), `people_messages` (tags, open, wrong key, accept), `group_messages`. It also writes the
+  vectors' people envelopes, key rumor, people messages, group envelopes (300 devices, 3 events)
+  and group message from the same keys, nonces and dates and gets them **byte for byte**. Not
+  ported (the server never does them): packs, asks, answers, pick key, declare, limits, files.
+- **The service keys as senders.** The belfry key and the groups key are their own device (§2):
+  their entry in a people envelope is the key itself, their seal is valid for themselves. As
+  senders they keep **no envelope and no copy of their own** (they keep no `k`, so they could
+  never open one): a person's message is one envelope and one 8572 per other person. The public
+  half `K` is kept in memory for the next message while the lists (people) or the device set
+  (group) are the same and the key is under 30 days old; a restart makes a new key.
+- **1. Push** (`push.py`). A person's 8572 (`["p", account]`) is told like a gift wrap (type
+  `dm`, "New message", no content), `["silent","1"]` skipped, and at most once per person every
+  5 seconds. A private group's 8572 (`["h", group]`, groups relay): to the group's 39002 members
+  only (not the community admins who aren't in it), never the sender, `mention` when the outer
+  `p` names them, else `message`, by the person's level for the group; no text, no event id. A
+  silent group 8572 (the groups key's answers to presses) is told to nobody. Format 3 adds kind
+  8572 to the watcher's filters; on format 1 the filters are as before.
+  **Deviation, and a gap:** with the relay rule of §18.1 the community relay serves a person's
+  8572 only to that person's connection, so the belfry key's push subscription receives **none**
+  of the members' DMs: push for person-to-person messages does not work until the relay lets the
+  belfry key read private kinds (a `readers` list in `[private_kinds]`, a small change to patch
+  0001, not made here). The belfry's own 8572s (mail in) are told directly when published
+  (`push.announce`).
+- **2. Mail out** (`mail.py` `listen_encrypted`, `handle_encrypted`). A subscription as the
+  belfry key for `{kinds:[8572], "#p":[belfry]}` on the community relay. Each one: its envelope
+  asked by `#p` + `#d`, the belfry's entry opened, the key rumor judged (`acceptKeyRumor`, lists
+  read from the relay), the message opened and judged (`acceptPeopleMessage`: the seal signer a
+  device of the author at the outer date). "wait" or a relay that doesn't answer: tried again
+  (30 s, 2 min, 10 min, then every 30 min for a day); refused: dropped. Then the same checks and
+  sending as a gift-wrapped 1301 (address, inbox admins, rate, Bcc, size). The old gift-wrap
+  listener keeps running for older apps.
+  **Deviation:** the report is the kind 7679 of today, encrypted to the sender's account key with
+  no `lb`, not an 8572: the web reads reports only as kind 7679 by the belfry key
+  (`dm.ts checkReports`, `openReport` → the signer), and an 8572 holding a 7679 rumor would be
+  dropped by it. The report says only what the belfry did.
+- **3. Mail in.** `to_member`: the rumor (kind 1301 from the belfry key, `["p", member]`, as
+  today) goes to the people conversation {belfry, member}, which is what the web files it under.
+  No list, an empty list, a fork or a list that can't be read: **451** (the sending server tries
+  again; never delivered in clear). Over 40 000 bytes: Blossom, as today. A private group's
+  shared-inbox card and the card of what went out as the channel: an 8572 by the groups key under
+  a group key for the members' current devices (guests get no entry, §25; a member with no list
+  after a second read is skipped, §23), its envelope first; attachments are encrypted with
+  AES-256-GCM before upload (§23: `m`, `size` of the original, `x` of the ciphertext, `ox`,
+  `encryption-algorithm`, `decryption-key`, `decryption-nonce` in the imeta). The original e-mail
+  (`mail-original`) is already encrypted on Blossom and its key travels inside the 8572.
+  **Deviation:** a member's own mail to a private group can't be posted as the member (that needs
+  one of their devices): it goes to the inbox as a card when the inbox is on, else **550** "This
+  private group takes no e-mail." Mail forwarding (mailforward.py) is unchanged.
+- **4. Buttons** (`actions.py` `copies_job`, `handle_copy`). A subscription as the groups key for
+  `{kinds:[8572], "#p":[groups key]}` on the community relay. Each copy is opened and judged as in
+  2; then: kind 1985 `belfry/action` with one `["e", id, "", "press"]`, the message JSON naming
+  the same `h`, kind 9 or 1111, the pressed button a `belfry:` one in its tags (its id is not
+  recomputed); the group is private; the presser is in the 39002. A presser outside the group
+  gets nothing (no answer: they couldn't read it). Then the action's rules as in clear (age,
+  rate, handler). The answer (`belfry/action-result`, `["press", <press id>]`) goes into the
+  group as an 8572 by the groups key with an outer `["silent","1"]`. Answered press ids are kept
+  in `presses.sqlite` next to the register (the encrypted answer can't be looked up on the relay).
+- **5. Readers** (`agents.py`, `devices.py`). `POST /api/v1/agents {pubkey, reads}` by the
+  agent's own member → `{pubkey, reads}`; 403 `not_owner`, 404 `unknown` (no active pass with
+  that key), 409 `not_agent`. Stored as register param `belfry.agent_reads.<agent>`; removing the
+  agent clears it. The member's list gets `["device", <agent>, "reader"]` after the devices (also
+  beside a `self` entry), outside the 20; `{}` lists each agent with `reads`. This part does not
+  depend on the format (lists follow `DEVICE_LISTS`).
+
+Not verified: anything against a real relay (zooid, the patched rnostr), real mail, a real
+Blossom upload of a ciphertext, or a real app opening what the server wrote beyond the shared
+rules.
