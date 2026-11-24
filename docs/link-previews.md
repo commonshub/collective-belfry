@@ -2,6 +2,8 @@
 
 Contract for the apps (web chat, iPhone, Android). Server: `services/onboarding/belfry_onboarding/linkpreview.py`.
 
+**Superseded on 2026-11-24 by docs/link-previews-v2.md (previews built by the sender; readers never fetch). The endpoint below stays for web senders only.**
+
 A message with an outside `https://` link shows a preview box under it: the page's picture,
 title, description and site name (Open Graph). **The apps never fetch an outside page or picture
 themselves**: that would tell the site who reads the message, from which address. They ask the
