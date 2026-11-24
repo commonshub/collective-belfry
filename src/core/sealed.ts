@@ -10,6 +10,10 @@
 // Rules from the boards: never a key, npub or id as text; only MY devices are named, other
 // people's are a count (and a "changed in the last 30 days" line); channels never have a lock.
 import { encConvHere, encOnlyDevice } from './enc/runtime'
+import { encryptedFormat } from './access'
+/** Version 1's lock states (out of my head, locked here, asks, "came the old way") mean nothing on a
+ *  format-3 belfry: there the version-1 runtime only reads old sealed messages (Xavier's trial, 24 Nov). */
+const v1ui = () => encryptedFormat() !== 3
 import { thread, type Conv } from './dm'
 import * as R from './sealedrt'
 import * as SC from './sealedcore'
@@ -138,14 +142,14 @@ export const onlyDevice = () => encOnlyDevice() || (!isGuest(me()) && (real() ? 
 export const theirDevices = (pk: string): TheirDevices | undefined => (real() ? realTheirs(pk) : state.people.get(pk))
 export const deviceLines = (conv: Conv) => (real() ? realLines(conv) : state.lines.get(conv) ?? [])
 /** §5.5: in my head without the head key: the composer of a sealed conversation waits. */
-export const waitingForSibling = (conv: Conv) => real() && R.inHeadNoKey() && R.isSealedConv(conv)
+export const waitingForSibling = (conv: Conv) => v1ui() && real() && R.inHeadNoKey() && R.isSealedConv(conv)
 /** A sealed conversation while this device is out of my head (real only): no composer, nothing sent. */
-export const outOfHead = (conv: Conv) => real() && R.outOfHead(conv)
+export const outOfHead = (conv: Conv) => v1ui() && real() && R.outOfHead(conv)
 /** board messages/encryption-locked-thread: the grey line in place of the composer (and the mark
  *  of a message held because of it) */
 export const LOCKED_LINE = 'You can write here once this device is allowed.'
-export const lockedHere = (conv: Conv) => (real() ? R.lockedConv(conv) : state.lockedHere.has(conv))
-export const anyLockedHere = () => (real() ? R.showBanner() : state.lockedHere.size > 0)
+export const lockedHere = (conv: Conv) => v1ui() && (real() ? R.lockedConv(conv) : state.lockedHere.has(conv))
+export const anyLockedHere = () => v1ui() && (real() ? R.showBanner() : state.lockedHere.size > 0)
 export const sharedBy = (rid: string) => (real() ? R.sharedByOf(rid) : state.shared.get(rid))
 /** When the conversation was sealed (ms; 0 when unknown). On a belfry: the latest of its people's
  *  first ready roster. */
@@ -157,8 +161,9 @@ export function sealedAt(conv: Conv): number {
 }
 /** A device not yet allowed reads NO sealed message, old or new (canvas v84): only what came
  *  before the conversation was sealed reads as usual. On a belfry the locked ones never opened. */
-export const lockedMsg = (conv: Conv, at: number) => (real() ? false : state.lockedHere.has(conv) && at * 1000 >= sealedAt(conv))
+export const lockedMsg = (conv: Conv, at: number) => v1ui() && (real() ? false : state.lockedHere.has(conv) && at * 1000 >= sealedAt(conv))
 export function asking() {
+  if (!v1ui()) return undefined
   if (!real()) return state.asking
   const a = R.pendingAsk()
   return a && { id: a.id, name: a.name, kind: kindOf(a.name), at: a.signedIn ?? a.at }
@@ -167,6 +172,7 @@ export const linkedByScan = () => (real() ? (R.linkedName() ? { name: R.linkedNa
 /** Board messages/encryption-thread (v89): a message that came the old way in a sealed
  *  conversation, dated after this device first saw it sealed. */
 export function notSealed(conv: Conv, d: { rid: string; at: number; sealed?: boolean; pending?: boolean; failed?: string }): boolean {
+  if (!v1ui()) return false // (format 3 marks its own: §17.2)
   if (!real()) return state.unsealed.has(d.rid)
   if (d.sealed || d.pending || d.failed || !R.isSealedConv(conv)) return false
   const first = R.firstSeenOf(conv)
