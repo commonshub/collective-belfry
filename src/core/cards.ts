@@ -247,7 +247,8 @@ export async function claimConfirm(id: string, token: string): Promise<{ group: 
   if (demo()) throw new CardFailed('expired')
   const d = await postNew(`/${id}/claim-confirm`, { token })
   if (d.confirmed !== true || typeof d.group !== 'string' || !GROUP.test(d.group)) throw new CardFailed('failed')
-  if (d.same_device === true && d.signed_in === true) return signedFrom(d, typeof d.address === 'string' ? d.address : '')
+  // (no address in the answer: the e-mail typed on this device, kept with its form: the lead)
+  if (d.same_device === true && d.signed_in === true) return signedFrom(d, keptForm(id)?.email ?? '')
   return { group: d.group }
 }
 
