@@ -2331,3 +2331,6 @@ form .create-where { margin-bottom: 14px; }
 /* Notes to myself: the whole header opens Who can read this (encrypted/notes-self) */
 .notes-head { flex: 1; min-width: 0; background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
 .notes-head h1 { margin: 0; }
+.my-agent .agent-row .chev { margin-left: auto; color: var(--muted); font-size: 20px; }
+.my-agent .agent-remove { font-size: 13px; margin: 4px 0 8px 46px; }
+.my-agent .agent-add { margin-top: 8px; }

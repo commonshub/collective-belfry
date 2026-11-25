@@ -1717,7 +1717,7 @@ function JoinLine({ j }: { j: GuestJoin }) {
   return (
     <div className="join-line" role="note">
       <span className="arrow" aria-hidden="true">→</span>
-      <span><b>{displayName(j.pubkey)}</b> joined as {j.agent && j.member && j.by ? ((agentOwner(j.pubkey) ?? j.by) === me() ? 'your agent' : <><b>{displayName(agentOwner(j.pubkey) ?? j.by)}</b>'s agent</>) : j.agent ? 'an agent' : 'a guest'}{j.by && !(j.agent && j.member) ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
+      <span><b>{displayName(j.pubkey)}</b> joined{j.agent && j.member && j.by ? <> as {(agentOwner(j.pubkey) ?? j.by) === me() ? 'your agent' : <><b>{displayName(agentOwner(j.pubkey) ?? j.by)}</b>'s agent</>}</> : j.agent ? ' as an agent' : j.member ? '' : ' as a guest'}{j.by && !(j.agent && j.member) ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
       <time>{fmtTime(j.at)}</time>
     </div>
   )

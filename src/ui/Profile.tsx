@@ -2,6 +2,7 @@
 // Yours has Edit: name, about, picture, tags (suggested from every member's tags) and where you
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
 // or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
+import { myRole } from '../core/myrole'
 import { AgentAccess } from './WhoCanRead'
 import { encOn } from '../core/enc/runtime'
 import { BELFRY, NAME, THEME } from '../config'
@@ -20,7 +21,7 @@ import { isAgent, isGuest, LINK_ERRORS, LinkFailed, makeInviteLink, myAgents, se
 import { guestTags, loadGuestTags } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
-import { Avatar, back, go, Sheet, Form, Btn } from './common'
+import { Avatar, back, fmtDay, go, Sheet, Form, Btn } from './common'
 import { Markdown } from './markdown'
 import { ChevronRightIcon, CopyIcon, MailIcon, MessageIcon, PencilIcon, PinIcon, ShareIcon, TrashIcon } from './icons'
 
@@ -53,7 +54,8 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const p = profiles().get(pk)
   const x = extras().get(pk)
   const about = aboutOf(pk)
-  const joins = allGroups().flatMap((g) => guestJoins(g.id).map((j) => ({ ...j, group: g }))).filter((j) => j.pubkey === pk && !j.member)
+  // (me: the belfry's word first: whois, core/myrole.ts)
+  const joins = mine && myRole() && myRole() !== 'guest' ? [] : allGroups().flatMap((g) => guestJoins(g.id).map((j) => ({ ...j, group: g }))).filter((j) => j.pubkey === pk && !j.member)
   const guest = joins[0]
   // a guest's tags come from whois, a member's from their belfry:profile event
   const tags = (guest ? guestTags(pk) : undefined) ?? x?.tags ?? []
@@ -240,23 +242,26 @@ function MyAgentCard() {
   const [error, setError] = useState('')
   useEffect(() => { myAgents().then(setMine, () => setMine({ agents: [], limit: 1 })) }, [JSON.stringify(agentOwners())]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!mine) return null
-  const room = mine.limit - mine.agents.length
+  // several agents (Xavier, 25 Nov; Home canvas me2): admins any number, members up to the belfry's limit
+  const room = mine.unlimited ? Infinity : mine.limit - mine.agents.length
+  const made = (since: string) => { const d = since ? new Date(since) : null; return d && !isNaN(+d) ? `Made ${fmtDay(d)}` : 'Your agent' }
   return (
     <div className="card my-agent">
-      <div className="hint card-title">{mine.agents.length ? 'Agents' : 'An agent for you'}</div>
+      <div className="hint card-title">Your agents</div>
       {mine.agents.map((a) => (
         <div key={a.pubkey} className="agent-row">
-          <button className="row link-row" onClick={() => openProfile(a.pubkey)}><Avatar pubkey={a.pubkey} size={36} /><span className="t"><b>{displayName(a.pubkey) || a.name}</b><small>Your agent · everyone sees it is yours</small></span></button>
+          <button className="row link-row" onClick={() => openProfile(a.pubkey)}><Avatar pubkey={a.pubkey} size={36} /><span className="t"><b>{displayName(a.pubkey) || a.name}</b><small>{made(a.since)} · everyone sees it is yours</small></span><span className="chev" aria-hidden="true">›</span></button>
           {dropping === a.pubkey
             ? <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                <Btn className="btn small danger" onClick={async () => { setError(''); try { setMine(await setMyAgent(a.pubkey, false)); setDropping('') } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }}>Remove {displayName(a.pubkey) || a.name}</Btn>
+                <Btn className="btn small danger" onClick={async () => { setError(''); try { setMine(await setMyAgent(a.pubkey, false)); setDropping('') } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }}>Remove</Btn>
                 <button className="btn small ghost" onClick={() => setDropping('')}>Keep</button>
               </div>
-            : <button className="btn small ghost" style={{ marginTop: 8 }} onClick={() => setDropping(a.pubkey)}>Remove this agent…</button>}
+            : <button className="link danger agent-remove" onClick={() => setDropping(a.pubkey)}>Remove {displayName(a.pubkey) || 'this agent'}…</button>}
         </div>
       ))}
-      {!mine.agents.length && <p className="agent-why">An agent is an AI (ChatGPT, Claude or Grok) that follows conversations for you and posts as your agent. It is always clear to everyone that it is not you. Ask it to post something in the right place in {community}, or for a summary of what has been shared.</p>}
-      {room > 0 && <button className={'btn' + (mine.agents.length ? ' ghost small' : '')} style={{ marginTop: 8 }} onClick={() => setAdding(true)}>{mine.agents.length ? 'Add another agent' : 'Add an agent'}</button>}
+      {room > 0 && <button className="btn ghost agent-add" onClick={() => setAdding(true)}>Add an agent</button>}
+      {room <= 0 && <p className="hint">You have as many agents as this belfry allows ({mine.limit}).</p>}
+      <p className="agent-why">An agent is an AI (ChatGPT, Claude or Grok) you give a link to. It posts as your agent: everyone sees it isn’t you.</p>
       {error && <div className="error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
       {adding && <AddAgentSheet community={community} onClose={() => setAdding(false)} />}
     </div>

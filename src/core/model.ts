@@ -1201,7 +1201,10 @@ export function guestJoins(groupId: string): GuestJoin[] {
     if (e.kind !== 9000 || tag(e, 'h') !== groupId || !tag(e, 'invited-by')) continue
     if (tag(e, 'reading') === '1') continue // guest mode: opened the link, not joined: no line, no guest chip
     const p = tag(e, 'p')
-    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) && !member.has(p), member: member.has(p) })
+    // a guest's join carries ["guest", <last day>] (docs/guests.md); an account that took the channel through a
+    // link or a card has none: a member's join, never "Guest in …" (Xavier on belfry.brussels, 25 Nov)
+    const asGuest = e.tags.some((t) => t[0] === 'guest')
+    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) && !member.has(p), member: member.has(p) || (!asGuest && tag(e, 'agent') !== '1') })
   }
   // someone who was taken out again without ever writing here (a double sign-up that was
   // cleaned up, an invite never used) leaves no line

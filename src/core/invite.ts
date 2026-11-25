@@ -60,17 +60,17 @@ export async function inviteMember(groupId: string, pubkey: string): Promise<'ad
 }
 
 // ── a member's own agents (Belfry's agents.py) ──────────────────────────────────────────────
-export interface MyAgents { agents: { pubkey: string; name: string; since: string }[]; limit: number }
+export interface MyAgents { agents: { pubkey: string; name: string; since: string }[]; limit: number; /** admins: any number (the lead) */ unlimited?: boolean }
 
 async function agentsCall(body: Record<string, unknown>): Promise<MyAgents> {
   const res = await signedFetch(`${BELFRY.api}/agents`, 'POST', body)
-  const out = (await res.json().catch(() => ({}))) as MyAgents & { message?: string }
+  const out = (await res.json().catch(() => ({}))) as MyAgents
   if (!res.ok) throw new Error('Could not do that. Try again.')
-  return { agents: Array.isArray(out.agents) ? out.agents : [], limit: Number(out.limit) || 0 }
+  return { agents: Array.isArray(out.agents) ? out.agents : [], limit: Number(out.limit) || 0, unlimited: out.unlimited === true }
 }
 /** My agents and how many I can have (demo: my own agents as belfry.json says, one at most). */
 export const myAgents = (): Promise<MyAgents> => isLocalOnly()
-  ? Promise.resolve({ agents: Object.entries(agentOwners()).filter(([, o]) => o === me()).map(([pubkey]) => ({ pubkey, name: profiles().get(pubkey)?.name ?? 'Agent', since: '' })), limit: isAdmin() ? 99 : 1 })
+  ? Promise.resolve({ agents: Object.entries(agentOwners()).filter(([, o]) => o === me()).map(([pubkey]) => ({ pubkey, name: profiles().get(pubkey)?.name ?? 'Agent', since: '' })), limit: isAdmin() ? 0 : 5, unlimited: isAdmin() })
   : agentsCall({})
 /** Make a guest agent my own (it stays a member for as long as I am one), or remove my agent. */
 export async function setMyAgent(pubkey: string, mine: boolean): Promise<MyAgents> {
