@@ -28,7 +28,9 @@ def _hit(path: Path) -> bytes:
 
 
 @pytest.fixture
-def svc(tmp_path):
+def svc(tmp_path, monkeypatch):
+    monkeypatch.setattr(dbcheck, "CONFIRM_SECONDS", 0)
+    monkeypatch.setattr(dbcheck.confirmed, "__defaults__", (0,))
     dbcheck._damaged.clear()
     yield SimpleNamespace(
         settings=SimpleNamespace(
@@ -56,7 +58,7 @@ def test_a_damaged_data_file_is_reported_never_changed_and_told_once(svc, tmp_pa
 
     found = dbcheck.check(svc)
     assert list(found) == ["sales.sqlite"]
-    assert "not a database" in found["sales.sqlite"]
+    assert "header overwritten" in found["sales.sqlite"]
     assert (tmp_path / "sales.sqlite").read_bytes() == damaged  # nothing touched
     assert not list(tmp_path.glob("sales.sqlite.*"))
     rows = dbcheck.status_rows(svc)
@@ -100,3 +102,50 @@ def test_open_early_opens_the_stores(svc, tmp_path, monkeypatch):
     dbcheck.open_early(svc)
     for name in ("events.sqlite", "sales.sqlite", "devices.sqlite"):
         assert (tmp_path / name).exists()
+
+
+def test_a_wal_file_being_written_is_never_called_damaged(svc, tmp_path, monkeypatch):
+    """2026-11-25: a read-only check read register.sqlite mid-checkpoint on four boxes and mailed
+    a false alarm ("disk I/O error", "error code=522")."""
+    told: list[str] = []
+    monkeypatch.setattr(dbcheck, "_tell", lambda s, name: told.append(name))
+    path = tmp_path / "register.sqlite"
+    w = sqlite3.connect(path)
+    w.execute("pragma journal_mode=wal")
+    w.execute("create table t(x)")
+    for i in range(2000):
+        w.execute("insert into t values (?)", (i,))
+    w.commit()
+    assert dbcheck.check(svc) == {}  # writer still open, WAL not checkpointed
+    w.close()
+    assert told == []
+
+
+@pytest.mark.parametrize(
+    "err", ["disk I/O error", "database is locked", "unable to get the page. error code=522"]
+)
+def test_transient_read_errors_are_not_damage(svc, tmp_path, monkeypatch, err):
+    _db(tmp_path / "register.sqlite")
+    real = sqlite3.connect
+
+    class Conn:
+        def __init__(self, *a, **k):
+            self.c = real(*a, **k)
+
+        def execute(self, q):
+            if "quick_check" in q:
+                raise sqlite3.OperationalError(err)
+            return self.c.execute(q)
+
+        def close(self):
+            self.c.close()
+
+    monkeypatch.setattr(dbcheck.sqlite3, "connect", Conn)
+    assert dbcheck.check(svc) == {}
+
+
+def test_damage_must_be_seen_twice(svc, tmp_path, monkeypatch):
+    _db(tmp_path / "events.sqlite")
+    looks = iter(["header overwritten (x)", None])
+    monkeypatch.setattr(dbcheck, "inspect", lambda p: next(looks))
+    assert dbcheck.confirmed(tmp_path / "events.sqlite", 0) is None

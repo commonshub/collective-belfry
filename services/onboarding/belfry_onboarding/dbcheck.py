@@ -38,7 +38,8 @@ log = logging.getLogger(__name__)
 
 MAGIC = b"SQLite format 3\x00"
 CHECK_SECONDS = 3600
-FIRST_CHECK_SECONDS = 30  # after the start's own reads
+FIRST_CHECK_SECONDS = 120  # after the start's own reads and writes settle
+CONFIRM_SECONDS = 20  # a second look before anything is said
 CACHES = {"devices.sqlite"}  # rebuilt from the relay when damaged; nothing else is ever touched
 
 _lock = threading.Lock()
@@ -50,29 +51,79 @@ def folder(svc: Any) -> Path | None:
     return Path(path).parent if path else None
 
 
+TRANSIENT = (
+    "disk i/o error",
+    "database is locked",
+    "database table is locked",
+    "unable to open",
+    "busy",
+    "short read",
+    "error code=522",
+    "error code=10",
+)  # what a reader sees while the service writes or checkpoints the same file: not damage
+
+
+def _header_damage(head: bytes) -> str | None:
+    """Damage in the header's fixed bytes (what the stray TLS write of 2026-11-24/25 hit)."""
+    if not head.startswith(MAGIC) or len(head) < 100:
+        return f"no SQLite header (bytes 0-23: {head[:24].hex(' ')})"
+    page = int.from_bytes(head[16:18], "big")
+    if not (page == 1 or (512 <= page <= 32768 and page & (page - 1) == 0)):
+        return f"bad page size in the header (bytes 16-23: {head[16:24].hex(' ')})"
+    if head[18] not in (1, 2) or head[19] not in (1, 2) or head[21:24] != b"\x40\x20\x20":
+        return f"header overwritten (bytes 16-31: {head[16:32].hex(' ')})"
+    return None
+
+
 def inspect(path: Path) -> str | None:
-    """None when PATH opens as a sound database; else why not (fixed words + the header's bytes,
-    never content)."""
+    """None when PATH is a sound database (or can't be judged just now); else why not (fixed
+    words + the header's bytes, never content).
+
+    Only two things count as damage: the header's fixed bytes are wrong, or ``quick_check`` names
+    a corruption. A read error while the service is writing (WAL checkpoint, short read, locked)
+    is not damage: on 2026-11-25 a read-only check read register.sqlite mid-checkpoint on all
+    four boxes and mailed a false alarm. The check now opens the file normally (it joins the WAL
+    like any reader; ``query_only`` keeps it from writing) and lets transient errors pass."""
     try:
         with path.open("rb") as fh:
             head = fh.read(100)
     except OSError as exc:
-        return f"not readable ({type(exc).__name__})"
+        log.warning("dbcheck: %s not readable just now (%s)", path.name, type(exc).__name__)
+        return None
     if not head:
         return None  # an empty file is a database SQLite has not written yet
-    if not head.startswith(MAGIC) or len(head) < 100:
-        return f"no SQLite header (bytes 0-23: {head[:24].hex(' ')})"
+    bad = _header_damage(head)
+    if bad:
+        return bad
     try:
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        db = sqlite3.connect(str(path), timeout=10)
         try:
-            row = db.execute("PRAGMA quick_check").fetchone()
+            db.execute("PRAGMA query_only = 1")
+            rows = [r[0] for r in db.execute("PRAGMA quick_check").fetchall()]
         finally:
             db.close()
     except sqlite3.DatabaseError as exc:
-        return f"{exc} (header bytes 16-43: {head[16:44].hex(' ')})"
-    if row is None or row[0] != "ok":
-        return f"quick_check: {str(row[0] if row else '')[:200]}"
-    return None
+        text = str(exc).lower()
+        if any(t in text for t in TRANSIENT):
+            log.warning("dbcheck: %s could not be checked just now (%s)", path.name, exc)
+            return None
+        return f"{exc} (header bytes 16-31: {head[16:32].hex(' ')})"
+    if rows == ["ok"]:
+        return None
+    joined = " / ".join(str(r) for r in rows)
+    if any(t in joined.lower() for t in TRANSIENT):
+        log.warning("dbcheck: %s could not be checked just now (%s)", path.name, joined[:200])
+        return None
+    return f"quick_check: {joined[:200]}"
+
+
+def confirmed(path: Path, wait: float = CONFIRM_SECONDS) -> str | None:
+    """Damage seen twice, WAIT seconds apart; None as soon as one look finds it sound."""
+    why = inspect(path)
+    if why is None:
+        return None
+    time.sleep(wait)
+    return inspect(path)
 
 
 def check(svc: Any, now: float | None = None) -> dict[str, str]:
@@ -83,7 +134,7 @@ def check(svc: Any, now: float | None = None) -> dict[str, str]:
     now = time.time() if now is None else now
     found: dict[str, str] = {}
     for path in sorted(where.glob("*.sqlite")):
-        why = inspect(path)
+        why = confirmed(path)
         key = str(path)
         if why is None:
             with _lock:
@@ -100,8 +151,8 @@ def check(svc: Any, now: float | None = None) -> dict[str, str]:
             if inspect(path) is None:
                 continue
         log.error(
-            "dbcheck: %s is DAMAGED (%s). It holds real data: nothing is changed; "
-            "restore it from the backup (only the header has been hit so far)",
+            "dbcheck: %s is DAMAGED (%s), seen twice. It holds real data: nothing is changed; "
+            "restore it from the backup",
             path.name,
             why,
         )
@@ -172,8 +223,8 @@ def _tell(svc: Any, name: str) -> None:
             [a["email"] for a in people if a.get("email")],
             f"{community}: the database file {name} is damaged",
             [
-                f"The belfry's file {name} no longer opens as a database. Nothing was changed "
-                "in it; what it holds is not readable until it is repaired.",
+                f"The hourly check found the belfry's file {name} damaged, twice in a row. "
+                "The service has not changed it.",
                 "To repair: on the server, compare it with last night's backup "
                 "(infra/scripts/backup.sh) and restore the file, or its first 100 bytes when "
                 "only the header was hit. The service logs (docker logs belfry-onboarding-1) "
