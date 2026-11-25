@@ -3,7 +3,7 @@
 // groups relay. While asked: "loading" (a grey bar where a name stands alone, PersonName); after:
 // "Somebody" / "An agent" (model.ts fallbackName), never a shortened npub.
 import { addEvents, touch } from './store'
-import { isLocalOnly, queryOnce } from './sync'
+import { isLocalOnly, queryOnce, queryAuthed } from './sync'
 import { onMissingName, profiles } from './model'
 
 const asked = new Map<string, number>() // pubkey → when its kind 0 was last asked (ms)
@@ -30,7 +30,7 @@ async function flush() {
   if (isLocalOnly()) { setTimeout(() => { keys.forEach((k) => waiting.delete(k)); touch() }, 400); return } // demo mode: no relays
   for (let i = 0; i < keys.length; i += 100) {
     const authors = keys.slice(i, i + 100)
-    const found = await Promise.all((['main', 'groups'] as const).map((t) => queryOnce(t, { kinds: [0], authors }, 6000).catch(() => [])))
+    const found = await Promise.all((['main', 'groups'] as const).map((t) => queryAuthed(t, { kinds: [0], authors }, 6000).catch(() => [])))
     addEvents(found.flat())
     authors.forEach((k) => waiting.delete(k))
     touch()

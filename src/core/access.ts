@@ -5,7 +5,7 @@ import { ACCESS, DISCOVERY, PLACE } from '../config'
 import { kvGet, kvSet } from './db'
 import { setBranding } from './branding'
 import { all, type Ev } from './store'
-import { currentSigner, enqueue, me, publishNow, queryOnce } from './sync'
+import { currentSigner, enqueue, me, publishNow, queryOnce, queryAuthed } from './sync'
 
 // Who may use the village, as Nostr events (Belfry skill, section 11). No API to call:
 // the read-only state comes from belfry.json, everything else is signed events on the
@@ -309,7 +309,7 @@ export async function requestNotes(wanted: string[]): Promise<Map<string, Reques
   for (const id of wanted) if (cache[id]) out.set(id, cache[id])
   if (wanted.every((id) => out.has(id))) return out
   const signer = currentSigner()
-  const wraps = (await queryOnce('groups', { kinds: [1059], '#p': [me()], limit: 200 })).sort((a, b) => b.created_at - a.created_at)
+  const wraps = (await queryAuthed('groups', { kinds: [1059], '#p': [me()], limit: 200 })).sort((a, b) => b.created_at - a.created_at)
   const seen = (await kvGet<string[]>('wraps-seen')) ?? []
   for (const w of wraps) {
     if (wanted.every((id) => out.has(id))) break

@@ -10,7 +10,7 @@ import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch, dropOutbox } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
-import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce, retryNow, sendStep } from './sync'
+import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce, retryNow, sendStep, queryAuthed } from './sync'
 import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource, takeV1Secrets, v1SecretsHere } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
@@ -989,7 +989,7 @@ export async function checkReports() {
   const s = currentSigner()
   const open = [...[...items.values()].filter((d) => d.mine && d.emailId && ['queued', undefined].includes(reports.get(d.emailId)?.status)).map((d) => d.emailId!), ...channelSends]
   if (!b || !s || !open.length || isLocalOnly()) return
-  for (const e of await queryOnce('main', { kinds: [7679], authors: [b], '#r': open.slice(-50) })) {
+  for (const e of await queryAuthed('main', { kinds: [7679], authors: [b], '#r': open.slice(-50) })) {
     try {
       // §7 (sealedcore.openReport): with an lb, opened with that letterbox's secret only; without,
       // the old kind, by the signer as before; an lb this device lacks: tried again next time

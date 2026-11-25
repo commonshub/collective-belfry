@@ -3,7 +3,7 @@
 // mirror the server's website.valid_path / parse_paths exactly, so the chat never sends a scope the
 // belfry would refuse (an invalid scope is not published, it never falls back to the whole site).
 import { nip19 } from 'nostr-tools'
-import { queryOnce, me } from './sync'
+import { queryOnce, me, queryAuthed } from './sync'
 import { all } from './store'
 
 export const MAX_PATHS = 10
@@ -61,7 +61,7 @@ export async function siteFiles(ref: string): Promise<string[] | null> {
   const kind = s.name ? 35128 : 15128
   const mine = (e: { kind: number; pubkey: string; tags: string[][] }) => e.kind === kind && e.pubkey === s.pubkey && (!s.name || e.tags.some((t) => t[0] === 'd' && t[1] === s.name))
   const held = all(me()).filter(mine)
-  const evs = held.length ? held : (await queryOnce('main', s.name ? { kinds: [kind], authors: [s.pubkey], '#d': [s.name] } : { kinds: [kind], authors: [s.pubkey] }, 6000).catch(() => [])).filter(mine)
+  const evs = held.length ? held : (await queryAuthed('main', s.name ? { kinds: [kind], authors: [s.pubkey], '#d': [s.name] } : { kinds: [kind], authors: [s.pubkey] }, 6000).catch(() => [])).filter(mine)
   const ev = [...evs].sort((a, b) => b.created_at - a.created_at)[0]
   if (!ev) return null
   return ev.tags.filter((t) => t[0] === 'path' && typeof t[1] === 'string' && t[1].startsWith('/')).map((t) => t[1])

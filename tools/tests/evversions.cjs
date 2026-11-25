@@ -80,11 +80,18 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
   // something newer arrives, so this device's sync mark moves past the co-host's version-to-come
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent({ kind: 0, created_at: now, tags: [], content: JSON.stringify({ name: "Sam" }) }, samSk)]) });
   await sleep(2500);
-  await S.ev("location.hash = '#/home'"); await sleep(500);
-  // the co-host edits it elsewhere: a version dated 3 hours ago (older than this device's mark − 1 h)
+  // (the sync mark moves at a catch-up's end: reload once so it lands on that newer event)
+  await S.ev("location.hash = '#/home'; location.reload()"); await sleep(6000);
+  const mark = await S.ev("Number(localStorage.getItem('belfry-sync-mark:main') || 0)");
+  check("the sync mark is past the co-host's version-to-come (and its hour of overlap)", mark - 3600 > now - 3 * 3600, { mark, now });
+  // the app is closed (the phone in a pocket) while the co-host edits it elsewhere
+  await S.send("Page.navigate", { url: "about:blank" }); await sleep(800);
+  // a version dated 3 hours ago (older than this device's mark − 1 h)
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent({ kind: 31922, created_at: now - 3 * 3600, tags: [["d", d], ["title", "CHAOSScon"], ["start", "2027-01-28"], ["h", gid], ["visibility", "members"], ["image", "https://example.org/c.jpg"]], content: "The full description" }, co)]) });
-  // reopened straight onto the event (a home-screen app, a link): the ask goes out before the relay signed us in
-  await S.ev(`location.hash = '#/events/${d}'; location.reload()`); await sleep(9000);
+  // reopened straight onto the event (a home-screen app, a link): the ask goes out before the relay signed us in,
+  // and the relay refuses REQs before AUTH as rnostr does on the belfries
+  await fetch(relayHttp + "/authreq/on");
+  await S.send("Page.navigate", { url: base + "?backend=demo#/events/" + d }); await sleep(12000);
   const t = await S.ev("document.querySelector('.ev-screen .topbar h1')?.innerText || ''");
   check("opening it: the co-host's newer version wins (asked by #d on a signed-in socket)", /CHAOSScon/.test(t) && !/Old title/.test(t), t);
   console.log(bad ? `== evversions: ${bad} failed` : "== evversions: all ok");

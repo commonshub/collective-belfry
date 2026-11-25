@@ -609,6 +609,19 @@ export async function queryOnce(target: Target, filter: Filter, timeoutMs = 8000
   })
 }
 
+/** A one-shot read that counts only once the relay signed this socket in: a REQ sent before AUTH is
+ *  CLOSED "auth-required" on the belfries' relays, never an empty answer (queryOnce took it for one).
+ *  Tries again a few times; still nothing known: []. */
+export async function queryAuthed(target: Target, filter: Filter, timeoutMs = 8000, tries = 3): Promise<NostrEvent[]> {
+  if (localOnly || !signer) return [] // (the demo: no relay)
+  for (let i = 0; i < tries; i++) {
+    const got = await queryComplete(target, [filter], timeoutMs, false, true)
+    if (got) return got
+    await new Promise((r) => setTimeout(r, 2500 * (i + 1)))
+  }
+  return []
+}
+
 /** What the relay has for FILTERS, once it said that was all (EOSE). `null` when it never said
  *  so (no connection, a timeout, the subscription closed): then nothing is known, and an empty
  *  list would be a guess. */
@@ -704,7 +717,7 @@ function learnGroup(e: NostrEvent) {
   if (!d || knownGroups.has(d)) return
   knownGroups.add(d)
   if (!groupsAnswered) return
-  void queryOnce('groups', { kinds: KINDS_GROUPS, '#h': [d], limit: 2000 }, 10000).then(addEvents).catch(() => {})
+  void queryAuthed('groups', { kinds: KINDS_GROUPS, '#h': [d], limit: 2000 }, 10000).then(addEvents).catch(() => {})
 }
 // signed in to that relay (NIP-42) on its current connection: only then does an empty answer mean
 // "it has nothing" (groupstate.ts), not "you may not see it yet"

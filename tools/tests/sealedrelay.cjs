@@ -12,6 +12,9 @@ const ratelimit = {};
 // GET /prule/on|off (docs/encrypted.md §18.1): kinds 8571–8573 go only to a connection authenticated as the event's p
 // account, and one dated more than 5 minutes from now is refused (enc.cjs)
 let prule = false;
+// GET /authreq/on|off: like rnostr on the belfries, a REQ before AUTH is CLOSED "auth-required"; the challenge
+// comes 1.5 s after connecting (the remote signer's time on a real belfry), so an early REQ meets it
+let authReq = false;
 const PRULE = new Set([8571, 8572, 8573]);
 // (a group's 8571/8572 carry h and live on the groups relay, which has no such rule: §22)
 const hidden = (e, who) => prule && PRULE.has(e.kind) && !e.tags.some((t) => t[0] === "h") && !e.tags.some((t) => t[0] === "p" && t[1] === who);
@@ -54,6 +57,7 @@ const srv = http.createServer((q, s) => {
   const rf = /^\/refuse\/(\d+|anchor)\/(\d+)$/.exec(q.url || "");
   if (rf) { refuse[rf[1]] = Number(rf[2]); s.writeHead(200); s.end("ok"); return; }
   // back from silence like a real outage ends: every connection drops, the clients reconnect and sign in again
+  if (q.url === "/authreq/on" || q.url === "/authreq/off") { authReq = q.url.endsWith("on"); s.writeHead(200); s.end(String(authReq)); return; }
   if (q.url === "/prule/on" || q.url === "/prule/off") { prule = q.url.endsWith("on"); s.writeHead(200); s.end(String(prule)); return; }
   if (q.url === "/nolive/on" || q.url === "/nolive/off") { nolive = q.url.endsWith("on"); s.writeHead(200); s.end(String(nolive)); return; }
   if (q.url === "/silent/on" || q.url === "/silent/off") { silent = q.url.endsWith("on"); if (!silent) for (const k of socks) { try { k.destroy(); } catch {} } s.writeHead(200); s.end(String(silent)); return; }
@@ -75,10 +79,11 @@ srv.on("upgrade", (req, sock) => {
   let authed = ""; // the pubkey this connection authenticated as (not verified: a test relay)
   const challenge = crypto.randomBytes(8).toString("hex");
   const send = (m) => { try { sock.write(frame(JSON.stringify(m))); } catch {} };
-  setTimeout(() => send(["AUTH", challenge]), 50);
+  setTimeout(() => send(["AUTH", challenge]), authReq ? 1500 : 50);
   const onMsg = (m) => {
     if (silent && m[0] !== "CLOSE") return;
     if (m[0] === "AUTH") { authed = (m[1] && m[1].pubkey) || ""; send(["OK", m[1].id, true, ""]); return; }
+    if (m[0] === "REQ" && authReq && !authed) { send(["CLOSED", m[1], "auth-required: we only serve events to authenticated users"]); return; }
     if (m[0] === "REQ" && closeReq.n > 0) { closeReq.n--; send(["CLOSED", m[1], closeReq.reason]); return; }
     if (m[0] === "REQ") {
       const [, sid, ...fs_] = m; const seen = new Set();
