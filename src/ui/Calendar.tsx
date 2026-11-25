@@ -11,7 +11,7 @@ import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, typ
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import PlaceInput from './PlaceInput'
-import { allDayWord, claimSlug, isPastEvent, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, fetchEventDetails, utcToZoned, type EventForm } from '../core/events'
+import { allDayWord, claimSlug, isPastEvent, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, askVersions, fetchEventDetails, utcToZoned, type EventForm } from '../core/events'
 import { back, fmtDay, go, Sheet, Btn, Form, up, useFormDraft } from './common'
 import { Tabs } from './ChannelInfo'
 import { CalendarIcon, ImageIcon } from './icons'
@@ -128,6 +128,7 @@ export function EventCard({ coord, link, fallback }: { coord?: string; link?: st
   const r = !found && link ? eventByLink(link) : undefined
   const e = found ?? r?.e
   if (!e) return fallback ? <div className="text">{fallback}</div> : null
+  if (!e.remote) askVersions([e.d]) // (rule B: every version of it)
   const tks = e.isNew ? tickets(e, r?.api) : []
   const plain = !e.isNew || (tks.length === 1 && tks[0].implicit && !e.remote)
   const mine = e.isNew ? myState(e, people(e), r?.api) : undefined

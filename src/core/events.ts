@@ -14,7 +14,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, getBackend, TZ } from '../config'
 import { calendar, eventByLinkLocal, EVENT_D, EVENT_STATUS_NS, eventUrl, group, groups, type CalEvent, type Rsvp, type Visibility } from './model'
 import { all, addEvents, touch, type Ev } from './store'
-import { currentSigner, enqueue, isLocalOnly, me, newId, signedFetch, uploadBlob } from './sync'
+import { currentSigner, enqueue, isLocalOnly, me, newId, queryOnce, signedFetch, uploadBlob } from './sync'
 import { isGuest } from './invite'
 import { isAdmin } from './access'
 import { editGroupMeta, relayAdmin, setGroupRole } from './checkin'
@@ -408,6 +408,26 @@ export function formOf(e: CalEvent): EventForm {
     end: e.end ? (e.allDay ? tag(e.ev, 'end') ?? '' : utcToZoned(e.end, tz)) : '',
     tz, location: e.location ?? '', online: e.links[0] ?? '', website: e.website ?? '', visibility: e.visibility, slug: e.slug ?? '', cover: e.cover,
   }
+}
+
+// ---- every version of the events on screen (rule B: the newest host version wins) ----------------
+// The catch-up asks only for what is newer than this device's last sync, so a co-host's version made
+// elsewhere and dated before that point never comes (Xavier, OSV chaosscon2027, 25 Nov: the 18 Nov
+// version stayed). The events shown are asked by #d, any author, no since, once each per page load;
+// model.calendar re-picks the newest host version as they arrive (and when a 39001 arrives).
+const versionsAsked = new Set<string>()
+let versionsQueue: string[] = []
+let versionsTimer: ReturnType<typeof setTimeout> | undefined
+export function askVersions(ds: string[]) {
+  if (isLocalOnly()) return
+  for (const d of ds) if (d && /^(\d{4}-)?[a-z0-9]{6}$/.test(d) && !versionsAsked.has(d)) { versionsAsked.add(d); versionsQueue.push(d) }
+  if (!versionsQueue.length || versionsTimer) return
+  versionsTimer = setTimeout(() => {
+    versionsTimer = undefined
+    const batch = versionsQueue.splice(0, 100)
+    void queryOnce('main', { kinds: [31922, 31923], '#d': batch, limit: 1000 }, 8000).then((got) => { if (got.length) addEvents(got) }, () => batch.forEach((d) => versionsAsked.delete(d)))
+    if (versionsQueue.length) askVersions([])
+  }, 250)
 }
 
 // ---- "Event website": paste it and the belfry fills in the rest (docs/event-details.md) ---------

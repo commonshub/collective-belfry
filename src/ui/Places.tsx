@@ -10,6 +10,7 @@
 //   Town     = the town's channels, with the ☰ drawer
 //   Messages = direct messages and e-mail (the bar's middle since 2026-11-22: no Create sheet; each
 //              thing is made where it lives: the composer's +, Calendar's +, Groups' +)
+import { askVersions } from '../core/events'
 import { myRole } from '../core/myrole'
 import { GroupName } from './GroupName'
 import { AgreementAbout } from './Charter'
@@ -537,7 +538,9 @@ export function CalendarPlace() {
     const local = upcomingEvents()
     const byCoord = new Map(local.map((e) => [e.coord, e]))
     for (const e of pub) if (!byCoord.has(e.coord) && e.status !== 'cancelled' && !isPastEvent(e)) byCoord.set(e.coord, e)
-    return [...byCoord.values()].sort((a, b) => +a.start - +b.start)
+    const out = [...byCoord.values()].sort((a, b) => +a.start - +b.start)
+    askVersions(out.filter((e) => !e.remote).map((e) => e.d)) // (rule B: every version of what is listed)
+    return out
   }, [calendar(), pub]) // eslint-disable-line react-hooks/exhaustive-deps
   const invited = all.filter(isInvited)
   const mineChannels = new Set(myGuestChannels().map((g) => g.id))

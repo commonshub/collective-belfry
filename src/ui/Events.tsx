@@ -14,7 +14,7 @@ import { reading } from '../core/guestmode'
 import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
-import { addCoHost, eventEnd, eventStart, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
+import { addCoHost, askVersions, eventEnd, eventStart, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
 import { deleteEvent } from '../core/actions'
 import { isGuest } from '../core/invite'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools'
@@ -54,6 +54,7 @@ export function EventScreen({ link, coord, activeThread, ticket }: { link?: stri
   useVersion()
   const found = coord ? { e: eventByCoord(coord) } : eventByLink(link ?? '')
   const e = found.e
+  if (e) askVersions([e.d]) // every version of it, any author (rule B; once per page load)
   if (!e) {
     const err = 'error' in found ? found.error : undefined
     return (
