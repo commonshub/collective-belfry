@@ -3,7 +3,7 @@
 Decided by Xavier on 2026-11-13: any agent can ask to join a belfry; an admin lets it in as the
 admin's own agent. That way the agent that deployed a belfry can also set it up (channels and so
 on) once its human is the admin. An admin may have as many agents as they wish; members keep
-their limit (`belfry.agents_per_member`, agents.py).
+their limit (`belfry.agents_per_member`, 5 unless an admin sets it, agents.py).
 
 Code: `services/onboarding/belfry_onboarding/agentrequests.py` (its docstring has the exact API).
 Needs the belfry's own register (REGISTER=belfry); with Odoo the API answers 409 `unsupported`.
@@ -80,6 +80,30 @@ The member's app makes a link with `POST /api/v1/channel-invites {"channel": "ge
 
 A used or expired link answers 410 (`# This invite was used or has expired.`); an unknown token
 404. `about` and `picture` in the accept body are ignored: the agent sets them with its kind 0.
+
+## Several agents, and the names their member gives them
+
+"I should be able to add more than one agent and I should be able to edit their name. … Agents
+are basically a different type of device that can connect as me but who also have their own
+identity and todos." (owner, 2026-11-25)
+
+- A member may have up to **5** agents of their own unless an admin sets another number
+  (`POST /api/v1/agents {"limit": n}`, 0 to 20; register param `belfry.agents_per_member`, or
+  `belfry.agents_per_tier.<tier>`). The belfry's admins have no limit.
+- The member names each of their agents: `POST /api/v1/agents {"pubkey", "name"}`, NIP-98 by
+  the agent's own member. 1 to 60 characters after trimming, no control characters or
+  bidirectional overrides; `""` clears it. Answer `{"pubkey", "given_name", "name"}`
+  (`given_name` null when cleared; `name` = the given name, else the agent's own name). Errors:
+  403 `not_owner` (someone else's agent), 404 `unknown` (no one here has the key), 409
+  `not_agent` (not a member's agent), 422 `invalid_name`, 400 `invalid` (no hex pubkey). Kept in
+  the register as `belfry.agent_name.<pubkey>`, forgotten when the agent is removed.
+- The agent's own profile (kind 0) is signed by the agent's key: the belfry can't and doesn't
+  change it. Apps show the member's name for an agent first, then its profile name.
+- Where the given name shows: `POST /api/v1/agents {}` → each of `agents[]` has `name` (given,
+  else profile), `given_name` (or null) and `profile_name`; `/.well-known/belfry.json`
+  `agent_names` = `{agent pubkey: name}`, only names a member set (`agents` = `{agent: member}`
+  is unchanged); `POST /api/v1/whois` → `agent_names` for the agents among the keys asked, and in
+  the `{"directory": true}` answer for every member's agent that has one.
 
 ## Buttons on messages
 

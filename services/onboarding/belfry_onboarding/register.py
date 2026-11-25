@@ -92,7 +92,7 @@ EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CHANNEL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 FREQUENCIES = ("asap", "weekly", "monthly")  # followers.py
 TIER_NAMES = {"member": "Membership", "steward": "Membership (admin)", "agent": "Member's agent"}
-AGENTS_PER_MEMBER = 1  # how many agents of their own a member can bring (agents.py)
+AGENTS_PER_MEMBER = 5  # how many agents of their own a member can bring (agents.py)
 FOREVER = "2099-12-31"
 
 

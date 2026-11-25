@@ -59,7 +59,7 @@ def test_a_guest_agent_becomes_its_members_own_and_leaves_with_them(world):
     with TestClient(create_app(rsvc)) as c:
         bot = guest_agent(c, rsvc, ada, ada_id)
         assert pk(bot) not in core.active_pubkeys(rsvc)
-        assert post(c, ada, "/api/agents", {}).json() == {"agents": [], "limit": 1}
+        assert post(c, ada, "/api/agents", {}).json() == {"agents": [], "limit": 5}
         # not Bob's to take: Ada invited it
         r = post(c, bob, "/api/agents", {"pubkey": pk(bot), "mine": True})
         assert r.status_code == 409 and "invited" in r.json()["message"]
@@ -81,7 +81,8 @@ def test_a_guest_agent_becomes_its_members_own_and_leaves_with_them(world):
         assert not any(k == 9001 for k, t in published)
         assert rsvc.odoo.agent_owners() == {pk(bot): pk(ada)}
         assert c.get("/.well-known/belfry.json").json()["agents"] == {pk(bot): pk(ada)}
-        # one agent each: a second one is refused
+        # with a limit of one, a second one is refused (five unless an admin sets it)
+        rsvc.odoo.set_param("belfry.agents_per_member", "1")
         time.sleep(1.1)
         bot2 = guest_agent(c, rsvc, ada, ada_id, "kitchen")
         r = post(c, ada, "/api/agents", {"pubkey": pk(bot2), "mine": True})
@@ -134,7 +135,8 @@ def test_a_link_for_a_members_own_agent(world):
         assert ["p", pk(bot), "member"] in joined and ["agent", "1"] in joined
         assert not any(t[:1] == ["guest"] for t in joined)
         assert rsvc.odoo.invite_by_token(token)["state"] == "used"
-        # no room for a second link
+        # no room for a second link with a limit of one
+        rsvc.odoo.set_param("belfry.agents_per_member", "1")
         time.sleep(1.1)
         r = post(c, ada, "/api/channel-invites", {"channel": "garden", "agent": True})
         assert r.status_code == 409
@@ -154,9 +156,84 @@ def test_admins_set_how_many_agents_a_member_brings(world, monkeypatch):
         time.sleep(1.1)
         assert post(c, ada, "/api/agents", {"limit": 3}).json()["limit"] == 3
         assert post(c, bob, "/api/agents", {}).json()["limit"] == 3
-        rsvc.odoo.set_param("belfry.agents_per_tier.member", "5")
+        rsvc.odoo.set_param("belfry.agents_per_tier.member", "7")
         time.sleep(1.1)
-        assert post(c, bob, "/api/agents", {}).json()["limit"] == 5
+        assert post(c, bob, "/api/agents", {}).json()["limit"] == 7
+        # an admin has none: the answer says so, and `limit` stays the members' number
+        time.sleep(1.1)
+        mine = post(c, ada, "/api/agents", {}).json()
+        assert mine["unlimited"] is True and mine["limit"] == 7
+
+
+def test_a_member_brings_several_agents_and_names_them(world):
+    """"I should be able to add more than one agent and I should be able to edit their name"
+    (owner, 2026-11-25): five by default; the member's name for an agent, apart from its own
+    profile, in the list, belfry.json and whois."""
+    rsvc, published, left = world
+    ada, ada_id = member(rsvc, "ada@belfry.test", "Ada")
+    bob, _ = member(rsvc, "bob@belfry.test", "Bob")
+    with TestClient(create_app(rsvc)) as c:
+        bots = []
+        for ch in ("garden", "kitchen", "cellar"):
+            bot = guest_agent(c, rsvc, ada, ada_id, ch)
+            time.sleep(1.1)
+            r = post(c, ada, "/api/agents", {"pubkey": pk(bot), "mine": True})
+            assert r.status_code == 200, r.text
+            bots.append(bot)
+        listed = post(c, ada, "/api/agents", {}).json()
+        assert listed["limit"] == 5 and len(listed["agents"]) == 3
+        first = next(a for a in listed["agents"] if a["pubkey"] == pk(bots[0]))
+        assert first["name"] == "Bot" and first["profile_name"] == "Bot"
+        assert first["given_name"] is None
+        assert "agent_names" not in c.get("/.well-known/belfry.json").json()
+        # Ada names one
+        time.sleep(1.1)
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bots[0]), "name": "  Gardener  "})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"pubkey": pk(bots[0]), "given_name": "Gardener", "name": "Gardener"}
+        time.sleep(1.1)
+        first = next(
+            a
+            for a in post(c, ada, "/api/agents", {}).json()["agents"]
+            if a["pubkey"] == pk(bots[0])
+        )
+        assert first["name"] == "Gardener" and first["given_name"] == "Gardener"
+        assert first["profile_name"] == "Bot"
+        doc = c.get("/.well-known/belfry.json").json()
+        assert doc["agent_names"] == {pk(bots[0]): "Gardener"}
+        assert doc["agents"] == {pk(b): pk(ada) for b in bots}  # unchanged
+        time.sleep(1.1)
+        r = post(c, bob, "/api/whois", {"pubkeys": [pk(b) for b in bots] + [pk(ada)]})
+        assert r.json()["agent_names"] == {pk(bots[0]): "Gardener"}
+        time.sleep(1.1)
+        r = post(c, bob, "/api/whois", {"directory": True})
+        assert r.json()["agent_names"] == {pk(bots[0]): "Gardener"}
+        # not Bob's agent; not an agent; nobody's key; bad names
+        time.sleep(1.1)
+        r = post(c, bob, "/api/agents", {"pubkey": pk(bots[1]), "name": "Mine now"})
+        assert r.status_code == 403 and r.json()["error"] == "not_owner"
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bob), "name": "Bob"})
+        assert r.status_code == 409 and r.json()["error"] == "not_agent"
+        r = post(c, ada, "/api/agents", {"pubkey": "1" * 64, "name": "X"})
+        assert r.status_code == 404
+        for bad in ("x" * 61, "a\nb", "a\u202eb", 7, None):
+            time.sleep(1.1)
+            r = post(c, ada, "/api/agents", {"pubkey": pk(bots[1]), "name": bad})
+            assert r.status_code == 422 and r.json()["error"] == "invalid_name", bad
+        time.sleep(1.1)
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bots[1]), "name": "x" * 60})
+        assert r.status_code == 200
+        # clearing: back to its profile name
+        time.sleep(1.1)
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bots[0]), "name": " "})
+        assert r.json() == {"pubkey": pk(bots[0]), "given_name": None, "name": "Bot"}
+        assert c.get("/.well-known/belfry.json").json()["agent_names"] == {pk(bots[1]): "x" * 60}
+        # removing an agent forgets its name
+        time.sleep(1.1)
+        r = post(c, ada, "/api/agents", {"pubkey": pk(bots[1]), "mine": False})
+        assert r.status_code == 200
+        assert "agent_names" not in c.get("/.well-known/belfry.json").json()
+        assert rsvc.odoo.param(agents.NAME_PARAM + pk(bots[1])) == ""
 
 
 def test_a_guest_of_one_channel_is_brought_into_another(world):

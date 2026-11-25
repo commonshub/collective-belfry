@@ -3,8 +3,10 @@
 A channel's guest can be an agent (guests.py: its own key, 30 days, one channel). A member can
 also bring an agent of their own, which is a member for as long as they are one:
 
-- ``{}`` → ``{"agents": [{"pubkey", "name", "since"}], "limit": n}``: the caller's agents; an
-  admin's answer adds ``"unlimited": true`` (admins may have as many agents as they wish).
+- ``{}`` → ``{"agents": [{"pubkey", "name", "given_name", "profile_name", "since", "reads"}],
+  "limit": n}``: the caller's agents; ``name`` is the name its member gave it, else its own
+  name. An admin's answer adds ``"unlimited": true`` (admins may have as many agents as they
+  wish).
 - ``{"pubkey", "mine": true}``: an agent that is a guest here becomes the caller's agent. Only
   the member who invited it (or an admin, for themselves) can do that, within their limit
   (none for an admin).
@@ -12,6 +14,13 @@ also bring an agent of their own, which is a member for as long as they are one:
 - ``{"pubkey", "reads": true|false}`` by the agent's own member (docs/encrypted.md §11): the
   agent may read the member's encrypted conversations, as a ``reader`` on their device list.
   ``{"pubkey", "reads"}`` back; 403 ``not_owner``, 404 ``unknown``, 409 ``not_agent``.
+- ``{"pubkey", "name": "…"}`` by the agent's own member: the name they call it (1 to 60
+  characters, trimmed, no control characters; ``""`` clears it). Kept in the register
+  (``belfry.agent_name.<pubkey>``), shown in belfry.json ``agent_names`` and whois. The agent's
+  own kind-0 profile is signed by its own key and stays as it is. ``{"pubkey", "given_name",
+  "name"}`` back; 403 ``not_owner``, 404 ``unknown``, 409 ``not_agent``, 422 ``invalid_name``.
+  "I should be able to add more than one agent and I should be able to edit their name"
+  (owner, 2026-11-25).
 - ``{"limit": n}`` by an admin: how many agents each member can bring (0 to 20).
 - A link made with ``"agent": true`` (guests.py) brings a new agent in as the inviter's own.
 - An agent can also ask to join by itself (agentrequests.py, ``/agents.md``): an admin who lets
@@ -23,7 +32,7 @@ no signer account, can't invite and can't be an admin. It is in every channel it
 (``mirror``, #issues 2026-11-13: "the exact same access as the parent"). When its member's
 membership closes, so does the agent's pass (core._close_pass → ``closed``), and it is taken out
 of every channel.
-The limit is the register's ``belfry.agents_per_member`` (1 unless set), or
+The limit is the register's ``belfry.agents_per_member`` (5 unless set), or
 ``belfry.agents_per_tier.<tier>`` for a membership tier; the belfry's admins have
 none. belfry.json lists agent → member.
 """
@@ -35,6 +44,7 @@ import contextlib
 import json
 import logging
 import re
+import unicodedata
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -49,6 +59,32 @@ log = logging.getLogger(__name__)
 PATH = "/api/agents"
 HEX = re.compile(r"^[0-9a-f]{64}$")
 MAX_LIMIT = 20
+NAME_PARAM = "belfry.agent_name."  # + agent pubkey: the name its member gave it
+NAME_MAX = 60
+# bidirectional overrides and isolates, line and paragraph separators: never in a name
+_BAD = set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A)) | {0x2028, 0x2029}
+
+
+def given_names(svc: Services) -> dict[str, str]:
+    """Every agent → the name its member gave it (only names that are set)."""
+    under = getattr(svc.odoo, "params_under", None)
+    if under is None:
+        return {}
+    return {k[len(NAME_PARAM) :]: v for k, v in under(NAME_PARAM).items() if v}
+
+
+def clean_name(raw: Any) -> str:
+    """A name a member gives their agent: trimmed, 1 to NAME_MAX characters ("" clears it)."""
+    from .holder_invites import ApiError
+
+    if not isinstance(raw, str):
+        raise ApiError(422, "invalid_name", 'name: a text of 1 to 60 characters, or "".')
+    name = raw.strip()
+    if len(name) > NAME_MAX or any(
+        unicodedata.category(ch) == "Cc" or ord(ch) in _BAD for ch in name
+    ):
+        raise ApiError(422, "invalid_name", 'name: a text of 1 to 60 characters, or "".')
+    return name
 
 
 def out_of_channels(svc: Services, pubkey: str) -> int:
@@ -227,11 +263,14 @@ def mine(svc: Services, caller: str) -> dict[str, Any]:
     from . import apps, devices
 
     owner = _owner(svc, caller)
+    given = given_names(svc)
     out: dict[str, Any] = {
         "agents": [
             {
                 "pubkey": a["pubkey"],
-                "name": a["name"],
+                "name": given.get(a["pubkey"]) or a["name"],
+                "given_name": given.get(a["pubkey"]) or None,
+                "profile_name": a["name"],
                 "since": a["since"],
                 "reads": devices.reads(svc, a["pubkey"]),
             }
@@ -279,6 +318,7 @@ def change(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:
         from . import devices
 
         svc.odoo.set_param(devices.READS_PARAM + target, "")  # never back by itself (§11)
+        svc.odoo.set_param(NAME_PARAM + target, "")
     return mine(svc, caller)
 
 
@@ -286,6 +326,15 @@ def set_reads(svc: Services, caller: str, target: str, on: bool) -> dict[str, An
     """§11 (docs/encrypted.md): the caller's own agent TARGET may (or may no longer) read their
     encrypted conversations: listed as a reader on the caller's device list."""
     from . import devices
+
+    _own_agent(svc, caller, target, "Only its member decides what their agent reads.")
+    svc.odoo.set_param(devices.READS_PARAM + target, "1" if on else "")
+    devices.schedule(svc, caller)
+    return {"pubkey": target, "reads": on}
+
+
+def _own_agent(svc: Services, caller: str, target: str, why: str) -> None:
+    """TARGET is an active agent of the caller's, else 404 / 409 / 403."""
     from .holder_invites import ApiError
 
     owner = _owner(svc, caller)
@@ -300,10 +349,19 @@ def set_reads(svc: Services, caller: str, target: str, on: bool) -> dict[str, An
     if not agents:
         raise ApiError(409, "not_agent", "This is not a member's agent.")
     if any(m2o_id(r.get("agent_owner")) != owner for r in agents):
-        raise ApiError(403, "not_owner", "Only its member decides what their agent reads.")
-    svc.odoo.set_param(devices.READS_PARAM + target, "1" if on else "")
-    devices.schedule(svc, caller)
-    return {"pubkey": target, "reads": on}
+        raise ApiError(403, "not_owner", why)
+
+
+def set_name(svc: Services, caller: str, target: str, raw: Any) -> dict[str, Any]:
+    """The caller names their own agent TARGET ("" clears the name). The agent's own profile
+    (kind 0, its own key) is not touched: apps show this name first, then the profile's."""
+    name = clean_name(raw)
+    _own_agent(svc, caller, target, "Only its member names their agent.")
+    svc.odoo.set_param(NAME_PARAM + target, name)
+    profile = next(
+        (a["name"] for a in svc.odoo.agents_of(_owner(svc, caller)) if a["pubkey"] == target), ""
+    )
+    return {"pubkey": target, "given_name": name or None, "name": name or profile}
 
 
 def set_limit(svc: Services, caller: str, limit: Any) -> int:
@@ -339,6 +397,12 @@ def register(app: FastAPI) -> None:
             raise ApiError(400, "invalid_json", "Send a JSON object.")
         if "limit" in data:
             await run_in_threadpool(set_limit, s, caller, data["limit"])
+        if "name" in data:
+            target = str(data.get("pubkey") or "").lower()
+            if not HEX.match(target):
+                raise ApiError(400, "invalid", 'Send {"pubkey": "<hex>", "name": "…"}.')
+            out = await run_in_threadpool(set_name, s, caller, target, data["name"])
+            return JSONResponse(out, headers={"Cache-Control": "no-store"})
         if "reads" in data:
             target = str(data.get("pubkey") or "").lower()
             if not HEX.match(target) or not isinstance(data.get("reads"), bool):

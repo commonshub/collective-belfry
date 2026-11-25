@@ -18,9 +18,13 @@ event saying so unless a label was published). The register knows, so it answers
   sitesessions.py) because guests are not on the members' relay; a member's are in their own
   kind 30078 ``d`` = ``belfry:profile`` event, which the apps read themselves, so members are
   never in ``tags``. A guest without tags is left out.
+- And ``"agent_names": {"<hex>": "<name>"}``: for the members' own agents among the keys, the
+  name their member gave them (agents.py), when one is set. Apps show it first, then the
+  agent's own profile name.
 - ``{"directory": true}`` (members only, #issues 2026-11-15: the chat's Members directory) →
   ``{"members": [{"pubkey", "name", "role"?}], "agents": {"<agent>": "<its member>"},
-  "names": {"<agent>": "<name>"}}``: everyone holding a member's pass, and members' own agents;
+  "names": {"<agent>": "<profile name>"}, "agent_names": {"<agent>": "<name its member gave
+  it>"}}``: everyone holding a member's pass, and members' own agents;
   a tester's entry has ``"tester": true``. Guests are not in the directory, so it has no
   ``tags``.
 """
@@ -84,6 +88,13 @@ def answer(svc: Services, caller: str, keys: list[str]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         found = set()
     out["testers"] = sorted(found)
+    from . import agents
+
+    try:  # the names members gave their agents (agents.py), for the agents asked about
+        given = agents.given_names(svc)
+        out["agent_names"] = {k: given[k] for k in keys if known.get(k) == "agent" and k in given}
+    except Exception:  # noqa: BLE001
+        out["agent_names"] = {}
     try:
         out["tags"] = guest_tags(svc, [k for k in keys if known.get(k) == "guest"])
     except Exception:  # noqa: BLE001
@@ -152,7 +163,18 @@ def directory(svc: Services, caller: str) -> dict[str, Any]:
         ],
         "agents": owners,
         "names": {a: names.get(a, "") for a in owners},
+        "agent_names": _given(svc, owners),
     }
+
+
+def _given(svc: Services, owners: dict[str, str]) -> dict[str, str]:
+    from . import agents
+
+    try:
+        given = agents.given_names(svc)
+    except Exception:  # noqa: BLE001
+        return {}
+    return {a: given[a] for a in owners if a in given}
 
 
 def register(app: FastAPI) -> None:

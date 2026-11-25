@@ -110,6 +110,12 @@ docs/website-accounts.md, docs/setup.md, docs/agents.md. Canvas: onboarding, inv
 - **ONB-71** [all] Any member adds their own agent from their own profile ("Add an agent"); a
   member's agents fold under the member's row ("+ N agents"). (owner, 2026-11-16, 2026-11-21)
 - **ONB-72** [all] An agent can't invite, be an admin or have agents of its own.
+- **ONB-73** [all] An agent is a different type of device that connects as its member but has its
+  own identity (its own key and profile) and its own to-dos. A member may have several (5 unless
+  an admin sets another number; admins have no limit) and gives each a name, shown before the
+  agent's own profile name. "I should be able to add more than one agent and I should be able to
+  edit their name. … Agents are basically a different type of device that can connect as me but
+  who also have their own identity and todos." (owner, 2026-11-25) → docs/agents.md
 
 ## Website accounts
 

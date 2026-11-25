@@ -475,6 +475,17 @@ def register(app: FastAPI) -> None:
                     doc["agents"] = found
             except Exception as exc:  # noqa: BLE001
                 log.warning("belfry.json: agents unknown: %s", exc)
+            # the names members gave their agents (agents.py); "agents" stays as it was
+            try:
+                from . import agents as agents_mod
+
+                named = await run_in_threadpool(agents_mod.given_names, services)
+                live = doc.get("agents") or {}
+                named = {a: n for a, n in named.items() if a in live}
+                if named:
+                    doc["agent_names"] = named
+            except Exception as exc:  # noqa: BLE001
+                log.warning("belfry.json: agent names unknown: %s", exc)
         # admins and agents change at once when someone changes them: clients revalidate every
         # time (cheap: 304 when nothing changed) instead of keeping a copy for 5 minutes
         body = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
