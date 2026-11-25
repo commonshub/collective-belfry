@@ -6,7 +6,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { addEvents, all, type Ev } from './store'
-import { isLocalOnly, me, queryOnce, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
+import { isLocalOnly, me, queryComplete, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
 import { plainName, plainOf } from './refs'
 import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat, encSeen, agentGivenName } from './access'
 import { CHARTER_ID, placeName } from './places'
@@ -964,7 +964,8 @@ function wantAdmins(groupId: string) {
   if (!wantTimer) wantTimer = setTimeout(() => {
     wantTimer = undefined
     const ids = wantedAdmins.splice(0, 200)
-    void queryOnce('groups', { kinds: [39001], '#d': ids }, 6000).then((got: Ev[]) => { if (got?.length) addEvents(got) }, () => ids.forEach((i) => askedAdmins.delete(i)))
+    // (on a signed-in socket: a REQ before AUTH is CLOSED, and that's no answer; asked again later)
+    void queryComplete('groups', [{ kinds: [39001], '#d': ids }], 6000, false, true).then((got) => { if (got) { if (got.length) addEvents(got) } else { ids.forEach((i) => askedAdmins.delete(i)); setTimeout(() => ids.forEach(wantAdmins), 5000) } })
   }, 200)
 }
 

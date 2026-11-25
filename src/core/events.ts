@@ -14,7 +14,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, getBackend, TZ } from '../config'
 import { calendar, eventByLinkLocal, EVENT_D, EVENT_STATUS_NS, eventUrl, group, groups, type CalEvent, type Rsvp, type Visibility } from './model'
 import { all, addEvents, touch, type Ev } from './store'
-import { currentSigner, enqueue, isLocalOnly, me, newId, queryOnce, signedFetch, uploadBlob } from './sync'
+import { currentSigner, enqueue, isLocalOnly, me, newId, queryComplete, signedFetch, uploadBlob } from './sync'
 import { isGuest } from './invite'
 import { isAdmin } from './access'
 import { editGroupMeta, relayAdmin, setGroupRole } from './checkin'
@@ -418,6 +418,7 @@ export function formOf(e: CalEvent): EventForm {
 const versionsAsked = new Set<string>()
 let versionsQueue: string[] = []
 let versionsTimer: ReturnType<typeof setTimeout> | undefined
+const versionsTries = new Map<string, number>()
 export function askVersions(ds: string[]) {
   if (isLocalOnly()) return
   for (const d of ds) if (d && /^(\d{4}-)?[a-z0-9]{6}$/.test(d) && !versionsAsked.has(d)) { versionsAsked.add(d); versionsQueue.push(d) }
@@ -425,7 +426,15 @@ export function askVersions(ds: string[]) {
   versionsTimer = setTimeout(() => {
     versionsTimer = undefined
     const batch = versionsQueue.splice(0, 100)
-    void queryOnce('main', { kinds: [31922, 31923], '#d': batch, limit: 1000 }, 8000).then((got) => { if (got.length) addEvents(got) }, () => batch.forEach((d) => versionsAsked.delete(d)))
+    // asked only on a socket the members-only relay has signed in (a REQ before AUTH is CLOSED "auth-required":
+    // queryOnce took that for "nothing", and the event was never asked again; Xavier, OSV h9ptvr, 25 Nov).
+    // No complete answer: asked again a few seconds later (5 tries)
+    void queryComplete('main', [{ kinds: [31922, 31923], '#d': batch, limit: 1000 }], 8000, false, true).then((got) => {
+      if (got) { if (got.length) addEvents(got); return }
+      for (const d of batch) versionsAsked.delete(d)
+      const n = (versionsTries.get(batch[0]) ?? 0) + 1
+      if (n <= 5) { versionsTries.set(batch[0], n); setTimeout(() => askVersions(batch), 4000 * n) }
+    })
     if (versionsQueue.length) askVersions([])
   }, 250)
 }
