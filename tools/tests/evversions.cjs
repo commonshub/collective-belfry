@@ -76,6 +76,8 @@ const has = (b, text) => b.ev(`document.body.innerText.includes(${JSON.stringify
     v1]) });
   await S.ev("location.reload()"); await sleep(6000);
   await S.ev(`location.hash = '#/events/${d}'`); await sleep(2500);
+  const ra = await S.ev("JSON.stringify(window.__belfryRelays || {})");
+  check("Diagnostics: the community relay's sign-in is recorded (signed in), with no key in it", /"main":\{[^}]*"state":"signed in"/.test(ra) && !/[0-9a-f]{64}/.test(ra), ra);
   check("the event shows (the first version)", /Old title/.test(await S.ev("document.querySelector('.ev-screen .topbar h1')?.innerText || ''")), await S.ev("document.body.innerText.slice(0, 200)"));
   // something newer arrives, so this device's sync mark moves past the co-host's version-to-come
   await fetch(relayHttp + "/publish", { method: "POST", body: JSON.stringify([finalizeEvent({ kind: 0, created_at: now, tags: [], content: JSON.stringify({ name: "Sam" }) }, samSk)]) });

@@ -550,17 +550,29 @@ function sockOf(target: Target): Sock {
       setRelay(url, 'up')
       resubscribe(target) // catches up from the mark
       void flush()
+      // Diagnostics: still not signed in 10 s after connecting means every REQ there is refused and only stored
+      // data shows (Xavier's stale event on OSV, 25 Nov): say so in the console
+      const gen = connGen[target]
+      setTimeout(() => { if (connGen[target] === gen && !authed[target] && signer && !localOnly) noteAuth(target, url, 'not yet', 'no sign-in 10 s after connecting: what this relay holds is refused; stored data only') }, 10_000)
     },
     down: () => { authed[target] = false; setRelay(url, 'down') },
     auth: (r) => {
       setRelay(url, 'auth')
       r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
-        .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = !replayed[target]; resubscribe(target) })
-        .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
+        .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = !replayed[target]; resubscribe(target); noteAuth(target, url, 'signed in') })
+        .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)); noteAuth(target, url, 'failed', String(e?.message ?? e)) })
     },
   })
   return so
 }
+
+/** Each relay's sign-in, for Diagnostics (window.__belfryRelays): never a key, an event or a token. */
+export const relayAuth: Partial<Record<Target, { url: string; state: 'signed in' | 'failed' | 'not yet'; at: string; why?: string }>> = {}
+function noteAuth(target: Target, url: string, state: 'signed in' | 'failed' | 'not yet', why = '') {
+  relayAuth[target] = { url, state, at: new Date().toISOString(), ...(why ? { why: why.slice(0, 200) } : {}) }
+  if (state !== 'signed in') console.warn(`[belfry] ${url}: ${state === 'failed' ? 'sign-in failed' : 'not signed in'}${why ? `: ${why.slice(0, 200)}` : ''}`)
+}
+if (typeof window !== 'undefined') (window as unknown as { __belfryRelays: typeof relayAuth }).__belfryRelays = relayAuth
 
 /** The open socket for TARGET (opened if needed). */
 const relay = (target: Target): Promise<Relay> => sockOf(target).get()
