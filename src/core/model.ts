@@ -1,3 +1,4 @@
+import { roleOf } from './myrole'
 import { clearInGroup } from './enc/core'
 import { encryptedMedia } from './dmfiles'
 import { sha256 } from '@noble/hashes/sha256'
@@ -1204,7 +1205,7 @@ export function guestJoins(groupId: string): GuestJoin[] {
     // a guest's join carries ["guest", <last day>] (docs/guests.md); an account that took the channel through a
     // link or a card has none: a member's join, never "Guest in …" (Xavier on belfry.brussels, 25 Nov)
     const asGuest = e.tags.some((t) => t[0] === 'guest')
-    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) && !member.has(p), member: member.has(p) || (!asGuest && tag(e, 'agent') !== '1') })
+    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) && !member.has(p), member: tag(e, 'agent') === '1' ? member.has(p) : (() => { const r = roleOf(p); return r ? r !== 'guest' : member.has(p) || !asGuest })() }) // (an agent's join: its own label, whose agent it is)
   }
   // someone who was taken out again without ever writing here (a double sign-up that was
   // cleaned up, an invite never used) leaves no line

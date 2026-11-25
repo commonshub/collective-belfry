@@ -48,3 +48,35 @@ export function applyRole(v: Role) {
   if (v === 'member' && guestInfo()) { setGuestInfo(null); changed = true } // (a guest link's info from before: not mine any more)
   if (changed) touch()
 }
+
+// ---- other people's roles, from the same belfry answer (the lead, 25 Nov: older guests' joins carry no
+// ["guest", …] tag, so the history can't tell; the tag is only the fallback while whois hasn't answered)
+const roles = new Map<string, Role>()
+const asked = new Set<string>()
+let queue = new Set<string>()
+let timer: ReturnType<typeof setTimeout> | undefined
+/** PK's role as the belfry said it, or undefined (asked in the background: a batch a moment later). */
+export function roleOf(pk: string): Role | undefined {
+  if (pk === me()) return myRole()
+  const r = roles.get(pk)
+  if (r || asked.has(pk) || isLocalOnly() || !/^[0-9a-f]{64}$/.test(pk)) return r
+  asked.add(pk)
+  queue.add(pk)
+  if (!timer) timer = setTimeout(() => { void flush() }, 300)
+  return undefined
+}
+async function flush() {
+  timer = undefined
+  const batch = [...queue].slice(0, 100)
+  queue = new Set([...queue].slice(100))
+  if (queue.size && !timer) timer = setTimeout(() => { void flush() }, 300)
+  if (!batch.length || !me()) return
+  try {
+    const r = await signedFetch(`${BELFRY.api}/whois`, 'POST', { pubkeys: batch })
+    if (!r.ok) { batch.forEach((k) => asked.delete(k)); return }
+    const d = (await r.json().catch(() => null)) as { people?: Record<string, unknown> } | null
+    let any = false
+    for (const k of batch) { const v = d?.people?.[k]; if (v === 'member' || v === 'guest' || v === 'agent') { roles.set(k, v); any = true } }
+    if (any) touch()
+  } catch { batch.forEach((k) => asked.delete(k)) } // (offline: asked again next time it's needed)
+}

@@ -10,12 +10,12 @@ import { sendDm } from './dm'
 import { allGroups, eventLink, eventOfGroup, group, groups, guestJoins, profiles, type Group, nameOf } from './model'
 import { isLocalOnly, me, signedFetch } from './sync'
 import { touch } from './store'
-import { myRole } from './myrole'
+import { roleOf } from './myrole'
 
 /** Someone who is in this belfry only as a channel's guest (a person or an agent). */
 export const isGuest = (pubkey: string) => {
   // me: what the belfry says (whois), when it said it; the history alone keeps a member's old guest join
-  if (pubkey === me()) { const r = myRole(); if (r) return r === 'guest' }
+  { const r = roleOf(pubkey); if (r) return r === 'guest' } // the belfry's word (whois); the history only until it answers
   return !agentOwner(pubkey) && allGroups().some((g) => guestJoins(g.id).some((j) => j.pubkey === pubkey && !j.member))
 }
 /** An agent (a channel's guest, or a member's own), not a person. */

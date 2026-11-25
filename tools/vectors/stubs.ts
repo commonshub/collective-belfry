@@ -32,3 +32,4 @@ export const groupWrapReady = () => false
 export const setPrivateVerdict = (_f: unknown) => {}
 export const encryptedFormat = (): 1 | 3 | undefined => 1
 export const encSeen = () => false
+export const roleOf = (_pk: string): undefined => undefined // (vectors: the history decides)

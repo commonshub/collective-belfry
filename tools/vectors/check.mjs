@@ -11,7 +11,7 @@ const stubs = path.join(root, 'tools/vectors/stubs.ts')
 const out = path.join(root, 'tools/vectors/.model.mjs')
 await build({
   entryPoints: [path.join(root, 'tools/vectors/entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'error',
-  plugins: [{ name: 'stubs', setup(b) { b.onResolve({ filter: /^(\.\/(store|sync|access)|\.\.\/config)$/ }, () => ({ path: stubs })) } }],
+  plugins: [{ name: 'stubs', setup(b) { b.onResolve({ filter: /^(\.\/(store|sync|access|myrole)|\.\.\/config)$/ }, () => ({ path: stubs })) } }],
 })
 const M = await import(out + '?' + Date.now())
 const vec = (f) => JSON.parse(readFileSync(path.join(root, 'vectors', f), 'utf8'))
