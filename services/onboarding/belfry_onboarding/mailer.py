@@ -8,11 +8,11 @@ of strings and ``(label, url)`` links (the text part then reads "label (url)")."
 
 from __future__ import annotations
 
+import email.policy
 import email.utils
 import logging
 import smtplib
 import ssl
-import email.policy
 from email.message import EmailMessage
 from html import escape
 from typing import Any
@@ -200,7 +200,16 @@ class Mailer:
                 conn.starttls(context=ssl.create_default_context())
             if s.smtp_user:
                 conn.login(s.smtp_user, s.smtp_password)
-            conn.send_message(msg, to_addrs=rcpts)
+            refused = conn.send_message(msg, to_addrs=rcpts)
+        # every mail leaves a line: who (masked), the provider's answer; never the subject (a
+        # code mail's subject holds the code) nor the body
+        log.info(
+            "mailer: mail %s to %s accepted by %s%s",
+            str(msg.get("Message-ID", "")).strip("<>").split("@")[0][:16],
+            masked([r for r in rcpts if r not in (refused or {})]) or "nobody",
+            s.smtp_host,
+            f"; refused for {masked(list(refused))}" if refused else "",
+        )
 
     def _html(
         self,
