@@ -33,10 +33,10 @@ from typing import Any
 
 import httpx
 from coincurve import PrivateKey
-from websockets.sync.client import connect
 
 from .blossom import event_id, verify_signature
 from .nip46check import BunkerClient, HostMap, Nip46Error
+from .wsync import connect
 
 
 class Signer:

@@ -212,10 +212,12 @@ async def status_data(svc: Services) -> dict[str, Any]:
     if _status["data"] is not None and now - _status["at"] < STATUS_SECONDS:
         return _status["data"]
     services = await check_all(svc.settings)
-    from . import mailcheck
+    from . import dbcheck, mailcheck
 
     # "Mail in (IPv4 / IPv6)": the last 5-minute check of port 25 from outside (mailcheck.py)
     services += await run_in_threadpool(mailcheck.status_rows, svc)
+    # a database file that no longer opens (dbcheck.py); no row while they are all sound
+    services += await run_in_threadpool(dbcheck.status_rows, svc)
     log_data = await run_in_threadpool(community.read_changelog, svc.settings.changelog_path) or {}
     entries = log_data.get("entries") or []
     code = next((e for e in entries if e.get("type") == "code"), None)

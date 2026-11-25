@@ -551,7 +551,7 @@ def publish_profile(svc: Services, partner: int, username: str) -> None:
 def relay_connect(settings: Any, event: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
     """Publish the browser's NIP-46 connect request on the bunker relay and return the bunker's
     answer (kind 24133 for the session key), so the page needs no WebSocket of its own."""
-    from websockets.sync.client import connect
+    from belfry_onboarding.wsync import connect
 
     url = getattr(settings, "session_relay_url", "")
     if not url:

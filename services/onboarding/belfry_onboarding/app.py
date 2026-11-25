@@ -50,6 +50,7 @@ from . import (
     connect,
     console,
     core,
+    dbcheck,
     devices,
     discovery,
     drops,
@@ -280,6 +281,10 @@ def create_app(services: Services | None = None) -> FastAPI:
             # a belfry on its own signer whose signer does not hold its members' keys does
             # not start (signerguard.py: never a new key for somebody who has one)
             await run_in_threadpool(signerguard.check_start, app.state.services)
+            # the SQLite files next to the register: checked, then the stores opened before any
+            # background thread starts (dbcheck.py: a store opened later took a just-freed fd)
+            await run_in_threadpool(dbcheck.check, app.state.services)
+            await run_in_threadpool(dbcheck.open_early, app.state.services)
         # Bring the relay whitelist and the Authentik participants group up to date with Odoo
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
@@ -308,6 +313,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             agents.running(app),  # members' agents follow their member into channels (agents.py)
             remoteapps.running(app),  # the remote signer of members' other Nostr apps
             devices.running(app),  # device lists, kind 8570 (docs/encrypted.md §3)
+            dbcheck.running(app),  # the SQLite files checked every hour (dbcheck.py)
         ):
             yield
 

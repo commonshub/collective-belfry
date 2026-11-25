@@ -169,7 +169,7 @@ class BunkerClient:
     ):
         import ssl
 
-        from websockets.sync.client import connect  # imported here: the module is also unit-tested
+        from belfry_onboarding.wsync import connect  # imported here: the module is also unit-tested
 
         self.bunker_pubkey, relays, self.secret = parse_bunker_url(bunker_url)
         self.relay = hostmap(relays[0])

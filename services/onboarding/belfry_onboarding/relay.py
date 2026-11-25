@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from websockets.sync.client import connect
+from .wsync import connect
 
 log = logging.getLogger(__name__)
 
