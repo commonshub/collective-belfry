@@ -564,11 +564,17 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 
 /** A QR code is a button: it opens full width on white with the URL under it. */
 export function QrSheet({ url, title, onClose }: { url: string; title: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
   const svg = useMemo(() => { const q = qrcode(0, 'M'); q.addData(url); q.make(); return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(q.createSvgTag({ cellSize: 8, margin: 2, scalable: true })) }, [url])
   return (
     <Sheet title={title} onClose={onClose}>
-      <div className="qr-full"><img src={svg} alt={`QR code for ${url}`} /><code>{url}</code></div>
-      <CopyButton text={url} label="Copy" />
+      <div className="qr-full"><img src={svg} alt={`QR code for ${url}`} /></div>
+      {/* Xavier (25 Nov): the address on one line, scrolling sideways, a small copy icon beside it */}
+      <div className="qr-url">
+        <code tabIndex={0} aria-label={url}>{url.replace(/^https:\/\//, '')}</code>
+        <button className="icon-btn qr-copy" aria-label={copied ? 'Copied' : 'Copy the link'} onClick={() => { void navigator.clipboard?.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500) }}>{copied ? <span className="evr-copied">Copied</span> : <CopyIcon />}</button>
+      </div>
+      <p className="hint">Show it to someone: their camera opens the page.</p>
     </Sheet>
   )
 }
