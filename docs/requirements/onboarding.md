@@ -116,6 +116,12 @@ docs/website-accounts.md, docs/setup.md, docs/agents.md. Canvas: onboarding, inv
   agent's own profile name. "I should be able to add more than one agent and I should be able to
   edit their name. … Agents are basically a different type of device that can connect as me but
   who also have their own identity and todos." (owner, 2026-11-25) → docs/agents.md
+- **ONB-74** [all] "Add an agent" gives the member at once the instructions for the agent to join
+  (a line to paste, Copy / Share; the link works once): no step to name it first. The agent joins
+  with its own name and description; once it is added, its member may override both. "Step not
+  needed. Directly give the instructions for the agent to join. It's when it's added that you can
+  if you want override their name and description." (owner, 2026-11-25, Home canvas
+  me2-agent-join / me2-agent-name-it) → docs/agents.md
 
 ## Website accounts
 
