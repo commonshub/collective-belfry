@@ -2334,3 +2334,10 @@ form .create-where { margin-bottom: 14px; }
 .my-agent .agent-row .chev { margin-left: auto; color: var(--muted); font-size: 20px; }
 .my-agent .agent-remove { font-size: 13px; margin: 4px 0 8px 46px; }
 .my-agent .agent-add { margin-top: 8px; }
+.my-agent .agent-name-it { font-size: 13px; margin: 2px 0 8px 46px; }
+.agent-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.agent-head .t { display: flex; flex-direction: column; }
+.agent-head small, .agent-access small { color: var(--muted); }
+.agent-access { display: flex; flex-direction: column; margin: 0 0 16px; }
+.agent-confirm { border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-top: 8px; }
+.agent-remove-btn { margin-top: 8px; }

@@ -66,6 +66,9 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
     }
     if (res.ok) { // members' own agents: agent key → its member's key (absent when there are none)
       belfryAgents = doc.agents && typeof doc.agents === 'object' ? doc.agents : {}
+      // the names their owners gave them (belfry.json "agent_names", the lead's server bed75f9)
+      const an = (doc as { agent_names?: unknown }).agent_names
+      agentNames = an && typeof an === 'object' ? Object.fromEntries(Object.entries(an as Record<string, unknown>).filter(([k, v]) => /^[0-9a-f]{64}$/.test(k) && typeof v === 'string' && v.trim()).map(([k, v]) => [k, (v as string).trim().slice(0, 60)])) : {}
       await kvSet('belfry-agents', belfryAgents)
       setBranding(doc.branding ?? {}) // the admins' logo, cover and colours (absent: none)
     }
@@ -127,6 +130,11 @@ let belfryAgents: Record<string, string> = {}
 export const agentOwner = (pubkey: string): string | undefined => belfryAgents[pubkey]
 /** Every member's own agent → its member (belfry.json "agents"). */
 export const agentOwners = (): Record<string, string> => ({ ...belfryAgents })
+let agentNames: Record<string, string> = {}
+/** The name an agent's owner gave it (shown before its own profile name), or undefined. */
+export const agentGivenName = (pk: string): string | undefined => agentNames[pk]
+/** After a rename here (the answer), until belfry.json is read again. */
+export const setAgentGivenName = (pk: string, name: string) => { if (name) agentNames[pk] = name; else delete agentNames[pk] }
 
 // The community's admins (belfry.json "admins"): admins of every channel too, without being
 // listed as its members (zooid patch 0003 lets the relay take their moderation).

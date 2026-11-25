@@ -8,7 +8,7 @@ import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
 import { plainName, plainOf } from './refs'
-import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat, encSeen } from './access'
+import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat, encSeen, agentGivenName } from './access'
 import { CHARTER_ID, placeName } from './places'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
@@ -90,6 +90,8 @@ export const fallbackName = (pubkey: string) => (looksLikeAgent(pubkey) ? FALLBA
 
 export function displayName(pubkey: string, ps = profiles()) {
   if (pubkey === me()) return 'You'
+  const given = agentGivenName(pubkey) // an agent's name, as its owner chose it
+  if (given) return given
   const p = ps.get(pubkey)
   const n = p?.name || p?.nip05?.split('@')[0]
   if (n) return n

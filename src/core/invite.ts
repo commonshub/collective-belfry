@@ -3,7 +3,7 @@
 // admits them, so the link opens straight away. Guests of other channels are not members: they
 // need a guest link (the invite sheet's switch), not this.
 import { BELFRY } from '../config'
-import { agentOwner, agentOwners, canAdmin, demoSetAgents, isAdmin, loadAccessInfo } from './access'
+import { agentOwner, agentOwners, canAdmin, demoSetAgents, isAdmin, loadAccessInfo, setAgentGivenName } from './access'
 import { relayAdmin } from './checkin'
 import { admit } from './actions'
 import { sendDm } from './dm'
@@ -60,7 +60,7 @@ export async function inviteMember(groupId: string, pubkey: string): Promise<'ad
 }
 
 // ── a member's own agents (Belfry's agents.py) ──────────────────────────────────────────────
-export interface MyAgents { agents: { pubkey: string; name: string; since: string }[]; limit: number; /** admins: any number (the lead) */ unlimited?: boolean }
+export interface MyAgents { agents: { pubkey: string; name: string; since: string; given_name?: string | null; profile_name?: string | null; reads?: boolean }[]; limit: number; /** admins: any number (the lead) */ unlimited?: boolean }
 
 async function agentsCall(body: Record<string, unknown>): Promise<MyAgents> {
   const res = await signedFetch(`${BELFRY.api}/agents`, 'POST', body)
@@ -72,6 +72,18 @@ async function agentsCall(body: Record<string, unknown>): Promise<MyAgents> {
 export const myAgents = (): Promise<MyAgents> => isLocalOnly()
   ? Promise.resolve({ agents: Object.entries(agentOwners()).filter(([, o]) => o === me()).map(([pubkey]) => ({ pubkey, name: profiles().get(pubkey)?.name ?? 'Agent', since: '' })), limit: isAdmin() ? 0 : 5, unlimited: isAdmin() })
   : agentsCall({})
+/** Name my agent ("" clears it): POST /agents {pubkey, name}; the name its owner gives it shows everywhere. */
+export async function nameMyAgent(pubkey: string, name: string): Promise<string> {
+  const n = name.trim().slice(0, 60)
+  if (isLocalOnly()) { setAgentGivenName(pubkey, n); touch(); return n }
+  const res = await signedFetch(`${BELFRY.api}/agents`, 'POST', { pubkey, name: n })
+  const out = (await res.json().catch(() => ({}))) as { given_name?: string | null; error?: string }
+  if (!res.ok) throw new Error(out.error === 'invalid_name' ? 'A name of 1 to 60 characters.' : out.error === 'not_owner' ? 'Only its owner can name it.' : 'Not saved. Try again.')
+  const given = typeof out.given_name === 'string' ? out.given_name : n
+  setAgentGivenName(pubkey, given)
+  touch()
+  return given
+}
 /** Make a guest agent my own (it stays a member for as long as I am one), or remove my agent. */
 export async function setMyAgent(pubkey: string, mine: boolean): Promise<MyAgents> {
   if (isLocalOnly()) { // demo: what the belfry would do to belfry.json "agents"

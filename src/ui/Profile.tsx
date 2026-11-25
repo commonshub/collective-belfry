@@ -3,6 +3,7 @@
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
 // or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
 import { myRole } from '../core/myrole'
+import { agentGivenName } from '../core/access'
 import { AgentAccess } from './WhoCanRead'
 import { encOn } from '../core/enc/runtime'
 import { BELFRY, NAME, THEME } from '../config'
@@ -17,7 +18,7 @@ import { ADMIN, loadRoles, roleById, roleOf, rolesLoaded, setMemberRole } from '
 import { RolePickerSheet } from './RolePicker'
 import { DOOR, STEWARD } from '../core/places'
 import { agentOwner, agentOwners, isAdmin } from '../core/access'
-import { isAgent, isGuest, LINK_ERRORS, LinkFailed, makeInviteLink, myAgents, setMyAgent, type MyAgents } from '../core/invite'
+import { isAgent, isGuest, LINK_ERRORS, LinkFailed, makeInviteLink, myAgents, nameMyAgent, setMyAgent, type MyAgents } from '../core/invite'
 import { guestTags, loadGuestTags } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
@@ -238,8 +239,8 @@ function MyAgentCard() {
   const community = useCommunityName(NAME)
   const [mine, setMine] = useState<MyAgents | null>(null)
   const [adding, setAdding] = useState(false)
-  const [dropping, setDropping] = useState('')
   const [error, setError] = useState('')
+  const [open, setOpen] = useState<{ pubkey: string; naming?: boolean } | null>(null)
   useEffect(() => { myAgents().then(setMine, () => setMine({ agents: [], limit: 1 })) }, [JSON.stringify(agentOwners())]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!mine) return null
   // several agents (Xavier, 25 Nov; Home canvas me2): admins any number, members up to the belfry's limit
@@ -250,13 +251,9 @@ function MyAgentCard() {
       <div className="hint card-title">Your agents</div>
       {mine.agents.map((a) => (
         <div key={a.pubkey} className="agent-row">
-          <button className="row link-row" onClick={() => openProfile(a.pubkey)}><Avatar pubkey={a.pubkey} size={36} /><span className="t"><b>{displayName(a.pubkey) || a.name}</b><small>{made(a.since)} · everyone sees it is yours</small></span><span className="chev" aria-hidden="true">›</span></button>
-          {dropping === a.pubkey
-            ? <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                <Btn className="btn small danger" onClick={async () => { setError(''); try { setMine(await setMyAgent(a.pubkey, false)); setDropping('') } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }}>Remove</Btn>
-                <button className="btn small ghost" onClick={() => setDropping('')}>Keep</button>
-              </div>
-            : <button className="link danger agent-remove" onClick={() => setDropping(a.pubkey)}>Remove {displayName(a.pubkey) || 'this agent'}…</button>}
+          <button className="row link-row" onClick={() => setOpen({ pubkey: a.pubkey })}><Avatar pubkey={a.pubkey} size={36} /><span className="t"><b>{displayName(a.pubkey) || a.name}</b><small>{made(a.since)}{a.reads ? ' · can read your private messages' : ''}</small></span><span className="chev" aria-hidden="true">›</span></button>
+          {/* a new agent has no name of mine yet: name it right here (the lead, 25 Nov) */}
+          {!agentGivenName(a.pubkey) && !a.given_name && <button className="link agent-name-it" onClick={() => setOpen({ pubkey: a.pubkey, naming: true })}>Name it</button>}
         </div>
       ))}
       {room > 0 && <button className="btn ghost agent-add" onClick={() => setAdding(true)}>Add an agent</button>}
@@ -264,7 +261,45 @@ function MyAgentCard() {
       <p className="agent-why">An agent is an AI (ChatGPT, Claude or Grok) you give a link to. It posts as your agent: everyone sees it isn’t you.</p>
       {error && <div className="error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
       {adding && <AddAgentSheet community={community} onClose={() => setAdding(false)} />}
+      {open && mine.agents.find((a) => a.pubkey === open.pubkey) && <AgentSheet a={mine.agents.find((a) => a.pubkey === open.pubkey)!} naming={!!open.naming} onClose={() => setOpen(null)}
+        onRemoved={async () => { setError(''); try { setMine(await setMyAgent(open.pubkey, false)); setOpen(null) } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }} />}
     </div>
+  )
+}
+
+/** An agent of mine (Home canvas me2-agent, me2-agent-remove): its name (mine to change), when it was
+ *  made, whether it reads my private messages, and Remove, which asks first. */
+function AgentSheet({ a, naming, onClose, onRemoved }: { a: MyAgents['agents'][number]; naming: boolean; onClose: () => void; onRemoved: () => Promise<void> }) {
+  useVersion()
+  const shown = displayName(a.pubkey) || a.name
+  const [name, setName] = useState(agentGivenName(a.pubkey) ?? a.given_name ?? (naming ? '' : shown))
+  const [said, setSaid] = useState('')
+  const [error, setError] = useState('')
+  const [asking, setAsking] = useState(false)
+  const since = a.since ? new Date(a.since) : null
+  return (
+    <Sheet title={shown} onClose={onClose}>
+      <div className="agent-head"><Avatar pubkey={a.pubkey} size={48} /><span className="t"><b>{shown}</b><small>Your agent{since && !isNaN(+since) ? ` · made ${fmtDay(since)}` : ''}</small></span></div>
+      <Form className="agent-name" onSubmit={async () => {
+        setError(''); setSaid('')
+        try { const got = await nameMyAgent(a.pubkey, name); setName(got); setSaid('Saved.') } catch (x) { setError(x instanceof Error ? x.message : String(x)) }
+      }}>
+        <label className="field"><span>Name</span>
+          <input className="input" aria-label="Name" value={name} maxLength={60} autoFocus={naming} placeholder={a.profile_name || 'Errand helper'} onChange={(e) => { setName(e.target.value); setSaid('') }} /></label>
+        <p className="hint">It shows everywhere this agent appears. Leave it empty for the name it gave itself.</p>
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="btn" disabled={name.trim() === (agentGivenName(a.pubkey) ?? a.given_name ?? '')}>Save the name</button>
+        {said && <p className="hint" role="status">{said}</p>}
+      </Form>
+      <div className="field"><span>Access</span></div>
+      <p className="agent-access"><b>Your private messages</b><small>{a.reads ? 'It can read them, on its own device' : 'It can’t read them'}</small></p>
+      {!asking ? <button className="link danger agent-remove-btn" onClick={() => setAsking(true)}>Remove the agent</button>
+        : <div className="agent-confirm" role="alertdialog" aria-label={`Remove ${shown}?`}>
+            <b>Remove {shown}?</b>
+            <p className="hint">It stops at once: its link no longer works and it can’t read anything new. What it posted stays, marked as your agent’s.</p>
+            <div className="row-btns two"><Btn className="btn danger" onClick={onRemoved}>Remove</Btn><button className="btn ghost" onClick={() => setAsking(false)}>Cancel</button></div>
+          </div>}
+    </Sheet>
   )
 }
 
