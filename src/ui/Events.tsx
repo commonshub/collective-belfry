@@ -137,7 +137,13 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
   // ---- pulling the header ----
   const start = useRef<{ y: number; x: number; dragging: boolean } | null>(null)
   const [drag, setDrag] = useState(0)
-  const onDown = (x: React.PointerEvent) => { if (x.pointerType === 'mouse' && x.button !== 0) return; start.current = { y: x.clientY, x: x.clientX, dragging: false } }
+  const onDown = (x: React.PointerEvent) => {
+    if (x.pointerType === 'mouse' && x.button !== 0) return
+    // fully open, the details scroll: a drag inside them is a scroll, never a pull (Xavier, 25 Nov: About was unreadable);
+    // the handle still pulls
+    if (level === 2 && (x.target as Element).closest?.('.evh-body') && !(x.target as Element).closest?.('.evh-handle')) { start.current = null; return }
+    start.current = { y: x.clientY, x: x.clientX, dragging: false }
+  }
   const onMove = (x: React.PointerEvent) => {
     const s = start.current
     if (!s) return

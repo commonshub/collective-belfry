@@ -771,7 +771,9 @@ function filters(target: Target): Filter[] {
   if (target === 'groups') return [
     { kinds, since, limit: 2000 },
     ...extraGroups(),
-    { kinds: [39000, 39001, 39002, 39003], limit: 1000 },
+    // each kind its own filter: one cap of 1000 for the four left some groups' admins out on a big belfry
+    // (OSV: an event's co-host versions were dropped as not a host's: model.calendar, 25 Nov)
+    { kinds: [39000], limit: 3000 }, { kinds: [39001], limit: 3000 }, { kinds: [39002], limit: 3000 }, { kinds: [39003], limit: 1000 },
     { kinds: [2100, 2101, 2102, 2103], '#h': ['charter'], limit: 2000 },
   ]
   if (!signer) return [{ kinds, since, limit: 2000 }]

@@ -5,8 +5,8 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
-import { all, type Ev } from './store'
-import { me, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
+import { addEvents, all, type Ev } from './store'
+import { isLocalOnly, me, queryOnce, setWriteGuard, groupWrapReady, setPrivateVerdict } from './sync'
 import { plainName, plainOf } from './refs'
 import { agentOwner, belfryAdminKeys, belfryGroupsKey, isAdmin as isAdminNow, encryptedFormat, encSeen, agentGivenName } from './access'
 import { CHARTER_ID, placeName } from './places'
@@ -954,6 +954,20 @@ export const eventCoordOf = (e: Ev) => {
 export const eventCoordsOf = (e: Ev) =>
   [...new Set(e.tags.filter((t) => t[0] === 'a' && isEventKind(Number((t[1] ?? '').split(':')[0]))).map((t) => t[1]))].slice(0, 3)
 
+// an event group's admins (39001), asked once when an event has versions by others and the list never came
+const askedAdmins = new Set<string>()
+let wantedAdmins: string[] = []
+let wantTimer: ReturnType<typeof setTimeout> | undefined
+function wantAdmins(groupId: string) {
+  if (askedAdmins.has(groupId) || isLocalOnly()) return
+  askedAdmins.add(groupId); wantedAdmins.push(groupId)
+  if (!wantTimer) wantTimer = setTimeout(() => {
+    wantTimer = undefined
+    const ids = wantedAdmins.splice(0, 200)
+    void queryOnce('groups', { kinds: [39001], '#d': ids }, 6000).then((got: Ev[]) => { if (got?.length) addEvents(got) }, () => ids.forEach((i) => askedAdmins.delete(i)))
+  }, 200)
+}
+
 export const calendar: () => CalEvent[] = perLog((list) => {
   const del = deleted(list)
   const gs = new Map(allGroups().map((g) => [g.id, g]))
@@ -981,6 +995,7 @@ export const calendar: () => CalEvent[] = perLog((list) => {
   }
   const statusLabels = new Map<string, Ev[]>()
   for (const e of list) if (e.kind === 1985 && tag(e, 'L') === EVENT_STATUS_NS) { const h = tag(e, 'h'); if (h) statusLabels.set(h, [...(statusLabels.get(h) ?? []), e]) }
+  const admins39001 = new Set(list.filter((x) => x.kind === 39001).map((x) => tag(x, 'd')).filter(Boolean) as string[])
   const out: CalEvent[] = []
   for (const [key, versions] of byKey) {
     const sorted = [...versions].sort(byTime)
@@ -993,6 +1008,8 @@ export const calendar: () => CalEvent[] = perLog((list) => {
     if (isNew) {
       creator = creators.get(groupId) ?? sorted[0].pubkey
       hosts = new Set([creator, ...(gs.get(groupId)?.admins ?? [])])
+      // versions by others while this group's admin list (39001) never arrived: ask for it (then they're judged)
+      if (sorted.some((v) => v.pubkey !== creator) && !admins39001.has(groupId)) wantAdmins(groupId)
       const mine = sorted.filter((v) => hosts.has(v.pubkey))
       if (!mine.length) continue
       e = mine.at(-1)!
