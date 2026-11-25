@@ -10,6 +10,7 @@
 //   Town     = the town's channels, with the ☰ drawer
 //   Messages = direct messages and e-mail (the bar's middle since 2026-11-22: no Create sheet; each
 //              thing is made where it lives: the composer's +, Calendar's +, Groups' +)
+import { myRole } from '../core/myrole'
 import { GroupName } from './GroupName'
 import { AgreementAbout } from './Charter'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
@@ -49,7 +50,7 @@ export type Place = 'home' | 'calendar' | 'messages' | 'groups' | 'town'
 export const placesOn = () => THEME === 'belfry' && !reading()
 
 /** I am here as a guest (of one or more channels), not a member nor a member's agent. */
-export const amGuest = () => !agentOwner(me()) && (isGuest(me()) || (!!guestInfo() && !guestInfo()!.member && !isBelfryAdmin(me())))
+export const amGuest = () => { const r = myRole(); if (r) return r === 'guest' /* the belfry's word (whois) */; return !agentOwner(me()) && (isGuest(me()) || (!!guestInfo() && !guestInfo()!.member && !isBelfryAdmin(me()))) }
 
 /** A channel of the town (the drawer's): not a group, an event's chat or a proposal. */
 export function isTownChannel(id: string): boolean {

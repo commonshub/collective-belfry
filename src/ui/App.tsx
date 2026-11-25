@@ -1,3 +1,4 @@
+import { applyRole, refreshMyRole } from '../core/myrole'
 import { startNames } from '../core/names'
 import { demoTyping, demoTypingSent, setShowMyTyping, showMyTyping, watchDms } from '../core/typing'
 import { replaceHash } from '../core/nav'
@@ -217,6 +218,13 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   const [error, setError] = useState('')
   const [, setTick] = useState(0)
   useEffect(() => onAccessInfo(() => setTick((t) => t + 1)), [])
+  // my role from the belfry (whois), at start and back in the app: never the guest view for a member (myrole.ts)
+  useEffect(() => {
+    const ask = () => { if (document.visibilityState === 'visible') void refreshMyRole() }
+    const t = setTimeout(ask, 1500)
+    document.addEventListener('visibilitychange', ask)
+    return () => { clearTimeout(t); document.removeEventListener('visibilitychange', ask) }
+  }, [session])
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -252,7 +260,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         watchDms() // others typing to me (typing.ts): one live subscription on the community relay
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, demoSealed, demoAsk, demoAdded, demoLinked, demoUnlockHere, demoFreshElsewhere, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
+        if (session.backend === 'demo') Object.assign(window, { demoRole: applyRole, demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSetAgents, demoSealed, demoAsk, demoAdded, demoLinked, demoUnlockHere, demoFreshElsewhere, __demoTyping: demoTyping, __demoTypingSent: () => demoTypingSent, __demoMe: () => me(), __demoOrder: () => orderContent() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
