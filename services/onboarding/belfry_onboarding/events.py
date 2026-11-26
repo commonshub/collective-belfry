@@ -576,27 +576,24 @@ def _when(value: str | None, all_day: bool) -> dt.datetime | dt.date | None:
 
 
 def hosts_of(svc: Services, group: str) -> tuple[set[str], str | None]:
-    """The group's admins (39001), and its creator (the author of its 9007), when known."""
-    from .checkin import role_admins
+    """An event's hosts: its creator (the author of its 9007, or the ``by`` of a 9007 the groups
+    key made for someone) and its co-hosts (put in with the admin role, checkin.py), and the
+    creator alone. Never the relay's 39001 as such (the relay owner, the belfry's admins): Xavier,
+    2026-11-26, "Only the person who created the event and the person invited as co-hosts should
+    be admins of the event and seen as co-hosts."
+    """
+    from .checkin import creator_of, groups_pubkey, role_admins
 
-    found = groups(
-        svc,
-        [
-            {"kinds": [39001], "#d": [group], "limit": 1},
-            {"kinds": [9007, 9000, 9001], "#h": [group]},
-        ],
-    )
-    admins = {
-        t[1]
-        for e in found
-        if e.get("kind") == 39001
-        for t in e.get("tags", [])
-        if t[:1] == ["p"] and len(t) > 1
-    }
-    # co-hosts: put in with the admin role (zooid's 39001 never lists them; checkin.py)
-    admins |= role_admins([e for e in found if tag(e, "h") == group])
-    made = sorted((e for e in found if e.get("kind") == 9007), key=lambda e: e["created_at"])
-    return admins, (made[0]["pubkey"] if made else None)
+    found = [
+        e
+        for e in groups(svc, [{"kinds": [9007, 9000, 9001], "#h": [group]}])
+        if tag(e, "h") == group
+    ]
+    creator = creator_of([e for e in found if e.get("kind") == 9007], groups_pubkey(svc))
+    admins = role_admins(found)
+    if creator:
+        admins.add(creator)
+    return admins, creator
 
 
 def load(svc: Services, d: str) -> Event | None:

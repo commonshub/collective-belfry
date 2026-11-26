@@ -500,7 +500,9 @@ def test_co_host_edits_follow_rule_b(rsvc, world):
     assert events.load(rsvc, D).title == "Garden day"
     world.put(bea, 31923, tags, "x", at=later)  # a host's version, before being a host: ignored
     assert events.load(rsvc, D).title == "Garden day"
-    world.admins(GROUP, [pk(ada), pk(bea)])
+    world.admins(GROUP, [pk(ada), pk(bea)])  # the relay's 39001 alone makes no host
+    assert events.load(rsvc, D).title == "Garden day"
+    world.put(world.gkey, 9000, [["h", GROUP], ["p", pk(bea), "admin"], ["role", "admin"]])
     ev = events.load(rsvc, D)
     assert ev.title == "Garden day (moved)" and ev.coord == f"31923:{pk(ada)}:{D}"
 

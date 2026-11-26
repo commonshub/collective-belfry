@@ -10,9 +10,9 @@ existing co-host link (POST /channel-invites ``"role": "host"``), which asks for
 
 API (belfry.<domain>/api/v1/…, NIP-98):
 
-- ``POST /events/<d>/cohost-invites {"pubkey"}`` by a host (the creator, a co-host, any admin of
-  the event's group, a belfry admin) → ``{"invite": {...}}``; again while pending → the same
-  invitation with ``"already": true``;
+- ``POST /events/<d>/cohost-invites {"pubkey"}`` by a host (the creator or a co-host; since
+  2026-11-26 not a belfry admin who hosts nothing) → ``{"invite": {...}}``; again while
+  pending → the same invitation with ``"already": true``;
 - ``POST /events/<d>/cohost-invites/answer {"accept": true | false}`` by the invitee;
 - ``POST /events/<d>/cohost-invites/withdraw {"pubkey"}`` by a host;
 - ``GET /events/<link>``: ``me.cohost_invite`` (pending, for the invitee) and, for hosts,
@@ -63,11 +63,9 @@ def own(svc: Services) -> bool:
 
 
 def is_host(svc: Services, ev: events.Event, pubkey: str) -> bool:
-    """Who may invite and withdraw: the event's hosts (its creator and every admin of its group,
-    by the relay or by role) and the belfry's admins."""
-    from . import checkin
-
-    return bool(pubkey) and (pubkey in ev.hosts or pubkey in checkin._belfry_admins(svc))
+    """Who may invite and withdraw: the event's hosts, its creator and its co-hosts by role
+    (events.hosts_of). The belfry's admins only when they host it (Xavier, 2026-11-26)."""
+    return bool(pubkey) and pubkey in ev.hosts
 
 
 def lapsed(ev: events.Event, row: dict[str, Any], now: float | None = None) -> bool:
@@ -149,8 +147,8 @@ def _refuse_closed(svc: Services, ev: events.Event) -> None:
 
 
 def _already_host(svc: Services, ev: events.Event, pubkey: str) -> bool:
-    """Shown as the host or a co-host already (checkin.viewer_roles: the community's admins,
-    who administer every group, can still be invited to be listed as co-hosts)."""
+    """The host or a co-host already (checkin.viewer_roles: the community's admins, who
+    administer every group on the relay, host no event until they are invited)."""
     from . import checkin
 
     st = checkin.group_state(svc, ev.group)

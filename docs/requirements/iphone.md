@@ -46,3 +46,10 @@ engineering rules (layout rules that prevent hangs, offline-first, demo mode).
 - **IOS-23** [iphone] The export-compliance answer (the app implements NIP-44 itself) is the
   owner's call. (to confirm)
 - **IOS-24** [iphone] The marketing version follows Android's number.
+
+## To do
+
+- **IOS-30** [iphone] Event hosts per EV-14 (owner, 2026-11-26: web only for now, native later):
+  an event's hosts = its creator + co-hosts by role, never the relay's 39001 alone; any co-host
+  removes any co-host (`POST /group-roles` `removed`), never the creator (409 `always_admin`);
+  edits (versions, status labels, tickets) count only by those hosts. docs/checkin.md §1.

@@ -45,3 +45,10 @@ holds the engineering rules (demo mode, outbox, screenshot tests).
   the drawer's bottom); two identities on one belfry both get push.
 - **AND-21** [android] Sign in to third-party Nostr apps by scanning their `nostrconnect://` QR,
   next to "Link a phone or tablet" (Android only for now; owner, 2026-11-20). → privacy.md PRIV-35
+
+## To do
+
+- **AND-30** [android] Event hosts per EV-14 (owner, 2026-11-26: web only for now, native later):
+  an event's hosts = its creator + co-hosts by role, never the relay's 39001 alone; any co-host
+  removes any co-host (`POST /group-roles` `removed`), never the creator (409 `always_admin`);
+  edits (versions, status labels, tickets) count only by those hosts. docs/checkin.md §1.

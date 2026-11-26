@@ -68,6 +68,12 @@ website's event page), docs/sales.md §10 (tickets through the checkout), docs/r
   "Inviting people to an event"
 - **EV-13** [apps] After an RSVP only the answer shows on the card; tap for details. RSVP never
   counts twice.
+- **EV-14** [all] "Only the person who created the event and the person invited as co-hosts
+  should be admins of the event and seen as co-hosts. Any co-host can remove any co-host."
+  (owner, 2026-11-26) The belfry's admins (the relay's 39001) don't edit, invite, check in or
+  change roles on an event they neither made nor were invited to; the creator can't be removed.
+  Server built 2026-11-26 (docs/checkin.md §1 "An event's hosts"); web first, iPhone and Android
+  later (IOS-30, AND-30).
 
 ## Tickets and prices
 

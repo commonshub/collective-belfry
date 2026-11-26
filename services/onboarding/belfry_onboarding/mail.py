@@ -249,6 +249,11 @@ def inbox_d(channel: str) -> str:
 
 
 def group_admins(svc: Services, channel: str) -> set[str]:
+    from . import checkin
+
+    if checkin.is_event_group(channel):
+        # an event's admins are its hosts only: creator + co-hosts by role (Xavier, 2026-11-26)
+        return checkin.group_state(svc, channel).admins
     got = followers._relay(svc)
     if got is None:
         return set()

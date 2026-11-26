@@ -21,7 +21,7 @@ All calls are NIP-98 signed, under `https://belfry.<domain>/api/v1/`. Errors are
 
 | Role | What it is | UI word |
 | --- | --- | --- |
-| `admin` | the relay's 39001 for the group, plus everyone put in with the admin role (below) | Admin; in an event the creator is "Host", the others "Co-host" |
+| `admin` | a channel / group: the relay's 39001, plus everyone put in with the admin role (below). An event (`ev-`, `ws-`): only its creator and its co-hosts by role (below, "An event's hosts") | Admin; in an event the creator is "Host", the others "Co-host" |
 | `steward` | events only: may check people in and see the attendee list | Steward |
 | `member` | everyone else in the group | Member; in an event "Attendee" |
 
@@ -37,12 +37,45 @@ the relay goes through the belfry, signed by the groups key (decisions on applic
 check-in, roles); moderation events they sign themselves (a 9000, a 9002 metadata edit) are
 refused by the relay. A relay patch would lift that; not done (see "Open" below).
 
+**An event's hosts (2026-11-26).** Xavier: "Only the person who created the event and the person
+invited as co-hosts should be admins of the event and seen as co-hosts. Any co-host can remove
+any co-host." (requirements EV-14). For an event group (`ev-<d>`, older `ws-`) the admins, hosts
+and co-hosts are exactly:
+
+- the **creator**: the author of the group's first 9007, or, when the groups key made it for
+  someone (a printed card), the key in its `by` tag; when no 9007 is seen, the author of the
+  event's oldest version;
+- the **co-hosts by role**: the latest 9000/9001 per key is a 9000 with `["p", key, "admin"]`
+  (co-host links, accepted co-host invitations, `POST /group-roles` `admin`, the migration below).
+
+The relay's 39001 (the relay owner, the community's admins, the groups key) counts for nothing
+here: a belfry admin who neither made the event nor was invited hosts nothing. This one set
+(`events.hosts_of` → `Event.hosts`, `checkin.GroupState.admins`, `mail.group_admins`) decides
+everything about the event: which version is the event (the newest by a host), status labels,
+tickets and their deletions, `PUT /<d>/slug`, `/decide`, `/group-roles`, `/group-meta`,
+co-host links and invitations, meeting guests, `may_check_in` (hosts, co-hosts and stewards;
+not a belfry admin who doesn't host), and the API's `hosts`, `hosted_by`, `me.host`, `me.roles`.
+Any host (the creator or a co-host) changes any co-host's role, removal included; the creator
+can't be made member / steward or removed (409 `always_admin`), so an event always keeps a host.
+Relay-level moderation by the belfry's admins (their own 9000/9001/9005 on zooid) is untouched.
+Channels and groups keep the rules above.
+
+**Migration (once, at start).** So that edits made under the old rule keep counting: for every
+event whose newest version by an old-rule host (39001 ∪ creator ∪ by role) is signed by someone
+who is now neither the creator nor a co-host by role, the server makes that person a co-host by
+role: a 9000 `["h", ev-<d>] ["p", key, "admin"] ["role", "admin"] ["migrated", "hosts"]` by the
+groups key, one log line per person (key cut to 8 characters). Done once per belfry (param
+`hosts-migration-2026-11-26` in events.sqlite); a run that can't publish is tried again at the
+next start (`checkin.migrate_event_hosts`). Known case: OSV's `h9ptvr`, last edited by a belfry
+admin.
+
 **Stewards.** Kind 1985 by the groups key in the group: `["L","belfry/group-role"]`,
 `["l","steward","belfry/group-role"]` (or `"none"` to clear), `["p", key]`, `["h", group]`,
 `["by", caller]`. The latest per `p` wins; labels by any other key count for nothing.
 
 `POST /group-roles {"channel": "<group id>", "pubkey": "<hex>", "role": "admin"|"steward"|"member"}`
-by an admin of the group or a belfry admin → `{"role": "<now>"}`.
+by an admin of the group or a belfry admin (for an event: by one of its hosts only) →
+`{"role": "<now>"}`.
 
 - admin: a 9000 `["h", g] ["p", key, "admin"] ["role", "admin"] ["by", caller]`; a steward label
   is cleared;
@@ -52,8 +85,9 @@ by an admin of the group or a belfry admin → `{"role": "<now>"}`.
 
 - removed (`"role": "removed"`): a 9001 by the groups key `["h", g] ["p", key] ["by", caller]`
   (for an event this also takes the ticket back, as a host's removal does), a steward label
-  cleared. `always_admin` for the creator, the community's admins and the relay's keys;
-  `last_admin` when the person is the last admin. Answer `{"role": "removed"}`. Admins by role
+  cleared. `always_admin` for the creator, the community's admins and the relay's keys (for an
+  event: the creator only); `last_admin` when the person is the last admin (never for an event
+  whose creator is known). Answer `{"role": "removed"}`. Admins by role
   can't publish a 9001 on the relay themselves: clients use this call (and the direct 9001 only
   when the belfry answers 404 without an error code, i.e. it predates this call).
 
@@ -71,7 +105,8 @@ the pinned zooid). And each 9002 *replaces* the whole metadata (its 39000), so a
 name drops `closed`, `prompt`, `vouches`, `picture`.
 
 `POST /group-meta {"channel", "name"?, "about"?, "picture"?, "closed"?, "prompt"?, "vouches"?}` by
-an admin of the group (any kind, including by role) or a belfry admin. The server takes the
+an admin of the group (any kind, including by role) or a belfry admin (for an event: one of its
+hosts only). The server takes the
 group's current metadata (the relay's latest 39000, without `d`), replaces only the fields sent
 (`name` 1–100 characters, `about` up to 2000, `picture` an https:// URL or "" to remove,
 `closed` true/false → `closed` / `open`, `prompt` "" to remove, `vouches` 0–5, 0 removes) and
@@ -102,8 +137,9 @@ All NIP-98, on belfry.<domain>/api/v1, the belfry's own register only (with Odoo
 `unsupported`). CORS: the chat's host (and approved apps) only, never the apex (published
 websites) nor preview.<domain> (`discovery._chat_only`).
 
-- `POST /events/<d>/cohost-invites {"pubkey": "<hex>"}` by a host: the creator, any admin of
-  `ev-<d>` (relay list or by role) or a belfry admin. A steward can't. → `{"invite": {"id",
+- `POST /events/<d>/cohost-invites {"pubkey": "<hex>"}` by a host: the creator or a co-host by
+  role (since 2026-11-26 not the relay's 39001 nor a belfry admin who doesn't host it). A
+  steward can't. → `{"invite": {"id",
   "by": {"name", "slug", "picture"}, "at", "state": "pending"}}`; while that invitation is
   pending, asking again answers the same one with `"already": true` (and sends no new push). A
   declined, accepted-then-removed or lapsed invitation is replaced by a new one (new `id`).
@@ -265,8 +301,9 @@ event's code never matches.
   (what the QR holds);
 - `checked_in`: unix time or null;
 - `roles`: subset of `["host", "cohost", "steward"]` (the community's admins, who administer
-  every group, are not listed as co-hosts);
-- `may_check_in`: host, co-host, steward, any other admin of the group, or a belfry admin.
+  every group, are not listed as co-hosts unless they were invited);
+- `may_check_in`: host, co-host or steward (since 2026-11-26 no longer any other admin of the
+  group nor a belfry admin who doesn't host it).
 
 Caddy (chat host): `/events/<link>/t/<code>` → 302 `/#/events/<link>/t/<code>`; the phone apps
 take it as a universal / app link (`/events/*` is already in apple-app-site-association).

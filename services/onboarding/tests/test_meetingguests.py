@@ -28,6 +28,11 @@ def world(services, tmp_path, settings, monkeypatch):
         {"id": "g1", "kind": 39001, "pubkey": GK, "created_at": 1, "tags": [["d", CH], ["p", HOST]], "content": ""},
     ]
     monkeypatch.setattr(followers, "_relay", lambda svc: (relay, relay.sign))
+    # HOST made the meeting (an event's hosts are its creator and co-hosts, 2026-11-26; this
+    # FakeRelay answers only a query's first filter, so the hosts are given here)
+    from belfry_onboarding import mail
+
+    monkeypatch.setattr(mail, "group_admins", lambda svc, ch: {HOST} if ch == CH else set())
     who = {"caller": HOST}
     monkeypatch.setattr(holder_invites, "authenticate", lambda *a: who["caller"])
     made: list = []

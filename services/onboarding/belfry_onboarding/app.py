@@ -294,6 +294,10 @@ def create_app(services: Services | None = None) -> FastAPI:
             # the first read of the events after a start is slow (relay connections, names,
             # the store): do it now, aside, so the first visitor doesn't wait for it
             def warm(svc: Services = app.state.services) -> None:
+                try:  # once: edits by the former hosts keep counting (checkin.py)
+                    checkin.migrate_event_hosts(svc)
+                except Exception as exc:  # noqa: BLE001 — tried again at the next start
+                    logging.getLogger(__name__).warning("events: hosts migration: %s", exc)
                 try:
                     n = len(events.listing(svc, int(time.time()) - 86400))
                     logging.getLogger(__name__).info("events: %d upcoming read at start", n)

@@ -5,10 +5,18 @@ stewards check people in, by scanning or from the list.
 
 Roles per group (a channel, a group, an event's ``ev-<d>``):
 
-- ``admin``: the relay's 39001 (the relay owner, the community's admins through zooid patch 0003,
-  the group's creator) plus everyone put in with the admin role: the latest 9000/9001 for that key
-  in the group is a 9000 whose ``p`` tag says ``admin`` (co-host links do this, guests.py). A 9000
-  tagged ``["role", "member"]`` or a 9001 ends it; a ticket's 9000 (no ``role`` tag) does not.
+- ``admin`` of an EVENT (``ev-``, ``ws-``; Xavier, 2026-11-26: "Only the person who created the
+  event and the person invited as co-hosts should be admins of the event and seen as co-hosts.
+  Any co-host can remove any co-host."): its creator and the people put in with the admin role
+  (below), nobody else: not the relay's 39001 (the relay owner, the belfry's admins), who
+  administer every group on the relay but host no event they didn't make or weren't invited to.
+  The creator can't be removed; any other host can be, by any host.
+- ``admin`` of a channel or group: the relay's 39001 (the relay owner, the community's admins
+  through zooid patch 0003, the group's creator) plus everyone put in with the admin role.
+- put in with the admin role: the latest 9000/9001 for that key in the group is a 9000 whose
+  ``p`` tag says ``admin`` (co-host links and accepted co-host invitations do this, guests.py,
+  cohost.py; so does ``POST /group-roles`` and the hosts migration below). A 9000 tagged
+  ``["role", "member"]`` or a 9001 ends it; a ticket's 9000 (no ``role`` tag) does not.
   zooid itself has no per-group admins (its 39001 never lists them, and it refuses their
   moderation events), so whatever such an admin does on the relay goes through the belfry, signed
   by the groups key (events.decide, the check-in below).
@@ -67,6 +75,19 @@ def groups_pubkey(svc: Services) -> str:
     return key.public_key_xonly.format().hex() if key is not None else ""
 
 
+def creator_of(made: list[dict[str, Any]], gk: str) -> str | None:
+    """Who made a group, from its 9007s (oldest first): the author, or, when the groups key
+    made it for someone (a printed card, cards.py), the person in its ``by`` tag."""
+    if not made:
+        return None
+    first = min(made, key=lambda e: (e.get("created_at", 0), e.get("id", "")))
+    if gk and first.get("pubkey") == gk:
+        by = events.tag(first, "by")
+        if by and HEX.match(str(by)):
+            return str(by)
+    return first.get("pubkey")
+
+
 def role_admins(found: list[dict[str, Any]]) -> set[str]:
     """Keys put in GROUP with the admin role and not taken out since (9000/9001 of one group)."""
     state: dict[str, bool] = {}
@@ -117,7 +138,9 @@ class GroupState:
 
     @property
     def admins(self) -> set[str]:
-        return self.relay_admins | self.by_role | ({self.creator} if self.creator else set())
+        """An event's hosts (creator + co-hosts by role); a channel's admins (39001 too)."""
+        mine = self.by_role | ({self.creator} if self.creator else set())
+        return mine if is_event_group(self.group) else self.relay_admins | mine
 
 
 def group_state(svc: Services, group: str) -> GroupState:
@@ -160,7 +183,7 @@ def group_state(svc: Services, group: str) -> GroupState:
     return GroupState(
         group=group,
         relay_admins=relay_admins,
-        creator=made[0]["pubkey"] if made else None,
+        creator=creator_of(made, gk),
         by_role=role_admins(in_group),
         stewards={p for p, (v, _) in roles.items() if v == "steward"}
         if is_event_group(group)
@@ -182,14 +205,16 @@ def _belfry_admins(svc: Services) -> set[str]:
 def viewer_roles(
     svc: Services, st: GroupState, pubkey: str, creator: str | None = None
 ) -> list[str]:
-    """Of host / cohost / steward. Host = the creator; co-host = any other admin of the group
-    except the community's admins and the relay's own keys (they administer every group)."""
+    """Of host / cohost / steward. Host = the creator; co-host = someone put in with the admin
+    role. For a channel also any other admin of its 39001 except the community's admins and the
+    relay's own keys (they administer every group); never for an event (Xavier, 2026-11-26)."""
     creator = creator or st.creator
     out = []
     if pubkey == creator:
         out.append("host")
     elif pubkey in st.by_role or (
-        pubkey in st.relay_admins
+        not is_event_group(st.group)
+        and pubkey in st.relay_admins
         and pubkey not in _belfry_admins(svc)
         and pubkey != groups_pubkey(svc)
     ):
@@ -200,8 +225,11 @@ def viewer_roles(
 
 
 def may_check_in(svc: Services, st: GroupState, pubkey: str, creator: str | None = None) -> bool:
+    """An event's host, co-hosts and stewards (door). The belfry's admins only when they host."""
     if not pubkey:
         return False
+    if is_event_group(st.group):
+        return bool(viewer_roles(svc, st, pubkey, creator))
     return (
         bool(viewer_roles(svc, st, pubkey, creator))
         or pubkey in st.admins
@@ -276,7 +304,10 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
             'Send {"channel", "pubkey", "role": "admin" | "steward" | "member" | "removed"}.',
         )
     st = group_state(svc, group)
-    belfry_admins = _belfry_admins(svc)
+    event = is_event_group(group)
+    # an event's roles are its hosts' business only: the belfry's admins host no event they
+    # didn't make or weren't invited to (Xavier, 2026-11-26); any host changes any co-host
+    belfry_admins = set() if event else _belfry_admins(svc)
     if caller not in st.admins and caller not in belfry_admins:
         raise ApiError(403, "not_allowed", "Only the group's admins change roles.")
     refuse_archived(svc, group)
@@ -290,7 +321,10 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
             inside = target in ppl.holders or ppl.rsvps.get(target) in ("accepted", "tentative")
     if not inside:
         raise ApiError(409, "not_in_group", "This person is not in the group.")
-    always = st.relay_admins | ({st.creator} if st.creator else set()) | belfry_admins
+    creator = {st.creator} if st.creator else set()
+    always = creator if event else st.relay_admins | creator | belfry_admins
+    if event and target in creator and role != "admin":
+        raise ApiError(409, "always_admin", "The event's creator stays its host.")
     was_admin = target in st.admins
     was_steward = target in st.stewards
     relay_fail = ApiError(503, "relay", "The group could not be reached. Try again.")
@@ -339,6 +373,94 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         if not _label(svc, ROLE_NS, "none", target, group, caller):
             raise relay_fail
     return {"role": role}
+
+
+# ── the hosts migration (2026-11-26) ────────────────────────────────────────────────────────
+# Before 2026-11-26 an event's hosts were also the relay's 39001 (the belfry's admins), and their
+# edits made the event's newest version. Now only the creator and the co-hosts by role count, so
+# such an edit would drop out of the event. Once, at start: whoever signed an event's newest
+# version under the old rule and is neither its creator nor a co-host by role is made a co-host
+# by role (the 9000 ``POST /group-roles`` publishes, by the groups key), so the edit keeps
+# counting. Recorded in events.sqlite's params; a run that can't read or write is retried at the
+# next start (and a person made a co-host is never added twice: they count as one then).
+HOSTS_MIGRATION = "hosts-migration-2026-11-26"
+MIGRATION_PAGE = 300  # the community relay's cap on ``limit``
+
+
+def _all_versions(svc: Services) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    until: int | None = None
+    for _ in range(100):
+        f: dict[str, Any] = {"kinds": list(events.KINDS), "limit": MIGRATION_PAGE}
+        if until is not None:
+            f["until"] = until
+        page = [e for e in events.community(svc, [f]) if e.get("kind") in events.KINDS]
+        seen = {e.get("id") for e in out}
+        new = [e for e in page if e.get("id") not in seen]
+        out += new
+        if len(page) < MIGRATION_PAGE or not new:
+            break
+        until = min(int(e.get("created_at", 0)) for e in page)
+    return out
+
+
+def migrate_event_hosts(svc: Services) -> list[tuple[str, str]]:
+    """Run the hosts migration once; returns the (d, pubkey) made co-hosts this time."""
+    from . import community
+
+    st = events.store(svc)
+    if st.param(HOSTS_MIGRATION):
+        return []
+    log = logging.getLogger(__name__)
+    gk = groups_pubkey(svc)
+    service = {gk, community.belfry_pubkey(svc.settings)} - {""}
+    by_d: dict[str, list[dict[str, Any]]] = {}
+    for v in _all_versions(svc):
+        d = events.tag(v, "d") or ""
+        if events.D_RE.match(d):
+            by_d.setdefault(d, []).append(v)
+    added: list[tuple[str, str]] = []
+    ok = True
+    for d, versions in sorted(by_d.items()):
+        group = events.group_id(d)
+        found = events.groups(
+            svc,
+            [
+                {"kinds": [39001], "#d": [group], "limit": 1},
+                {"kinds": [9007, 9000, 9001], "#h": [group]},
+            ],
+        )
+        listed = {
+            str(t[1])
+            for e in found
+            if e.get("kind") == 39001 and events.tag(e, "d") == group
+            for t in e.get("tags", [])
+            if t[:1] == ["p"] and len(t) > 1
+        }
+        inside = [e for e in found if events.tag(e, "h") == group]
+        creator = creator_of([e for e in inside if e.get("kind") == 9007], gk)
+        if creator is None:
+            creator = min(versions, key=lambda v: v["created_at"])["pubkey"]
+        now_hosts = role_admins(inside) | {creator}
+        old_hosts = now_hosts | listed
+        mine = [v for v in versions if v.get("pubkey") in old_hosts]
+        if not mine:
+            continue
+        latest = max(mine, key=lambda v: (v["created_at"], v.get("id", "")))
+        who = str(latest.get("pubkey") or "")
+        if who in now_hosts or who in service or not HEX.match(who):
+            continue
+        tags = [["h", group], ["p", who, "admin"], ["role", "admin"], ["migrated", "hosts"]]
+        if events.publish(svc, 9000, tags):
+            added.append((d, who))
+            log.info("events: hosts migration: %s made a co-host of %s", who[:8], d)
+        else:
+            ok = False
+            log.warning("events: hosts migration: %s not made a co-host of %s", who[:8], d)
+    if ok:
+        st.set_param(HOSTS_MIGRATION, str(int(time.time())))
+        log.info("events: hosts migration done (%d co-hosts added)", len(added))
+    return added
 
 
 # ── requests to join a closed channel or group, answered by any of its admins ───────────────
@@ -439,7 +561,7 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
     if ARCHIVED in data and not isinstance(data[ARCHIVED], bool):
         raise ApiError(422, "invalid", "archived: true or false.")
     st = group_state(svc, group)
-    if caller not in st.admins and caller not in _belfry_admins(svc):
+    if caller not in st.admins and (is_event_group(group) or caller not in _belfry_admins(svc)):
         raise ApiError(403, "not_allowed", "Only the group's admins change it.")
     tags = current_meta(svc, group)
     if tags is None:

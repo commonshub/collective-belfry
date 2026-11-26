@@ -312,12 +312,10 @@ def make_channel_invite(s: Services, pubkey: str, who: dict[str, Any], data: Any
     if role not in ("", "host"):
         raise ApiError(422, "invalid", 'role: "host" or nothing')
     if role == "host":
-        from . import apps
-
         if not channel.startswith("ev-"):
             raise ApiError(422, "invalid", "A co-host link is for an event's group.")
-        admins = mail.group_admins(s, channel)
-        if pubkey not in admins and not who.get("steward") and pubkey not in apps.admin_pubkeys(s):
+        # the event's hosts only (creator + co-hosts), not the belfry's admins (2026-11-26)
+        if pubkey not in mail.group_admins(s, channel):
             raise ApiError(403, "not_host", "Only the event's hosts add co-hosts.")
     people, link_days = (
         _option(data, "people", 1, (1, 50)),

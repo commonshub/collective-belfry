@@ -204,8 +204,10 @@ def test_who_may_invite_and_who_can_be_invited(rsvc, cw, phones):
             ],
         )
         assert post(c, bea, "", {"pubkey": pk(cy)}).status_code == 403
-        # a belfry admin may
-        assert post(c, boss, "", {"pubkey": pk(cy)}).status_code == 200
+        # a belfry admin who doesn't host it may not (2026-11-26); its host may
+        r = post(c, boss, "", {"pubkey": pk(cy)})
+        assert r.status_code == 403 and r.json()["error"] == "not_allowed"
+        assert post(c, ada, "", {"pubkey": pk(cy)}).status_code == 200
         # nobody hosts twice
         r = post(c, ada, "", {"pubkey": pk(ada)})
         assert r.status_code == 409 and r.json()["error"] == "already_host"

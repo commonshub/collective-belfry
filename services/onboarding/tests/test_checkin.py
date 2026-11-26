@@ -274,9 +274,11 @@ def test_attendees_and_check_in(rsvc, cw, monkeypatch):
         r = call(c, ada, "POST", f"/{D}/checkin", {"pubkey": pk(bea), "undo": True}).json()
         assert r["already"] is True
         assert call(c, ada, "POST", f"/{D}/attendees", {}).json()["checked_in"] == 1
-        # a belfry admin may check in too
+        # a belfry admin who doesn't host the event doesn't check people in (2026-11-26)
         cw.belfry_admins = {pk(out)}
-        assert call(c, out, "POST", f"/{D}/attendees", {}).status_code == 200
+        assert call(c, out, "POST", f"/{D}/attendees", {}).status_code == 403
+        cw.admins(GROUP, [pk(ada), pk(out)])  # not even when the relay lists them
+        assert call(c, out, "POST", f"/{D}/attendees", {}).status_code == 403
         # a check-in label by someone else counts for nothing
         cw.put(
             bea,

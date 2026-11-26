@@ -364,7 +364,6 @@ class Room:
         self.svc, self.ev, self.acct = svc, ev, acct
         self.st = checkin.group_state(svc, ev.group)
         self.gk = checkin.groups_pubkey(svc)
-        self.admins = checkin._belfry_admins(svc)
         self.known: dict[str, dict[str, Any]] = {}
 
     def allowed(self) -> bool:
@@ -380,8 +379,6 @@ class Room:
     def role(self, pubkey: str) -> str:
         st = self.st
         if pubkey == self.ev.creator or pubkey in st.by_role:
-            return "host"
-        if pubkey in st.relay_admins and pubkey not in self.admins and pubkey != self.gk:
             return "host"
         return "door" if pubkey in st.stewards else "attendee"
 

@@ -152,7 +152,7 @@ def test_a_co_host_who_edits_is_not_told_about_their_own_version(rsvc, world):
     bea = member(rsvc, "bea@belfry.test", "Bea")
     cy = member(rsvc, "cy@belfry.test", "Cy")
     make_event(world, ada)
-    world.admins(GROUP, [pk(ada), pk(bea)])
+    world.put(world.gkey, 9000, [["h", GROUP], ["p", pk(bea), "admin"], ["role", "admin"]])
     version(world, bea, [bea, cy], at=int(time.time()) + 1)
     mailer.SENT.clear()
     assert events.watch(rsvc)["invited"] == 1
