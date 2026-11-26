@@ -1,3 +1,4 @@
+import { metadataPinned, relaySelf } from './relayself'
 import { roleOf } from './myrole'
 import { clearInGroup } from './enc/core'
 import { encryptedMedia } from './dmfiles'
@@ -252,7 +253,9 @@ const groupSets: () => GroupSets = perLog((list) => {
     }
     return g
   }
+  const relayKey = relaySelf() // group metadata only by the groups relay's own key (NIP-11 self), once known
   for (const e of [...list].sort(byTime)) {
+    if (relayKey && e.kind >= 39000 && e.kind <= 39003 && e.pubkey !== relayKey) continue
     const id = e.kind >= 39000 && e.kind <= 39003 ? tag(e, 'd') : tag(e, 'h')
     if (!id) continue
     const g = get(id, e.created_at)
@@ -450,11 +453,15 @@ export const group = (id: string): Group | undefined => groupSets().byId.get(id)
 let encryptedHere: ((h: string) => boolean) | undefined
 export const setEncryptedHere = (f: (h: string) => boolean) => { encryptedHere = f }
 const privateMeta = (h: string) => { const g = group(h); return !!(g?.isPod && g.closed && g.inviteOnly) }
+const anyPrivate39000 = (h: string) => all(me()).some((e) => e.kind === 39000 && tag(e, 'd') === h && e.tags.some((t) => t[0] === 'private'))
 /** Whether writing in group H is encrypted ('enc'), must wait ('hold'), or is plain (undefined). */
 export function groupWriteMode(h: string): 'enc' | 'hold' | undefined {
   if (!h) return undefined
   const f = encryptedFormat(), seen = encSeen()
   if (!encryptedHere) return f === 3 || seen ? 'hold' : undefined // runtime not loaded yet
+  // the relay's own key unknown (NIP-11 self unread): metadata can't be trusted to say "not private", so a group
+  // that any 39000 marks private, or that has a key here, waits (the lead, 26 Nov)
+  if (f === 3 && !metadataPinned() && (encryptedHere(h) || anyPrivate39000(h))) return 'hold' // (format 3 only: on format 1 group writes are clear anyway)
   if (encryptedHere(h)) return 'enc'
   if (f === 3) return privateMeta(h) ? 'enc' : group(h)?.known ? undefined : 'hold'
   if (f === undefined && seen) return privateMeta(h) || !group(h)?.known ? 'hold' : undefined

@@ -5,6 +5,7 @@
 // always. Every signed-in chat session runs it, guests too (the lead's ruling: they are devices).
 //
 // Keys live in this account's own database (kv 'enc-keys'), never localStorage, never logged.
+import { metadataPinned } from '../relayself'
 import { hexToBytes } from '@noble/hashes/utils'
 import { finalizeEvent, getPublicKey, nip19, type Filter, type NostrEvent } from 'nostr-tools'
 import { BELFRY } from '../../config'
@@ -726,6 +727,7 @@ async function wrapForGroup(tpl: { kind: number; content: string; tags: string[]
   const h = hOf(tpl)
   if (!h || !groupEncrypts(h) || clearInGroup({ ...tpl, pubkey: me() }) || tpl.kind === E.KEY || tpl.kind === E.MSG) return null
   if (!device) throw new Error('timeout: this device isn’t set up for encrypted messages yet')
+  if (!metadataPinned()) throw new Error('timeout: couldn’t check who can read this group') // (the member list only from the relay's own key)
   // P2.4: the member list from a 39002 read on this connection, with me in it (never a stale or empty cache)
   if (membersReadOn.get(h) !== connectionOf('groups')) {
     const got = await queryPaged('groups', [{ kinds: [39002], '#d': [h] }], 5000).catch(() => null)

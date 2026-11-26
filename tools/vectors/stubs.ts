@@ -35,3 +35,5 @@ export const encSeen = () => false
 export const roleOf = (_pk: string): undefined => undefined // (vectors: the history decides)
 export const agentGivenName = (_pk: string): string | undefined => undefined
 export const queryComplete = async (..._a: unknown[]): Promise<null> => null
+export const relaySelf = (): string | undefined => undefined
+export const metadataPinned = () => true

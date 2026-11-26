@@ -1,4 +1,5 @@
 import { applyRole, refreshMyRole } from '../core/myrole'
+import { loadRelaySelf, relaySelf } from '../core/relayself'
 import { startNames } from '../core/names'
 import { demoTyping, demoTypingSent, setShowMyTyping, showMyTyping, watchDms } from '../core/typing'
 import { replaceHash } from '../core/nav'
@@ -218,6 +219,13 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   const [error, setError] = useState('')
   const [, setTick] = useState(0)
   useEffect(() => onAccessInfo(() => setTick((t) => t + 1)), [])
+  // the groups relay's own key (metadata pinned to it): once the sync has started (before that it counts as local),
+  // and again later if still unknown
+  useEffect(() => {
+    const t1 = setTimeout(() => void loadRelaySelf(), 1200)
+    const t2 = setTimeout(() => { if (!relaySelf()) void loadRelaySelf() }, 10_000)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [session])
   // my role from the belfry (whois), at start and back in the app: never the guest view for a member (myrole.ts)
   useEffect(() => {
     const ask = () => { if (document.visibilityState === 'visible') void refreshMyRole() }
@@ -247,7 +255,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         // (never for a guest's session: guests aren't on the community relay's whitelist; the lead, 2026-11-23)
         if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret && !guestInfo()) {
           void startEnc(session.clientSecret)
-          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy, probe: encProbe } })
+          if (TEST_RELAYS) Object.assign(window, { __enc: { state: encTest, format3: testFormat3, why: encWhy, probe: encProbe, relaySelf } })
         } else setEncryptedHere(() => false) // no runtime here (a guest, no device key): no key ever seen, nothing waits for it
         if (sealedOn) expectSealed()
         startDms()
