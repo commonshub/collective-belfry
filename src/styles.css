@@ -1671,7 +1671,7 @@ html.kb body:has(.sheet), html.kb body:has(dialog[open]) { overflow: hidden; ove
 .tile.zero > small { color: var(--faint); }
 .place-top .icon-btn.round { margin-left: auto; }
 .section-title.cat-head { position: relative; min-height: 28px; margin-top: 14px; margin-bottom: 2px; }
-.cat-head .cat-add { width: 28px; height: 28px; padding: 0; margin-right: -6px; color: var(--muted); }
+.cat-head .cat-add { width: 28px; height: 28px; padding: 0; margin-right: 0; color: var(--muted); } /* (no negative margin: it made the title 6 px wider than its box, overflow.cjs) */
 .cat-head .cat-add .ico { width: 18px; height: 18px; }
 .chan-sections.may .chan-slot { user-select: none; -webkit-user-select: none; }
 .settings-gear.on { color: var(--text); }

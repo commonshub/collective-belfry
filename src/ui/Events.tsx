@@ -11,7 +11,7 @@ import { calendar, displayName, eventByCoord, eventUrl, group, messages, profile
 import { useVersion } from '../core/store'
 import { isLocalOnly, me } from '../core/sync'
 import { reading } from '../core/guestmode'
-import { CHECK_ERRORS, CheckFailed, checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, removeFromGroup, roleWord } from '../core/checkin'
+import { CHECK_ERRORS, CheckFailed, checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord, setGroupRole } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
 import { addCoHost, askVersions, eventEnd, eventStart, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
@@ -933,10 +933,11 @@ export { DateChip }
  *  Co-host), Going · N (See all), Maybe · N; a name opens the profile; + invites (shares our page). */
 function PeopleSheet({ e, host, hostKeys, going, maybe, onInvite, onClose }: { e: CalEvent; host: boolean; hostKeys: string[]; going: string[]; maybe: string[]; onInvite: () => void; onClose: () => void }) {
   const [q, setQ] = useState('')
-  // EV-14: any host removes any other co-host (never the creator): POST /group-roles "removed", after asking
+  // EV-14: any host removes any other co-host (never the creator), after asking: no longer a host, still attending
+  // (POST /group-roles "member": they keep their ticket or RSVP and stay in the chat; the lead, 26 Nov)
   const [removing, setRemoving] = useState('')
   const [rmError, setRmError] = useState('')
-  const remove = async (k: string) => { setRmError(''); try { await removeFromGroup(e.groupId, k); setRemoving('') } catch (x) { setRmError(x instanceof CheckFailed ? x.message : CHECK_ERRORS.failed) } }
+  const remove = async (k: string) => { setRmError(''); try { await setGroupRole(e.groupId, k, 'member'); setRemoving('') } catch (x) { setRmError(x instanceof CheckFailed ? x.message : CHECK_ERRORS.failed) } }
   const hostRow = (k: string) => {
     const may = host && k !== e.creator && k !== me() && !e.remote
     return (
