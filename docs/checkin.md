@@ -57,6 +57,8 @@ co-host links and invitations, meeting guests, `may_check_in` (hosts, co-hosts a
 not a belfry admin who doesn't host), and the API's `hosts`, `hosted_by`, `me.host`, `me.roles`.
 Any host (the creator or a co-host) changes any co-host's role, removal included; the creator
 can't be made member / steward or removed (409 `always_admin`), so an event always keeps a host.
+The apps' "Remove as co-host" sets role `member` (still attending: ticket / RSVP and the chat
+kept); role `removed` takes the person out of the event (the profile's "Remove from ‹event›").
 Relay-level moderation by the belfry's admins (their own 9000/9001/9005 on zooid) is untouched.
 Channels and groups keep the rules above.
 
