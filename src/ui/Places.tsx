@@ -75,11 +75,18 @@ export function placeOf(route: string[]): Place | undefined {
 
 /** Where Town opens: always the belfry's main channel, never the last one open (the owner,
  *  2026-11-19: "tapping on 'Town' brings you always back to the Townhall channel"). */
-export function townPath(): string { return 'c/general' }
+/** Where Town goes: #general; a guest who can't read it (the relay shows a guest only their own channels:
+ *  Xavier on belfry.brussels, 27 Nov) goes to the channel they were invited to, else the first one they're in. */
+export function townPath(): string {
+  if (group('general') || !amGuest()) return 'c/general'
+  const mine = guestInfo()?.channel && group(guestInfo()!.channel) ? guestInfo()!.channel : myGuestChannels()[0]?.id
+  return 'c/' + encodeURIComponent(mine ?? 'general')
+}
 /** Town tapped while already on the main channel: it scrolls to the newest message (Chat.tsx). */
 export const TO_NEWEST = 'belfry-to-newest'
 function tapTown(route: string[]) {
-  if (route[0] === 'c' && route[1] === 'general' && route.length === 2) dispatchEvent(new CustomEvent(TO_NEWEST, { detail: 'general' }))
+  const town = decodeURIComponent(townPath().slice(2))
+  if (route[0] === 'c' && route[1] === town && route.length === 2) dispatchEvent(new CustomEvent(TO_NEWEST, { detail: town }))
   else go(townPath())
 }
 

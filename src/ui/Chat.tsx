@@ -15,7 +15,7 @@ import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, admit, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postGuestMessage, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, belfryJoins, plainLabel, type BelfryJoin, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage , hiddenFromMe, authorOf, newTopicOf, noExtrasHere, privateNow } from '../core/model'
 import { all, outboxItems, status, useVersion, type Ev } from '../core/store'
-import { joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
+import { isLocalOnly, joinWithAccount, me, retry, sendStep, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
 import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName, SheetOrPopover, takeAnchor } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
@@ -818,6 +818,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const privateGuest = privateNow(id) && isGuest(me()) && !guestReading
   if (privateGuest) readOnly = true
   const g = group(id)
+  // a guest who opens a channel the relay doesn't show them: say so, no composer; the empty channel's
+  // Invite people only for someone who may invite (a guest can't: Xavier, 27 Nov)
+  const noAccess = !g && !isLocalOnly() && amGuest()
+  const mayInviteHere = !amGuest() && !guestReading && !g?.archived
   const frozen = !!g?.archived // archived: nothing is written, reacted to, edited or pinned
   if (frozen) readOnly = true
   const admin = canAdmin(g) && !frozen
@@ -933,10 +937,12 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; if (stick.current !== atEnd) setAtEnd(stick.current) }}>
         {gone && <div className="msg-gone" role="status"><LockIcon /> This message isn’t available</div>}
         <div className="messages">
-          {list.length === 0 && (topic
+          {list.length === 0 && (topic && g
             ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
-            : guestReading || frozen ? <div className="empty">No messages here{frozen ? '' : ' yet'}.</div> : empty !== undefined ? empty : <div className="empty-start">
-                <b>{g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : id} is new</b>
+            // a channel that isn't here for me (a guest: the relay shows only their own channels): never "… is new"
+            : !g ? (noAccess ? <div className="empty">You don’t have access to this channel yet.</div> : null)
+            : guestReading || frozen ? <div className="empty">No messages here{frozen ? '' : ' yet'}.</div> : empty !== undefined ? empty : !mayInviteHere ? <div className="empty">No messages yet. Say hi.</div> : <div className="empty-start">
+                <b>{`${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}`} is new</b>
                 <p>No messages yet. Bring the people who belong here, then say hi.</p>
                 <button className="btn" onClick={() => setInviting(true)}>Invite people</button>
               </div>)}
@@ -989,7 +995,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       )}
       {privateGuest && <div className="join-bar" role="note"><span>Guests can’t take part in private groups yet.</span></div>}
       {!readOnly && <RecordingBar groupId={id} />}
-      {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : placeholder} canAnnounce={admin} announcing={topic === ANNOUNCE}
+      {!readOnly && !noAccess && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : placeholder} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce, pv) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, [...eventTags(text), ...pv]) }} prefill={prefill}
         onEvent={events && !noExtrasHere(id) ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() && !noExtrasHere(id) ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events && !noExtrasHere(id) ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}

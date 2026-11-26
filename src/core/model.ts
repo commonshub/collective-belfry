@@ -1102,7 +1102,7 @@ export const calendar: () => CalEvent[] = perLog((list) => {
 export const eventByCoord = (coord: string) => calendar().find((x) => x.coord === coord)
 export const eventByLinkLocal = (link: string) => calendar().find((x) => x.d === link || x.slug === link)
 /** A group's name to show, never its id (a group not loaded yet: a neutral word). */
-export const nameOf = (id: string): string => group(id)?.name
+export const nameOf = (id: string): string => group(id)?.name ?? placeName(id, '') // (#general not readable here: still "Townsquare")
   ?? (id.startsWith('ev-') || id.startsWith('ws-') ? 'this event' : isProposalId(id) ? 'this proposal' : isPodId(id) ? 'this group' : 'this channel')
 
 /** A channel reference's name (a "#…" in a text): its name, else the kind's word, never its id

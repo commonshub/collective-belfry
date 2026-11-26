@@ -5,7 +5,8 @@ import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-too
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE, getBackend } from '../config'
-import type { Signer } from './auth'
+import { guestInfo, type Signer } from './auth'
+import { myRole } from './myrole'
 import { GUEST_MODE, askToJoin, reading, guestTopicPost } from './guestmode'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { heldEvent, addEvents, all, dropOutbox, hasEvent, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
@@ -963,7 +964,9 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
 let firstChannelTried = false
 async function firstChannel() {
   // only once signed in to the relay: before, its answer can't show the members-only channels
-  if (firstChannelTried || reading() || !relayAuthed('groups') || latestCreatedAt((e) => e.kind === 39000)) return
+  // never a guest: the relay shows a guest only their own channels, so "no channel" proves nothing there (a guest's
+  // app made #general on belfry.brussels' view, Xavier 27 Nov); members only
+  if (firstChannelTried || reading() || guestInfo() || myRole() === 'guest' || !relayAuthed('groups') || latestCreatedAt((e) => e.kind === 39000)) return
   firstChannelTried = true
   await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
   await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })
