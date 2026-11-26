@@ -11,7 +11,7 @@ import { calendar, displayName, eventByCoord, eventUrl, group, messages, profile
 import { useVersion } from '../core/store'
 import { isLocalOnly, me } from '../core/sync'
 import { reading } from '../core/guestmode'
-import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
+import { CHECK_ERRORS, CheckFailed, checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, removeFromGroup, roleWord } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
 import { addCoHost, askVersions, eventEnd, eventStart, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
@@ -100,7 +100,7 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
     addEventListener('focus', again); document.addEventListener('visibilitychange', again)
     return () => { removeEventListener('focus', again); document.removeEventListener('visibilitychange', again) }
   }, [link])
-  const host = isHost(e)
+  const host = v ? v.host : isHost(e) // the belfry's me.host when it answered (EV-14: creator and co-hosts only)
   const [copied, setCopied] = useState(false)
   const nowS = useNow(30_000)
   const g = group(e.groupId)
@@ -304,7 +304,7 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
           {st === 'applied' || st === 'waitlist' ? 'The event’s chat opens once the hosts give you a place.' : e.status === 'cancelled' ? 'This event is cancelled.' : 'The chat, photos and people open once you have a place.'}
         </div></div>)}
       {sheet === 'menu' && <EventMenu e={e} host={host} may={may} onClose={() => setSheet('')} open={(s) => setSheet(s)} />}
-      {sheet === 'people' && <PeopleSheet e={e} hostKeys={hostKeys} going={going} maybe={maybe} onInvite={() => setSheet('qr')} onClose={() => setSheet('')} />}
+      {sheet === 'people' && <PeopleSheet e={e} host={host} hostKeys={hostKeys} going={going} maybe={maybe} onInvite={() => setSheet('qr')} onClose={() => setSheet('')} />}
       {sheet === 'edit' && <EventFormSheet edit={e} going={going.length} onTickets={() => setSheet('tickets')} onCohosts={() => setSheet('cohost')} onClose={() => setSheet('')} onSaved={(l) => { if (l !== eventLinkOf(e)) replaceHash('#/events/' + encodeURIComponent(l)) }} />}
       {sheet === 'tickets' && <TicketsSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'guests' && <GuestList e={e} onClose={() => setSheet('')} />}
@@ -439,7 +439,7 @@ function MeetingPeople({ e, host }: { e: CalEvent; host: boolean }) {
   const [err, setErr] = useState('')
   // SPEC 19.63: check-in opens AT the start; before it, the maker (or a belfry admin) may remove
   const started = Date.now() >= +e.start
-  const remover = mayRemove(e, isAdmin())
+  const remover = mayRemove(e, false) // (the maker only: a belfry admin hosts nothing here, EV-14)
   const st = (k: string) => meetingStatus(e, k, there)
   const counts = (['in', 'yes', 'maybe', 'no', 'invited'] as const).map((s) => [s, keys.filter((k) => st(k) === s).length] as const).filter(([, n]) => n > 0)
   return (
@@ -931,8 +931,23 @@ export { DateChip }
 
 /** Everyone, like a channel's or group's members (Event form canvas, evview-people): search, Hosts (Host,
  *  Co-host), Going · N (See all), Maybe · N; a name opens the profile; + invites (shares our page). */
-function PeopleSheet({ e, hostKeys, going, maybe, onInvite, onClose }: { e: CalEvent; hostKeys: string[]; going: string[]; maybe: string[]; onInvite: () => void; onClose: () => void }) {
+function PeopleSheet({ e, host, hostKeys, going, maybe, onInvite, onClose }: { e: CalEvent; host: boolean; hostKeys: string[]; going: string[]; maybe: string[]; onInvite: () => void; onClose: () => void }) {
   const [q, setQ] = useState('')
+  // EV-14: any host removes any other co-host (never the creator): POST /group-roles "removed", after asking
+  const [removing, setRemoving] = useState('')
+  const [rmError, setRmError] = useState('')
+  const remove = async (k: string) => { setRmError(''); try { await removeFromGroup(e.groupId, k); setRemoving('') } catch (x) { setRmError(x instanceof CheckFailed ? x.message : CHECK_ERRORS.failed) } }
+  const hostRow = (k: string) => {
+    const may = host && k !== e.creator && k !== me() && !e.remote
+    return (
+      <div key={k} className="ev-host-row">
+        {row(k, k === e.creator ? 'Host' : 'Co-host')}
+        {may && (removing === k
+          ? <span className="row" style={{ gap: 6 }}><Btn className="btn small danger" onClick={() => remove(k)}>Remove</Btn><button className="btn small ghost" onClick={() => { setRemoving(''); setRmError('') }}>Keep</button></span>
+          : <button className="btn small ghost" onClick={() => { setRemoving(k); setRmError('') }} aria-label={`Remove ${displayName(k)} as co-host`}>Remove as co-host</button>)}
+      </div>
+    )
+  }
   const [all, setAll] = useState(false)
   const everyone = [...new Set([...hostKeys, ...going, ...maybe])]
   const hit = (k: string) => !q.trim() || displayName(k).toLowerCase().includes(q.trim().toLowerCase())
@@ -942,7 +957,7 @@ function PeopleSheet({ e, hostKeys, going, maybe, onInvite, onClose }: { e: CalE
     <Sheet title="People" onClose={onClose}>
       <div className="ev-people-top"><small className="hint">{e.title}</small><button className="icon-btn" aria-label="Invite someone" onClick={onInvite}><PersonPlusIcon /></button></div>
       <input className="input" type="search" placeholder={`Search ${everyone.length} ${everyone.length === 1 ? 'person' : 'people'}`} value={q} onChange={(x) => setQ(x.target.value)} />
-      <section><h3>Hosts · {hostKeys.length}</h3>{hostKeys.filter(hit).map((k) => row(k, k === e.creator ? 'Host' : 'Co-host'))}</section>
+      <section><h3>Hosts · {hostKeys.length}</h3>{hostKeys.filter(hit).map(hostRow)}{rmError && <p className="error" role="alert">{rmError}</p>}</section>
       {going.length > 0 && <section><h3>Going · {going.length}</h3>{(all || q ? g : g.slice(0, 5)).map((k) => row(k))}
         {!all && !q && g.length > 5 && <button className="link" onClick={() => setAll(true)}>See all {going.length}</button>}</section>}
       {maybe.length > 0 && <section><h3>Maybe · {maybe.length}</h3>{maybe.filter(hit).map((k) => row(k))}</section>}

@@ -254,6 +254,27 @@ const groupSets: () => GroupSets = perLog((list) => {
     return g
   }
   const relayKey = relaySelf() // group metadata only by the groups relay's own key (NIP-11 self), once known
+  // An event's hosts (docs/checkin.md §1, EV-14, 26 Nov): exactly its creator (the first 9007's author, or its
+  // `by` when the groups key made it) and its co-hosts by role (the latest 9000/9001 per key is a 9000 with
+  // ["p", key, "admin"]). The relay's 39001 (its owner, the community's admins) counts for nothing in an event.
+  const evHosts = new Map<string, Set<string>>()
+  {
+    const creator = new Map<string, string>(), role = new Map<string, boolean>()
+    for (const e of [...list].sort(byTime)) {
+      const h = tag(e, 'h')
+      if (!h || !isEventGroupId(h)) continue
+      if (e.kind === 9007 && !creator.has(h)) creator.set(h, authorOf(e))
+      const p = tag(e, 'p')
+      if (p && e.kind === 9000 && e.tags.some((t) => t[0] === 'p' && t[1] === p && t[2] === 'admin')) role.set(h + p, true)
+      else if (p && (e.kind === 9001 || tag(e, 'role') === 'member')) role.set(h + p, false)
+    }
+    for (const [h, c] of creator) evHosts.set(h, new Set([c]))
+    for (const [k, on] of role) if (on) { const h = k.slice(0, -64); evHosts.set(h, new Set([...(evHosts.get(h) ?? []), k.slice(-64)])) }
+  }
+  const gk = belfryGroupsKey()
+  // an event's name, access and settings change only by its hosts (the belfry's /group-meta: the groups key)
+  const metaOf = (e: { kind: number; pubkey: string; tags: string[][] }, id: string) => e.kind === 9007 || e.kind === 39000 ||
+    (e.kind === 9002 && (!isEventGroupId(id) || !evHosts.has(id) || (!!gk && e.pubkey === gk) || evHosts.get(id)!.has(authorOf(e))))
   for (const e of [...list].sort(byTime)) {
     if (relayKey && e.kind >= 39000 && e.kind <= 39003 && e.pubkey !== relayKey) continue
     const id = e.kind >= 39000 && e.kind <= 39003 ? tag(e, 'd') : tag(e, 'h')
@@ -263,7 +284,8 @@ const groupSets: () => GroupSets = perLog((list) => {
       g.createdAt = Math.min(g.createdAt, e.created_at)
       g.pending ||= !!e.pending
     }
-    if (e.kind === 9007 || e.kind === 9002 || e.kind === 39000) {
+    const meta = metaOf(e, id)
+    if (meta) {
       for (const k of ['name', 'about', 'picture'] as const) {
         const v = tag(e, k)
         if (v === undefined || (g.metaAt[k] ?? 0) > e.created_at) continue
@@ -271,7 +293,7 @@ const groupSets: () => GroupSets = perLog((list) => {
         g.metaAt[k] = e.created_at
       }
     }
-    if (e.kind === 9007 || e.kind === 9002 || e.kind === 39000) {
+    if (meta) {
       g.known = true
       // archived or not: the latest of them that says so ("1" / "0"); an edit without the tag changes nothing
       const arch = tag(e, 'archived')
@@ -332,7 +354,7 @@ const groupSets: () => GroupSets = perLog((list) => {
   for (const g of map.values()) {
     const c = made.get(g.id)
     if (c) g.admins.add(c)
-    for (const k of listed.get(g.id) ?? []) g.admins.add(k)
+    if (!g.isEvent) for (const k of listed.get(g.id) ?? []) g.admins.add(k) // (an event: its hosts only, EV-14)
     if (listed.has(g.id)) g.adminList = listed.get(g.id)
   }
   for (const [k, on] of byRole) if (on) { const g = map.get(k.slice(0, -64)); g?.admins.add(k.slice(-64)); g?.roleAdmins.add(k.slice(-64)) }
@@ -942,6 +964,8 @@ export interface CalEvent {
 export const isEventKind = (k: number) => k === 31922 || k === 31923
 /** An event's id: 6 of a–z, 0–9 (since 2026-11-18, Belfry ba5024b); older ones have the year before them. */
 export const EVENT_D = /^(\d{4}-)?[a-z0-9]{6}$/
+/** An event's group (ev-<d>, older ws-<…>). */
+export const isEventGroupId = (id: string) => id.startsWith('ev-') || id.startsWith('ws-')
 export const EVENT_STATUS_NS = 'belfry/event-status'
 export const eventLink = (e: Pick<CalEvent, 'd' | 'slug'>) => e.slug || e.d
 export const eventUrl = (e: Pick<CalEvent, 'd' | 'slug'>) => `https://${BELFRY.domain}/events/${eventLink(e)}`
@@ -972,7 +996,7 @@ function wantAdmins(groupId: string) {
     wantTimer = undefined
     const ids = wantedAdmins.splice(0, 200)
     // (on a signed-in socket: a REQ before AUTH is CLOSED, and that's no answer; asked again later)
-    void queryComplete('groups', [{ kinds: [39001], '#d': ids }], 6000, false, true).then((got) => { if (got) { if (got.length) addEvents(got) } else { ids.forEach((i) => askedAdmins.delete(i)); setTimeout(() => ids.forEach(wantAdmins), 5000) } })
+    void queryComplete('groups', [{ kinds: [9007, 9000, 9001], '#h': ids, limit: 3000 }], 6000, false, true) // (an event's hosts: its creator and co-hosts by role, EV-14).then((got) => { if (got) { if (got.length) addEvents(got) } else { ids.forEach((i) => askedAdmins.delete(i)); setTimeout(() => ids.forEach(wantAdmins), 5000) } })
   }, 200)
 }
 
@@ -1003,7 +1027,6 @@ export const calendar: () => CalEvent[] = perLog((list) => {
   }
   const statusLabels = new Map<string, Ev[]>()
   for (const e of list) if (e.kind === 1985 && tag(e, 'L') === EVENT_STATUS_NS) { const h = tag(e, 'h'); if (h) statusLabels.set(h, [...(statusLabels.get(h) ?? []), e]) }
-  const admins39001 = new Set(list.filter((x) => x.kind === 39001).map((x) => tag(x, 'd')).filter(Boolean) as string[])
   const out: CalEvent[] = []
   for (const [key, versions] of byKey) {
     const sorted = [...versions].sort(byTime)
@@ -1016,8 +1039,8 @@ export const calendar: () => CalEvent[] = perLog((list) => {
     if (isNew) {
       creator = creators.get(groupId) ?? sorted[0].pubkey
       hosts = new Set([creator, ...(gs.get(groupId)?.admins ?? [])])
-      // versions by others while this group's admin list (39001) never arrived: ask for it (then they're judged)
-      if (sorted.some((v) => v.pubkey !== creator) && !admins39001.has(groupId)) wantAdmins(groupId)
+      // versions by others: ask for the group's 9007 and role events once (who its co-hosts are), then they're judged
+      if (sorted.some((v) => v.pubkey !== creator)) wantAdmins(groupId) // (once per group: its role events)
       const mine = sorted.filter((v) => hosts.has(v.pubkey))
       if (!mine.length) continue
       e = mine.at(-1)!

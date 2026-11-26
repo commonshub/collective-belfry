@@ -2353,3 +2353,7 @@ form .create-where { margin-bottom: 14px; }
 .ev-empty .ev-empty-cta { width: auto; display: inline-flex; align-items: center; gap: 8px; padding-left: 22px; padding-right: 22px; border-radius: 22px; }
 .ev-empty .ev-empty-cta svg { width: 18px; height: 18px; }
 .nowrap { white-space: nowrap; }
+/* the People sheet's hosts: Remove as co-host beside a co-host (EV-14) */
+.ev-host-row { display: flex; align-items: center; gap: 8px; }
+.ev-host-row > .ev-person { flex: 1; min-width: 0; }
+.ev-host-row .btn.small { width: auto; flex: none; white-space: nowrap; }

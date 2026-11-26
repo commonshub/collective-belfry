@@ -89,9 +89,8 @@ export function eventRoles(e: Pick<CalEvent, 'creator' | 'groupId'>, pk: string)
 
 /** May I check people in (the server checks again)? */
 export function mayCheckIn(e: Pick<CalEvent, 'creator' | 'groupId'>, apiSays?: boolean): boolean {
-  if (apiSays) return true
-  const k = me()
-  return eventRoles(e, k).length > 0 || !!group(e.groupId)?.admins.has(k) || isAdmin()
+  if (apiSays !== undefined) return apiSays // the belfry's me.may_check_in: hosts, co-hosts, stewards (EV-14)
+  return eventRoles(e, me()).length > 0
 }
 
 /** "Check people in" shows on the header from 00:00 on the first day to the end of the last. */
@@ -209,14 +208,14 @@ function demoLabel(ns: string, v: string, pk: string, groupId: string, at = Math
 function demoSetRole(groupId: string, pk: string, role: GroupRole): GroupRole {
   const g = group(groupId)
   const admin = !!g?.admins.has(pk)
-  if (!g?.admins.has(me()) && !isAdmin()) throw new CheckFailed('not_allowed')
+  if (!g?.admins.has(me()) && (isEventGroup(groupId) || !isAdmin())) throw new CheckFailed('not_allowed') // (an event: its hosts only)
   if (role === 'steward' && !isEventGroup(groupId)) throw new CheckFailed('events_only')
   const now = Math.floor(Date.now() / 1000)
   const put = (r: 'admin' | 'member') => addEvents([{ id: hex(32), pubkey: signerKey() ?? 'f'.repeat(64), sig: hex(64), kind: 9000, created_at: now, content: '',
     tags: [['h', groupId], ['p', pk, r], ['role', r], ['by', me()]] }])
   const creator = all(me()).filter((e) => e.kind === 9007 && tag(e, 'h') === groupId).sort((a, b) => a.created_at - b.created_at)[0]?.pubkey
   if (role === 'admin') { if (!admin) put('admin') }
-  else if (admin) { if (pk === creator || everywhere(groupId).has(pk)) throw new CheckFailed('always_admin'); put('member') }
+  else if (admin) { if (pk === creator || (!isEventGroup(groupId) && everywhere(groupId).has(pk))) throw new CheckFailed('always_admin'); put('member') }
   if (role === 'steward' && !isSteward(groupId, pk)) demoLabel(ROLE_NS, 'steward', pk, groupId, now)
   if (role !== 'steward' && isSteward(groupId, pk)) demoLabel(ROLE_NS, 'none', pk, groupId, now)
   touch()

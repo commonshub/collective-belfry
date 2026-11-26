@@ -266,7 +266,8 @@ export function myState(e: CalEvent, p = people(e), api?: ApiEvent): MyState {
   if (e.hosts.has(k)) return 'host'
   return 'none'
 }
-export const isHost = (e: CalEvent) => e.hosts.has(me()) || (isAdmin() && !e.remote)
+/** Do I host E: its creator or a co-host by role (EV-14, 26 Nov: a belfry admin who neither made it nor was invited hosts nothing). */
+export const isHost = (e: CalEvent) => e.hosts.has(me())
 
 /** "Still going?": my RSVP or ticket predates a change of the date or the place. */
 export function stillGoing(e: CalEvent): boolean {
