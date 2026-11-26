@@ -312,11 +312,14 @@ follow the canvas boards `cards/print` (+ dark), `cards/print-sheet` and
   - Pages: 1 to 50 (`pages`), with the total next to it ("= 8 cards · 4 A6 on each A4").
   - Batch name (`batch`, up to 60 characters): "Batch N" unless typed, N = every batch this
     belfry made so far, plus one.
+  - "People who join with these cards become": **Member** (the default) or Guest. Field
+    `join_as` = `member` | `guest` (a form without it: `member`). §6.
   - **Generate PDF** (`POST /cards/make`, csrf): makes `pages × per_page` cards and answers
     `303` to the batch's PDF, `GET /cards/batch/<batch>.pdf` (admins only; `application/pdf`,
     `Content-Disposition: inline; filename="<batch name>.pdf"`), which opens in a new tab.
     `<batch>` is the batch's number (the second it was made).
-- **Cards made · N**: Card (its id) · For (Group / Topic) · Batch · State (Not scanned yet /
+- **Cards made · N**: Card (its id) · For (Group / Topic) · Batch · People become (Members /
+  Guests) · State (Not scanned yet /
   Claimed / Retired) · Name (a group's name; a topic's `#hashtag`) · Started by (the person's
   name, with "(guest steward)" for a guest) · **Reset** on a used card (`POST
   /cards/<id>/reset`, csrf, a confirmation): unclaimed again, its link revoked, the group it
@@ -363,14 +366,61 @@ frequency; a visitor who joins a topic with the card's guest link follows it wit
 `/guest/save/verify`. A visitor's `summary` rides with `claim-start` (kept with the form) or
 `claim-verify`.
 
-## 6. The proxy
+## 6. Members or guests
+
+Xavier (2026-11-27): "For the purpose of Brussels belfry people arriving via a card should be
+added as members not guests. Maybe we can add that as a setting in the card generator? Just make
+sure that the cards already generated would use member as default role. That way they have
+access directly to townhall channel."
+
+Each batch says who the people who join with its cards become: `join_as` on every card of the
+batch (`group_cards.join_as`, `member` | `guest`, default `member`). Every card made before the
+choice existed is a **member** card (the column's default).
+
+With `join_as = member`:
+
+- Whoever **proves an e-mail address** through the card becomes a **member** of the belfry: the
+  visitor who starts its group or topic (`claim-verify`, `claim-confirm`), a saved guest who
+  starts it signed in (`claim`), and everyone who joins a claimed card and saves their account
+  with name + e-mail + code (`/guest/save/verify`, or `POST /channel-invites/<token>/join` by a
+  guest whose address is proven already). It is the path a member link takes
+  (`guests.become_member`, roles.py): a free membership with the belfry's default role (Member
+  when the default is Admin), no end, a username from their name, the join line in the town
+  square, the community relay's list; their guest passes close and they stay in their channels
+  (`guests.became_member`). They are in the card's group or topic as before; the visitor who
+  started it is its steward (admin role), now as a member: no guest pass, no `guest` tag on the
+  9000.
+- The answers say so: `claim`, `claim-verify` and `claim-confirm` carry `"member": true` (and
+  the new `nip05`); `/guest/save/verify` carries `"member": true, "role"` as for a member link;
+  the join of a guest with a proven address carries `"guest": false, "member": true, "role"`.
+  The join answer for a card keeps its shape otherwise (no `"as": "member"`, no
+  `email_needed`): a topic's reader may still post without an e-mail.
+- Without an e-mail ("No account required" on a topic card) they stay a reading or name-only
+  guest of the topic, as before; saving the account later makes them a member then.
+- The card counts as an invitation by the admin who made the batch: the Membership settings'
+  "accept" rule (admins | vouches) is not asked. Agents stay guests. The 100 new accounts per
+  card a day (§3) still holds.
+- The welcome mail waits ten minutes for a name and username (`POST /welcome`), as after a
+  member link.
+
+`join_as = guest` keeps everything as §§2–4 say.
+
+**Migration** (once, at the first start with this code; register param
+`belfry.cards_members_migrated`): the active guests who came in by a member card (a pass made
+by its link, or the steward pass of its claimer) and have a proven address become members by
+the same path; one log line each (`cards: <8 hex>… a member now (came by card <ID>)`). Reading
+guests, guests without an address, buyers whose address is not proven and agents are left
+alone. When one fails it is not recorded and runs again at the next start (those done are
+members and are skipped).
+
+## 7. The proxy
 
 `chat.<domain>/g/<id>` is answered by the chat's page itself (the page rule that serves the
 app's routes), not cached. The phone apps open it too: `/g/*` is in apple-app-site-association; assetlinks.json covers the whole chat host already (Android)
 yet. `belfry.<domain>/cards/*` is in the console's form limit; the API has the limit of
 `/api/*` (60 a minute per address) on top of §2's own.
 
-## 7. Not in v1
+## 8. Not in v1
 
 - Posting from a card without an e-mail address.
 - A preview of the group's recent messages before joining.

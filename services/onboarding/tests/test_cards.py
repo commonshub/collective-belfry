@@ -48,8 +48,10 @@ class Land:
         self.rsvc, self.keycast, self.ada, self.ada_id, self.w = rsvc, keycast, ada, ada_id, relay
         self.channels: set[str] = set()
 
-    def card(self, kind: str = "group") -> str:
-        key = cardsconsole.make(self.rsvc, kind, "Test batch", 1, self.ada_id)
+    def card(self, kind: str = "group", join_as: str = "guest") -> str:
+        """One new card. The tests written before §6 are about guests' cards; a batch made in
+        the console is a members' one unless it says so."""
+        key = cardsconsole.make(self.rsvc, kind, "Test batch", 1, self.ada_id, join_as=join_as)
         return next(b for b in cardsconsole.batches(self.rsvc) if b["key"] == key)["cards"][0]["id"]
 
     def of(self, kind: int, group: str | None = None) -> list[dict]:

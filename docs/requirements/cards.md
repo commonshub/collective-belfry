@@ -88,3 +88,12 @@ to scan a card starts it and looks after it, everyone after joins. Asked by the 
   archived.
 - **CARD-34** [all] Someone who starts or joins a topic by its card can follow it by e-mail
   (weekly by default, or monthly). → channels.md CH-50…
+- **CARD-35** [server] People who join through a printed card become **members** of the belfry,
+  not guests, once they prove an e-mail address (starting the group, or joining with name +
+  e-mail + code), so they reach the town square at once; without an e-mail they stay guests of
+  the topic until they save one. The card generator has a setting per batch, "People who join
+  with these cards become: Member (default) | Guest", and every card generated before it is a
+  member card. "For the purpose of Brussels belfry people arriving via a card should be added
+  as members not guests. Maybe we can add that as a setting in the card generator? Just make
+  sure that the cards already generated would use member as default role. That way they have
+  access directly to townhall channel." (owner, 2026-11-27) → cards.md §6

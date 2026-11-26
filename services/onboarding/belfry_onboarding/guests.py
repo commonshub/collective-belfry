@@ -860,8 +860,50 @@ def _is_agent(svc: Services, pubkey: str) -> bool:
     return any(r.get("tier") == "agent" or r.get("guest_agent") for r in rows)
 
 
+def card_member_terms(svc: Services, inv: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What a printed card's link gives when its batch makes members (docs/cards.md §6): the
+    belfry's default role (never Admin: Member then), no end. None for any other invite, and for
+    a card whose batch makes guests. The card counts as an invitation by the admin who made the
+    batch: no application, no vouches."""
+    if not inv or inv.get("member_role"):
+        return None
+    of = getattr(svc.odoo, "card_of_invite", None)
+    try:
+        card = of(inv.get("token")) if of else None
+    except Exception as exc:  # noqa: BLE001 — a guest then, as any guest link makes
+        log.info("guests: card of an invite not read: %s", type(exc).__name__)
+        card = None
+    terms = card_terms(svc, card) if card else None
+    return {**terms, "id": inv.get("id")} if terms else None
+
+
+def card_terms(svc: Services, card: dict[str, Any]) -> dict[str, Any] | None:
+    """A printed card's membership terms (``become_member``'s): None when its batch makes
+    guests."""
+    if (card.get("join_as") or "member") != "member":
+        return None
+    rid = roles.default_role(svc)
+    if rid == roles.ADMIN or not roles.exists(svc, rid):
+        rid = roles.MEMBER
+    return {
+        "id": None,
+        "member_role": rid,
+        "membership": "permanent",
+        "member_tester": False,
+        "card": card["id"],
+    }
+
+
+def member_terms(svc: Services, inv: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The membership an invite gives: a member link's own, or a members' card's."""
+    if inv and inv.get("member_role"):
+        return inv
+    return card_member_terms(svc, inv)
+
+
 def member_invite_of(svc: Services, pubkey: str) -> dict[str, Any] | None:
-    """The newest member link (roles.py) that brought the guest PUBKEY in, if any."""
+    """The newest member link (roles.py), or printed card whose batch makes members, that
+    brought the guest PUBKEY in, if any."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["tier", "=", "guest"]],
@@ -871,13 +913,13 @@ def member_invite_of(svc: Services, pubkey: str) -> dict[str, Any] | None:
         inv_id = m2o_id(r.get("invite_id"))
         inv = (
             svc.odoo.read_one(
-                "belfry.invite", inv_id, ["member_role", "membership", "member_tester"]
+                "belfry.invite", inv_id, ["member_role", "membership", "member_tester", "token"]
             )
             if inv_id
             else None
         )
-        if inv and inv.get("member_role"):
-            return inv
+        if terms := member_terms(svc, inv):
+            return terms
     return None
 
 
@@ -923,7 +965,20 @@ def join_account(svc: Services, token: str, pubkey: str) -> dict[str, Any] | Non
 
     inv = svc.odoo.invite_by_token(token) or {}
     if not inv.get("member_role"):
-        return _join_account(svc, token, pubkey)
+        terms = card_member_terms(svc, inv)
+        if terms is None or _is_agent(svc, pubkey):
+            return _join_account(svc, token, pubkey)
+        # a members' card (docs/cards.md §6): the answer keeps a card's shape (a topic's guest
+        # may post without an e-mail); a guest with a proven address becomes a member now
+        out = _join_account(svc, token, pubkey)
+        if out is None or not out.get("guest") or not _saved_email(svc, pubkey):
+            return out
+        try:
+            if become_member(svc, pubkey, terms):
+                return {**out, "guest": False, "member": True, "role": roles.role_of(svc, pubkey)}
+        except ApiError as exc:  # still a guest of the channel; an admin can still add them
+            log.warning("cards: not a member yet: %s", exc.error)
+        return out
     if _is_agent(svc, pubkey):
         raise ApiError(403, "agent", "This link makes a person a member: not for an agent.")
     out = _join_account(svc, token, pubkey)

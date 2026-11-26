@@ -5,11 +5,12 @@ sizes are copied here. The cards themselves are drawn into a PDF by cardspdf.py.
 
 - **Make cards**: Groups or Topics, picked from two tiles that each show the printed card;
   cards per page (1 on A4, 2 A5, 4 A6); how many pages, with the number of cards that makes; a
-  batch name ("Batch N" unless typed); **Generate PDF**: the batch is made and its PDF opens
+  batch name ("Batch N" unless typed); who the people who join with these cards become, Member
+  (the default) or Guest (§6); **Generate PDF**: the batch is made and its PDF opens
   (``/cards/batch/<batch>.pdf``) in a new tab.
-- **Cards made**: Card · For · Batch · State · Name · Started by, and Reset on a used card
-  (unclaimed again, its link revoked, the group it started left as it is). A batch's name opens
-  its PDF again.
+- **Cards made**: Card · For · Batch · People become · State · Name · Started by, and Reset on
+  a used card (unclaimed again, its link revoked, the group it started left as it is). A
+  batch's name opens its PDF again.
 
 Every form carries the console's csrf and answers with a fixed message (flash.py). A batch is
 found by the number in its address (the second it was made); nothing from the address is shown.
@@ -38,6 +39,8 @@ PAGES_MAX = 50
 BATCH_MAX = 60
 SIZE = {1: "A4", 2: "A5", 4: "A6"}
 KIND_NAME = {"group": "Group", "topic": "Topic"}
+JOIN_AS = ("member", "guest")
+JOIN_AS_NAME = {"member": "Members", "guest": "Guests"}
 STATE = {
     "unclaimed": ("Not scanned yet", ""),
     "claimed": ("Claimed", " on"),
@@ -52,6 +55,7 @@ MSG = {
     "pages": f"Make 1 to {PAGES_MAX} pages at a time.",
     "per_page": "Choose 1, 2 or 4 cards per page.",
     "kind": "Choose group cards or topic cards.",
+    "join_as": "Choose whether people join as members or as guests.",
     "nothing": "That card was not in use.",
     "unsupported": "Printed cards need the belfry's own register.",
     "expired": "The form expired; try again.",
@@ -162,6 +166,7 @@ def batches(svc: Services) -> list[dict[str, Any]]:
                 "name": c["batch"],
                 "kind": c["kind"],
                 "per_page": int(c.get("per_page") or 4),
+                "join_as": c.get("join_as") or "member",
                 "at": c["made_at"],
                 "cards": [],
             },
@@ -175,9 +180,17 @@ def next_batch_name(svc: Services) -> str:
     return f"Batch {len(batches(svc)) + 1}"
 
 
-def make(svc: Services, kind: str, name: str, count: int, by: int, per_page: int = 4) -> int:
-    """COUNT new cards of KIND in a batch called NAME, printed PER_PAGE to an A4; returns the
-    batch's key."""
+def make(
+    svc: Services,
+    kind: str,
+    name: str,
+    count: int,
+    by: int,
+    per_page: int = 4,
+    join_as: str = "member",
+) -> int:
+    """COUNT new cards of KIND in a batch called NAME, printed PER_PAGE to an A4, whose people
+    become JOIN_AS (``member`` or ``guest``); returns the batch's key."""
     name = " ".join(name.split())[:BATCH_MAX] or next_batch_name(svc)
     at = int(time.time())
     taken = {int(c["made_at"]) for c in svc.odoo.card_list()}
@@ -187,8 +200,8 @@ def make(svc: Services, kind: str, name: str, count: int, by: int, per_page: int
     for _ in range(count * 20):
         if len(made) >= count:
             break
-        made += svc.odoo.card_make([cards.new_id()], kind, name, by, at, per_page)
-    log.info("cards: %d %s cards made by partner %s", len(made), kind, by)
+        made += svc.odoo.card_make([cards.new_id()], kind, name, by, at, per_page, join_as)
+    log.info("cards: %d %s cards (%s) made by partner %s", len(made), kind, join_as, by)
     return at
 
 
@@ -262,12 +275,17 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         f"""<label class="ppo"><input class="sr" type="radio" name="per_page" value="{n}"{" checked" if n == 4 else ""}><span class="pgi" style="grid-template:{grids[n]}" aria-hidden="true">{"<i></i>" * n}</span>{n} <small>{SIZE[n]}</small></label>"""
         for n in PER_PAGE
     )
+    joins = "".join(
+        f"""<label class="ppo"><input class="sr" type="radio" name="join_as" value="{v}"{" checked" if v == "member" else ""}>{label}</label>"""
+        for v, label in (("member", "Member"), ("guest", "Guest"))
+    )
     batch = E(next_batch_name(svc))
     form = f"""<form method="post" action="{PATH}/make" target="_blank" id="pc-make">
 <input type="hidden" name="csrf" value="{csrf}">{tiles}
 <div class="mk2"><div class="fl" style="width:auto;flex:none"><span class="lb" id="pc-ppl">Cards per page</span><div class="ppg" role="radiogroup" aria-labelledby="pc-ppl">{per}</div></div>
 <div class="fl" style="width:110px"><label for="pc-pages">Pages</label><input class="in" id="pc-pages" type="number" name="pages" min="1" max="{PAGES_MAX}" value="2" required inputmode="numeric"><span class="help">1 to {PAGES_MAX}</span></div>
 <div class="tot" aria-live="polite"><b id="pc-total">= 8 cards</b><span id="pc-each">{E(on_each(4))}</span></div></div>
+<div class="mk2" style="margin-top:14px"><div class="fl" style="width:auto;flex:none"><span class="lb" id="pc-join">People who join with these cards become</span><div class="ppg" role="radiogroup" aria-labelledby="pc-join">{joins}</div><span class="help">Members get the town square at once</span></div></div>
 <div class="mk2" style="margin-top:14px"><div class="fl"><label for="pc-batch">Batch name</label><input class="in" id="pc-batch" type="text" name="batch" maxlength="{BATCH_MAX}" value="{batch}"><span class="help">To find these cards in the list</span></div>
 <button class="gen" id="pc-btn">Generate PDF</button></div></form>"""
     trs = ""
@@ -288,11 +306,12 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
                 f'<tr><td class="cid">{E(c["id"])}</td>'
                 f'<td><span class="kindp"><i style="{size}"></i>{E(KIND_NAME.get(c["kind"], ""))}</span></td>'
                 f'<td><a class="bn" href="{PATH}/batch/{b["key"]}.pdf" target="_blank" rel="noopener" title="Open the PDF of this batch again">{E(b["name"])}</a></td>'
+                f"<td>{E(JOIN_AS_NAME.get(b['join_as'], ''))}</td>"
                 f'<td><span class="pill{cls}">{E(label)}</span></td>'
                 f"<td>{E(name)}</td><td>{E(starters.get(c['id'], ''))}</td><td>{reset}</td></tr>"
             )
     table = (
-        f"""<div class="tw"><table><thead><tr><th>Card</th><th>For</th><th>Batch</th><th>State</th><th>Name</th><th>Started by</th><th></th></tr></thead><tbody>{trs}</tbody></table></div>"""
+        f"""<div class="tw"><table><thead><tr><th>Card</th><th>For</th><th>Batch</th><th>People become</th><th>State</th><th>Name</th><th>Started by</th><th></th></tr></thead><tbody>{trs}</tbody></table></div>"""
         if trs
         else '<p class="lead" style="margin:0">No cards yet.</p>'
     )
@@ -403,9 +422,12 @@ def register(app: FastAPI) -> None:
         pages = number(form, "pages")
         if not 1 <= pages <= PAGES_MAX:
             return back(request, err="pages")
+        join_as = str(form.get("join_as") or "member")  # an older form sends none
+        if join_as not in JOIN_AS:
+            return back(request, err="join_as")
         name = str(form.get("batch") or "")
         key = await run_in_threadpool(
-            make, s, kind, name, pages * per_page, int(me["partner"]), per_page
+            make, s, kind, name, pages * per_page, int(me["partner"]), per_page, join_as
         )
         return RedirectResponse(f"{PATH}/batch/{key}.pdf", status_code=303)
 

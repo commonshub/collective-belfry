@@ -187,6 +187,13 @@ class Register(OdooApi):
             self._db.execute(
                 "ALTER TABLE group_cards ADD COLUMN per_page INTEGER NOT NULL DEFAULT 4"
             )
+        # who the people who join by a card become (docs/cards.md §6): members unless the batch
+        # said guests; every card made before the choice existed is a members' card (Xavier,
+        # 2026-11-27)
+        if "join_as" not in {r[1] for r in self._db.execute("PRAGMA table_info(group_cards)")}:
+            self._db.execute(
+                "ALTER TABLE group_cards ADD COLUMN join_as TEXT NOT NULL DEFAULT 'member'"
+            )
         self._card_full_told: dict[int, float] = {}  # invite → when the log last said "full"
         self._push_one_row_per_identity()
         self._profile_visibility_once()
@@ -1482,7 +1489,7 @@ class Register(OdooApi):
     # ── printed cards (cards.py): a QR that starts a group, then brings people into it ───────
     CARD_FIELDS = (
         "id, kind, batch, state, group_id, invite, title, made_by, made_at, "
-        "claimed_by, claimed_key, claimed_at, per_page"
+        "claimed_by, claimed_key, claimed_at, per_page, join_as"
     )
 
     @staticmethod
@@ -1501,22 +1508,34 @@ class Register(OdooApi):
             "claimed_key",
             "claimed_at",
             "per_page",
+            "join_as",
         )
         return dict(zip(keys, row, strict=True))
 
     def card_make(
-        self, ids: list[str], kind: str, batch: str, made_by: int, at: int, per_page: int = 4
+        self,
+        ids: list[str],
+        kind: str,
+        batch: str,
+        made_by: int,
+        at: int,
+        per_page: int = 4,
+        join_as: str = "member",
     ) -> list[str]:
         """New unclaimed cards; an id that exists already is left out of the answer. PER_PAGE:
-        how many of the batch are printed on an A4 sheet (1, 2 or 4)."""
+        how many of the batch are printed on an A4 sheet (1, 2 or 4). JOIN_AS: ``member`` (the
+        people who join by these cards become members of the belfry once their e-mail is proven)
+        or ``guest``."""
+        if join_as not in ("member", "guest"):
+            raise ValueError(f"join_as: {join_as!r}")
         made = []
         with self._lock:
             for cid in ids:
                 cur = self._db.execute(
                     "INSERT OR IGNORE INTO group_cards "
-                    "(id, kind, batch, state, made_by, made_at, per_page) "
-                    "VALUES (?, ?, ?, 'unclaimed', ?, ?, ?)",
-                    (cid, kind, batch, int(made_by), int(at), int(per_page)),
+                    "(id, kind, batch, state, made_by, made_at, per_page, join_as) "
+                    "VALUES (?, ?, ?, 'unclaimed', ?, ?, ?, ?)",
+                    (cid, kind, batch, int(made_by), int(at), int(per_page), join_as),
                 )
                 if cur.rowcount:
                     made.append(cid)
@@ -1548,6 +1567,16 @@ class Register(OdooApi):
                 "SELECT kind FROM group_cards WHERE invite = ?", (token,)
             ).fetchone()
         return str(row[0]) if row else None
+
+    def card_of_invite(self, token: str | None) -> dict[str, Any] | None:
+        """The printed card whose guest link TOKEN is (claimed or retired), else None."""
+        if not token or len(token) < 20:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {self.CARD_FIELDS} FROM group_cards WHERE invite = ?", (token,)
+            ).fetchone()
+        return self._card_row(row) if row else None
 
     def card_list(self) -> list[dict[str, Any]]:
         with self._lock:

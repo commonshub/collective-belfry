@@ -298,6 +298,10 @@ def create_app(services: Services | None = None) -> FastAPI:
                     checkin.migrate_event_hosts(svc)
                 except Exception as exc:  # noqa: BLE001 — tried again at the next start
                     logging.getLogger(__name__).warning("events: hosts migration: %s", exc)
+                try:  # once: guests who came by a members' card become members (cards.py)
+                    cards.migrate_card_guests(svc)
+                except Exception as exc:  # noqa: BLE001 — tried again at the next start
+                    logging.getLogger(__name__).warning("cards: members migration: %s", exc)
                 try:
                     n = len(events.listing(svc, int(time.time()) - 86400))
                     logging.getLogger(__name__).info("events: %d upcoming read at start", n)

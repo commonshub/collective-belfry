@@ -3,7 +3,9 @@
 The first person to scan a card *claims* it: they start a group (a ``group`` card) or a topic (a
 ``topic`` card: a channel whose id is its hashtag) and look after it. Every later scan shows the
 group and brings people in through the card's guest link, the same path as any guest link
-(guests.py). An admin makes and prints the cards in the console (cardsconsole.py).
+(guests.py). An admin makes and prints the cards in the console (cardsconsole.py). Each batch
+says who its people become (docs/cards.md §6): members (the default, and every card made before
+the choice) once they prove an e-mail address, or guests.
 
 - A card's id is 6 characters of ``ALPHABET`` (capitals and digits without O, I, L, 0, 1). It is
   the only thing on the card, and it is no secret once the card is claimed.
@@ -45,7 +47,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from .core import Services, m2o_id
+from .core import Services, m2o_id, pass_fields
 from .events import Limiter
 from .holder_invites import ApiError, authenticate
 
@@ -279,6 +281,94 @@ def account_of_key(svc: Services, pubkey: str) -> dict[str, Any]:
     }
 
 
+# ── who the card makes of the people it brings in (docs/cards.md §6) ────────────────────────
+def joins_as_member(card: dict[str, Any]) -> bool:
+    """Whether people who join by CARD become members (the default, and every card made before
+    the choice existed) rather than guests."""
+    return (card.get("join_as") or "member") == "member"
+
+
+def member_now(svc: Services, card: dict[str, Any], pubkey: str) -> bool:
+    """The guest PUBKEY, whose address is proven, becomes a member of the belfry by CARD (the
+    path a member link takes: the default role, no end, a username, the join line in the town
+    square, the relay's list; their guest passes close, they stay in their channels). True when
+    they are a member now; False (still a guest, logged) when it did not work."""
+    from . import guests
+    from .places import member_key
+
+    terms = guests.card_terms(svc, card)
+    if terms is None:
+        return False
+    try:
+        guests.become_member(svc, pubkey, terms)
+    except Exception as exc:  # noqa: BLE001 — still a guest: the group works the same
+        log.warning(
+            "cards: %s… not made a member by card %s: %s",
+            pubkey[:8],
+            card["id"],
+            getattr(exc, "error", type(exc).__name__),
+        )
+    return member_key(svc, pubkey) is not None
+
+
+MIGRATED = "belfry.cards_members_migrated"
+
+
+def migrate_card_guests(svc: Services) -> list[str]:
+    """Once (MIGRATED): the guests who came in by a printed card whose batch makes members (every
+    card made before the choice existed: §6) and whose address is proven become members now, by
+    the same path (``member_now``): those who joined by its link, and a guest who started its
+    group. Reading guests, guests without an address, buyers whose address is not proven yet and
+    agents stay as they are. Recorded only when everyone it tried is a member: a start after a
+    failure tries again (it changes nothing for those done). Returns the keys made members."""
+    from . import guests, sales
+    from .places import member_key
+
+    if not own(svc) or svc.odoo.param(MIGRATED):
+        return []
+    by_invite: dict[int, dict[str, Any]] = {}
+    by_card: dict[str, dict[str, Any]] = {}
+    for card in svc.odoo.card_list():
+        if not card.get("invite") or not joins_as_member(card):
+            continue
+        by_card[card["id"]] = card
+        inv = svc.odoo.invite_by_token(card["invite"])
+        if inv:
+            by_invite[int(inv["id"])] = card
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["tier", "=", "guest"]],
+        pass_fields(
+            svc, "keycast_pubkey", "invite_id", "guest_card", "guest_agent", "guest_unnamed"
+        ),
+    )
+    found: dict[str, dict[str, Any]] = {}
+    for r in sorted(rows, key=lambda r: int(r["id"])):
+        card = by_invite.get(m2o_id(r.get("invite_id")) or 0) or by_card.get(
+            str(r.get("guest_card") or "")
+        )
+        if card and r.get("keycast_pubkey"):
+            found.setdefault(str(r["keycast_pubkey"]), card)
+    made: list[str] = []
+    ok = True
+    for pubkey, card in found.items():
+        if member_key(svc, pubkey) is not None or guests._is_agent(svc, pubkey):
+            continue
+        if guests._unnamed(svc, pubkey) or not guests._saved_email(svc, pubkey):
+            continue  # reading, or no address yet: a member once they save one (guest/save)
+        if sales.unverified_key(svc, pubkey):
+            continue
+        if member_now(svc, card, pubkey):
+            log.info("cards: %s… a member now (came by card %s)", pubkey[:8], card["id"])
+            made.append(pubkey)
+        else:
+            ok = False
+    if ok:
+        svc.odoo.set_param(MIGRATED, str(int(time.time())))
+    log.info("cards: %d card guests made members (%s)", len(made), "done" if ok else "again later")
+    return made
+
+
 # ── starting the group ──────────────────────────────────────────────────────────────────────
 def _publish(svc: Services, kind: int, tags: list[list[str]], content: str = "") -> None:
     from . import events
@@ -391,6 +481,13 @@ def start(
 
     until = ""
     fresh = pass_id is not None
+    if who["guest"] and joins_as_member(card):
+        # a members' card (§6): the proven person is a member of the belfry before the group is
+        # made, so the group gets a member as its steward (no guest pass, no `guest` tag)
+        if fresh:
+            svc.odoo.write("belfry.pass", [int(pass_id)], {"state": "active"})
+        if member_now(svc, card, who["pubkey"]):
+            who, pass_id, fresh = {**who, "guest": False}, None, False
     if who["guest"]:
         if not fresh:
             got = svc.odoo.add_guest_channel(who["pubkey"], group, who["pubkey"], guests.DAYS)
@@ -443,7 +540,8 @@ def claim(svc: Services, card_id: str, caller: str, data: dict[str, Any]) -> dic
         with _ids_lock:
             group = choose_group(svc, card, form)
             start(svc, card, form, who, group)
-    return {"group": group, **_follow_topic(svc, card, who, group, summary)}
+    who, made = _as_member(svc, card, who, {})
+    return {"group": group, **made, **_follow_topic(svc, card, who, group, summary)}
 
 
 def _follow_topic(
@@ -648,7 +746,23 @@ def _make(
         else:
             who, opened, pass_id = _new_guest(svc, group, form["name"], email, key, form["client"])
             start(svc, card, form, who, group, pass_id)
-    return who, opened, group
+    return (*_as_member(svc, card, who, opened), group)
+
+
+def _as_member(
+    svc: Services, card: dict[str, Any], who: dict[str, Any], opened: dict[str, Any]
+) -> tuple[dict, dict]:
+    """After a members' card made a guest a member (``start``): WHO says so, and the signed-in
+    body says ``"member": true`` with their new name@domain."""
+    from . import guests
+    from .places import member_key
+
+    if not who["guest"] or not joins_as_member(card) or member_key(svc, who["pubkey"]) is None:
+        return who, opened
+    opened = {**opened, "member": True}
+    if nip05 := guests._account_nip05(svc, int(who["partner"])):
+        opened["nip05"] = nip05
+    return {**who, "guest": False}, opened
 
 
 def _done_claim(claim: dict[str, Any] | None) -> bool:
