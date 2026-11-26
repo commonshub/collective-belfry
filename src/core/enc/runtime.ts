@@ -631,7 +631,7 @@ function refuseClear(e: NostrEvent): boolean {
   if (!writesFormat3()) return false // P2-1: format 1: never (the apps write clear there)
   if (e.kind === E.KEY || e.kind === E.MSG || !('sig' in e) || !e.sig) return false // (opened rumors carry no signature)
   const h = hOf(e)
-  if (!h || !isPrivateGroup(h) || clearInGroup(e)) return false
+  if (!h || !privateHere(h) || clearInGroup(e)) return false // §26: private OR ever encrypted here
   const f = groupFirstAt(h)
   return f !== undefined && e.created_at >= f // (the key's own second too: a same-second clear event never counts)
 }
@@ -649,12 +649,12 @@ function groupKeyFor(h: string, K: string): KeyRec | undefined | 'wait' {
     return held
   }
   if (!device) return undefined
-  let got: E.GroupKey | null = null
-  for (const env of envs) { try { got = E.openGroupEnvelope(device.secret, env, h) ?? got } catch { /* a bad envelope: skipped */ } if (got) break }
-  if (!got) return undefined
-  const v = E.acceptGroupKey(got, chainFor(got.account))
-  if (v === 'wait') { want([got.account]); return 'wait' }
-  if (v === 'no') return undefined
+  // §17.12 (the iOS review): keep looking until an envelope is ACCEPTED, never stop at the first that opens
+  const dev = device
+  const pick = E.pickGroupEnvelope(envs, (env) => E.openGroupEnvelope(dev.secret, env, h), (k) => E.acceptGroupKey(k, chainFor(k.account)))
+  if (!pick) return undefined
+  if ('wait' in pick) { want([pick.wait]); return 'wait' }
+  const got = pick.key
   const svc = got.account === belfryGroupsKey() || got.account === belfry()
   const mc = chainOnly(me())
   const rec: KeyRec = { K, k: got.k, conv: 'g:' + h, group: true, mine: !!mc && mc.lists.some((l) => l.devices.includes(got!.maker)), service: svc, lists: '', claimed: got.set, at: got.at }
@@ -696,7 +696,7 @@ async function openGroupMessages() {
   for (const e of all(me())) {
     if (e.kind !== E.MSG || opened.has(e.id) || !('sig' in e) || !e.sig) continue
     const h = hOf(e), K = E.named(e)
-    if (!h || !K || !isPrivateGroup(h)) continue
+    if (!h || !K || !privateHere(h)) continue // §26: private OR ever encrypted (a group's metadata changed later doesn't stop it)
     const key = groupKeyFor(h, K)
     if (key === 'wait' || !key) continue // its key not here (no entry for this device: from when it joined, §8) or lists coming
     let o: { seal: NostrEvent; rumor: E.Rumor }

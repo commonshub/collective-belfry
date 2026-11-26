@@ -446,6 +446,17 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
       const bad = Uint8Array.from(Buffer.from(gf.ciphertext_hex, 'hex')); bad[0] ^= 1
       check('encrypted group file (§23): the rumor opens, its imeta opens the file, a changed byte doesn’t', o.rumor.id === gf.rumor_id && got.ok === gf.expect.opens && got.ok && Buffer.from(got.plain).toString('hex') === gf.plain_hex && got.mime === gf.expect.mime && (await F.openFile(tags, bad)).ok === gf.expect.tampered_opens, { got: got.ok, mime: got.mime })
     }
+    // §17.12 (the iOS review): a decoy envelope (same d = K, an unlisted maker) first, the real one second:
+    // the search goes on past the refused one and takes the real key; nothing accepted but one waiting: wait
+    {
+      const decoy = { account: 'a'.repeat(64), maker: 'd'.repeat(64), k: 'decoy', at: 1 }, real = { account: 'a'.repeat(64), maker: 'b'.repeat(64), k: 'real', at: 1 }
+      const accept = (k) => (k.maker === 'b'.repeat(64) ? 'ok' : k.maker === 'c'.repeat(64) ? 'wait' : 'no')
+      const got = E.pickGroupEnvelope([decoy, real], (x) => x, accept)
+      check('encrypted §17.12: a decoy first, the real envelope second → the real key', !!got && 'key' in got && got.key.k === 'real', got)
+      const none = E.pickGroupEnvelope([decoy, null, { ...real, maker: 'c'.repeat(64), account: 'e'.repeat(64) }], (x) => x, accept)
+      check('encrypted §17.12: nothing accepted, one waits on a list → wait (for that account)', !!none && 'wait' in none && none.wait === 'e'.repeat(64), none)
+      check('encrypted §17.12: only refused ones → none', E.pickGroupEnvelope([decoy], (x) => x, accept) === null)
+    }
     // the sha256 of the file, for the other apps to compare
     console.log('encrypted.json sha256 ' + createHash('sha256').update(readFileSync(ef)).digest('hex'))
   }

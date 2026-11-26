@@ -506,3 +506,21 @@ export function clearInGroup(e: { kind: number; pubkey: string; tags: string[][]
   if (e.kind === 30078) { const d = e.tags.find((t) => t[0] === 'd')?.[1] ?? ''; return d.startsWith('belfry:inbox:') || d.startsWith('seen:') }
   return false
 }
+
+// ---- §17.12: never block the search ------------------------------------------------------------
+/** The first envelope of a group key that opens AND is accepted. A decoy (same d = K, an unlisted maker)
+ *  never hides a real one after it: an opened envelope that is refused is skipped, and the search goes on.
+ *  'wait': none accepted yet, one waits on a list (its account is returned to be fetched). */
+export function pickGroupEnvelope<T>(envs: T[], open: (e: T) => GroupKey | null, accept: (k: GroupKey) => 'ok' | 'wait' | 'no'):
+  { key: GroupKey } | { wait: string } | null {
+  let waiting = ''
+  for (const env of envs) {
+    let k: GroupKey | null = null
+    try { k = open(env) } catch { k = null } // a bad envelope: skipped
+    if (!k) continue
+    const v = accept(k)
+    if (v === 'ok') return { key: k }
+    if (v === 'wait' && !waiting) waiting = k.account
+  }
+  return waiting ? { wait: waiting } : null
+}
