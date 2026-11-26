@@ -4,7 +4,7 @@
 import { LinkPair, copyText } from './LinkPair'
 import { isPictureMedia } from '../core/pictures'
 import { replaceHash } from '../core/nav'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import qrcode from 'qrcode-generator'
 import { BELFRY, NAME, type Backend } from '../config'
 import { calendar, displayName, eventByCoord, eventUrl, group, messages, profiles, type CalEvent, type Media, type Rsvp } from '../core/model'
@@ -200,8 +200,20 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
     <span className="ev-faces">{keys.slice(0, 5).map((k) => <Avatar key={k} pubkey={k} size={24} />)}</span>
   )
   const hostKeys = [e.creator, ...[...e.hosts].filter((k) => k !== e.creator && eventRoles(e, k)[0] === 'cohost')]
-  const nameOfHost = (k: string) => (api?.hosts.find((x) => x.pubkey === k)?.name || displayName(k)).split(' ')[0]
-  const hostNames = hostKeys.length <= 2 ? hostKeys.map(nameOfHost).join(' and ') : `${hostKeys.slice(0, 2).map(nameOfHost).join(', ')} and ${hostKeys.length - 2} more`
+  // the hosts line (canvas events/chat-*, 26 Nov): "Hosted by you and Ana Silva", you first; three names at most
+  // ("you, Ana Silva and Ben Okafor"), else the first and "N others" ("you and 3 others"); no "You're hosting" line
+  const hostOrder = hostKeys.includes(me()) ? [me(), ...hostKeys.filter((k) => k !== me())] : hostKeys
+  const nameOfHost = (k: string) => (k === me() ? 'you' : api?.hosts.find((x) => x.pubkey === k)?.name || displayName(k))
+  const hostLine = hostOrder.length <= 3
+    ? hostOrder.map((k, i) => <Fragment key={k}>{i === 0 ? '' : i === hostOrder.length - 1 ? ' and ' : ', '}<b>{nameOfHost(k)}</b></Fragment>)
+    : <><b>{nameOfHost(hostOrder[0])}</b> and <b>{hostOrder.length - 1} others</b></>
+  // the empty chat (events/chat-host-empty, -going-empty, -not-going): one line and at most one button, by state
+  const othersGoing = going.filter((k) => !hostKeys.includes(k)).length
+  const emptyChat = host && othersGoing === 0
+    ? <EventEmpty line="Nobody is going yet. Invite people: they'll talk here." button="Invite people" icon={<PersonPlusIcon />} onClick={() => setSheet('qr')} />
+    : host || holds
+      ? <EventEmpty line={`${going.length || 1} ${(going.length || 1) === 1 ? 'person is' : 'people are'} going. Nobody has written yet.`} button="Say hello" icon={<MessageIcon />} hello />
+      : <EventEmpty line={`Join the event to start chatting with ${hostKeys.length === 1 ? 'the host' : 'the hosts'} and other participants.`} />
   // Join online (evview-mid, -join-now, -not-going): for people going, from 1 hour before (the lead, canvas v16)
   const online = e.links.length > 0 || !!api?.online
   const startMs = eventStart(e), endMs = eventEnd(e), nowMs = nowS * 1000
@@ -230,8 +242,8 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
             {!e.location && online && <p className="evh-where"><LinkIcon /> Online</p>}
             {/* Event form canvas (evview-*): hosts and people going in one line under the place; fully open, › → People */}
             <button className="evh-going" onClick={() => (level === 2 ? setSheet('people') : setLevel(2))} aria-label={level === 2 ? 'See everyone going' : undefined}>
-              {faces([...hostKeys, ...going.filter((k) => !hostKeys.includes(k))])}
-              <span>Hosted by {hostNames}{going.length ? ` · ${going.length} going` : ''}</span>{level === 2 && <span className="evh-more" aria-hidden="true">›</span>}
+              {faces([...hostOrder, ...going.filter((k) => !hostKeys.includes(k))])}
+              <span>Hosted by {hostLine}{going.length ? <span className="nowrap"> · {going.length} going</span> : ''}</span>{level === 2 && <span className="evh-more" aria-hidden="true">›</span>}
             </button>
             {control}
             <div className="evr-rows">
@@ -283,7 +295,7 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
             <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
         </div>
         <div className="ev-content" onWheel={fold} onTouchMove={fold}>
-          {tab === 'chat' && <Conversation id={e.groupId} readOnly={readOnly || e.remote === true && !p.holders.has(me())} activeThread={activeThread} />}
+          {tab === 'chat' && <Conversation id={e.groupId} readOnly={readOnly || e.remote === true && !p.holders.has(me())} activeThread={activeThread} empty={emptyChat} placeholder={e.meeting ? undefined : 'Message the event'} />}
           {tab === 'photos' && <EventPhotos groupId={e.groupId} readOnly={readOnly || reading()} />}
           {tab === 'people' && e.meeting && <div className="scroll ev-people pad-x"><MeetingPeople e={e} host={host} /></div>}
           {tab === 'people' && !e.meeting && <EventPeople e={e} p={p} holders={holders} titles={titles} may={may} plain={plain} onCheckIn={() => setSheet('checkin')} />}
@@ -303,6 +315,20 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
       {sheet === 'take' && <TakeSheet e={e} tks={tks} p={p} t={ticketFor} onPick={setTicketFor} onClose={() => { setSheet(''); setTicketFor(null) }} />}
       {sheet === 'ticket' && ticketUrl && <TicketScreen e={e} url={ticketUrl} ticketTitle={myTicket && !myTicket.implicit ? myTicket.title : ''} checkedIn={checkedMine} onClose={() => setSheet('')} />}
       {sheet === 'checkin' && <CheckInScreen e={e} holders={holders} titles={titles} onClose={() => setSheet('')} />}
+    </div>
+  )
+}
+
+/** An event's chat with no messages yet: one line and at most one button. Say hello only puts the cursor in
+ *  the composer (nothing is sent for you); the button then goes (events/chat-say-hello). */
+function EventEmpty({ line, button, icon, onClick, hello = false }: { line: string; button?: string; icon?: ReactNode; onClick?: () => void; hello?: boolean }) {
+  const [said, setSaid] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const sayHello = () => { setSaid(true); ref.current?.closest('.ev-content')?.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus() }
+  return (
+    <div className="ev-empty" ref={ref}>
+      <p>{line}</p>
+      {button && !said && <button className="btn ev-empty-cta" onClick={hello ? sayHello : onClick}>{icon}{button}</button>}
     </div>
   )
 }
@@ -538,10 +564,15 @@ function EventMenu({ e, host, may, onClose, open }: { e: CalEvent; host: boolean
   )
   return (
     <Sheet title="Event" hideTitle onClose={onClose}>
+      {/* events/chat-more-menu: the share actions live here, not in the chat */}
       <div className="act-group">
-        <Item icon={<CopyIcon />} label={copied ? 'Copied' : 'Copy URL'} onClick={async () => { await copyText(eventUrl(e)); setCopied(true); setTimeout(onClose, 600) }} />
-        <Item icon={<GlobeIcon />} label="QR code" onClick={() => open('qr')} />
-        {e.isNew && e.visibility !== 'members' && <Item icon={<LinkIcon />} label="Open the public page" onClick={() => { window.open(eventUrl(e), '_blank', 'noopener'); onClose() }} />}
+        <Item icon={<PersonPlusIcon />} label="Invite people" onClick={() => open('qr')} />
+        {host && e.isNew && <Item icon={<PeopleIcon />} label="Invite a co-host" onClick={() => open('cohost')} />}
+      </div>
+      <div className="act-group">
+        <Item icon={<LinkIcon />} label={copied ? 'Copied' : 'Copy the link'} onClick={async () => { await copyText(eventUrl(e)); setCopied(true); setTimeout(onClose, 600) }} />
+        <Item icon={<QrIcon />} label="QR code" onClick={() => open('qr')} />
+        {e.isNew && e.visibility !== 'members' && <Item icon={<GlobeIcon />} label="Open the public page" onClick={() => { window.open(eventUrl(e), '_blank', 'noopener'); onClose() }} />}
       </div>
       {may && !e.meeting && <div className="act-group"><Item icon={<ScanIcon />} label="Check people in" onClick={() => open('checkin')} /></div>}
       {host && e.isNew && (
@@ -549,7 +580,6 @@ function EventMenu({ e, host, may, onClose, open }: { e: CalEvent; host: boolean
           <Item icon={<PencilIcon />} label="Edit the event" onClick={() => open('edit')} />
           <Item icon={<DocIcon />} label="Tickets" onClick={() => open('tickets')} />
           <Item icon={<PeopleIcon />} label="Guest list" onClick={() => open('guests')} />
-          <Item icon={<LinkIcon />} label="Co-host invitation link" onClick={() => open('cohost')} />
         </div>
       )}
       {host && e.isNew && (

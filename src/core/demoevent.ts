@@ -27,7 +27,7 @@ async function photo(hue: number, label: string): Promise<string> {
 }
 
 export type DemoAs = 'host' | 'cohost' | 'steward' | 'attendee' | 'outsider'
-export async function demoEvent(opts: { as?: DemoAs; today?: boolean; plain?: boolean; d?: string; slug?: string; title?: string; photos?: boolean; /** the same people every time (tests) */ seed?: string } = {}): Promise<string> {
+export async function demoEvent(opts: { as?: DemoAs; today?: boolean; plain?: boolean; d?: string; slug?: string; title?: string; photos?: boolean; /** the same people every time (tests) */ seed?: string; /** no messages or photos in its chat */ quiet?: boolean } = {}): Promise<string> {
   const { as = 'host', today = true, plain = false, slug = 'garden-day', title = 'Garden day', photos = true } = opts
   const d = opts.d ?? hex(3)
   const group = 'ev-' + d
@@ -80,13 +80,13 @@ export async function demoEvent(opts: { as?: DemoAs; today?: boolean; plain?: bo
   evs.push({ id: hex(32), pubkey: gk, sig: hex(64), kind: 1985, created_at: now - 2500, tags: [['L', 'belfry/group-role'], ['l', 'steward', 'belfry/group-role'], ['p', steward], ['h', group], ['by', creator]], content: '' })
   for (const [i, p] of crowd.slice(0, 2).entries())
     evs.push({ id: hex(32), pubkey: gk, sig: hex(64), kind: 1985, created_at: now - 1800 + i * 60, tags: [['L', 'belfry/ticket'], ['l', 'checked-in', 'belfry/ticket'], ['p', p.pk], ['h', group], ['by', steward]], content: '' })
-  // a few messages and photos in its chat
-  evs.push(
+  // a few messages and photos in its chat (QUIET: none, for the empty chat's states)
+  if (!opts.quiet) evs.push(
     { id: hex(32), pubkey: creator, sig: hex(64), kind: 9, created_at: now - 1500, tags: [['h', group]], content: 'Gate opens at 10. Coffee is on us ☕' },
     { id: hex(32), pubkey: crowd[0].pk, sig: hex(64), kind: 9, created_at: now - 1400, tags: [['h', group]], content: 'Can I bring my kids?' },
     { id: hex(32), pubkey: cohost, sig: hex(64), kind: 9, created_at: now - 1300, tags: [['h', group]], content: 'Of course! There is a sandpit.' },
   )
-  if (photos) {
+  if (photos && !opts.quiet) {
     for (const [i, hue] of [20, 200, 90, 300, 45].entries()) {
       const url = await photo(hue, ['Beans', 'The shed', 'Lunch', 'Seeds', 'Team'][i])
       evs.push({ id: hex(32), pubkey: [crowd[1], crowd[2], ana, ben, crowd[3]][i].pk, sig: hex(64), kind: 9, created_at: now - 1200 + i * 30, tags: [['h', group], ['imeta', `url ${url}`, 'm image/png', 'dim 480x360']], content: '' })

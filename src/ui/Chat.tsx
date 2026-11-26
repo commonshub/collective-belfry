@@ -786,7 +786,7 @@ export function MenuButton() {
   )
 }
 
-export function Conversation({ id, events = false, readOnly = false, topic, onTopic, focus, activeThread }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void; focus?: string; activeThread?: string }) {
+export function Conversation({ id, events = false, readOnly = false, topic, onTopic, focus, activeThread, empty, placeholder }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void; focus?: string; activeThread?: string; /** what an empty conversation shows instead of "… is new" (the event screen's one line and one button) */ empty?: ReactNode; /** the composer's placeholder ("Message the event") */ placeholder?: string }) {
   const [newEvent, setNewEvent] = useState(false)
   const [newMeeting, setNewMeeting] = useState(false)
   const [recording, setRecording] = useState(false)
@@ -935,7 +935,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         <div className="messages">
           {list.length === 0 && (topic
             ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
-            : guestReading || frozen ? <div className="empty">No messages here{frozen ? '' : ' yet'}.</div> : <div className="empty-start">
+            : guestReading || frozen ? <div className="empty">No messages here{frozen ? '' : ' yet'}.</div> : empty !== undefined ? empty : <div className="empty-start">
                 <b>{g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : id} is new</b>
                 <p>No messages yet. Bring the people who belong here, then say hi.</p>
                 <button className="btn" onClick={() => setInviting(true)}>Invite people</button>
@@ -989,7 +989,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       )}
       {privateGuest && <div className="join-bar" role="note"><span>Guests can’t take part in private groups yet.</span></div>}
       {!readOnly && <RecordingBar groupId={id} />}
-      {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
+      {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : placeholder} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce, pv) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, [...eventTags(text), ...pv]) }} prefill={prefill}
         onEvent={events && !noExtrasHere(id) ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() && !noExtrasHere(id) ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events && !noExtrasHere(id) ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
