@@ -680,3 +680,19 @@ format 1 is unchanged (the existing tests of mail, push, buttons and agents pass
 Not verified: anything against a real relay (zooid, the patched rnostr), real mail, a real
 Blossom upload of a ciphertext, or a real app opening what the server wrote beyond the shared
 rules.
+
+## 28. Where the reference code is the rule (2026-11-24, from Android's port)
+
+The web's core.ts (enc-v3) and vectors/encrypted.json are the rule where this text is behind:
+- §21's grace applies at the start of every run of lists that have the device (a device listed
+  again too), not only its first list.
+- A seal signed by a device on no known list of the author, dated at or after the author's newest
+  list, waits (the list may be behind); it is refused only after a complete read finds none.
+- A list with `self` next to other devices, or above the highest valid list, is reported
+  (`invalidAbove`); the runtime holds sending for that account.
+- A key rumor is accepted when its maker is on one of the lists the rumor names for its people
+  (dated by those lists, not by the account's current one); a key is never adopted for sending
+  unless made by the sender's own account's devices (§17.8) or, in a group, its entries add up
+  (§18.7).
+- A key that is both a device and a reader on one list makes that list invalid.
+- §6's "rumor's date" reads "the outer event's date" everywhere (§18.2, §21).
