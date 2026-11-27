@@ -149,3 +149,49 @@ def test_damage_must_be_seen_twice(svc, tmp_path, monkeypatch):
     looks = iter(["header overwritten (x)", None])
     monkeypatch.setattr(dbcheck, "inspect", lambda p: next(looks))
     assert dbcheck.confirmed(tmp_path / "events.sqlite", 0) is None
+
+
+# ── the check never costs the service its locks (2026-11-26, every box) ────────────────────
+OTHER_PROCESS = """
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("SELECT count(*) FROM t").fetchall()
+db.close()
+"""
+
+
+def test_a_check_leaves_the_services_wal_alone_when_another_process_reads(tmp_path):
+    """POSIX locks belong to the process: closing ANY file descriptor of the database drops them
+    all (sqlite.org/howtocorrupt.html §2.2). The check used to read the header with a plain
+    open/close in the service's own process; the next other process that opened the register and
+    closed it (``belfry apply``'s ``exec … has-people``, a read by hand) then saw nobody else,
+    checkpointed and DELETED the WAL file while the service kept writing to it: every write after
+    that lived in a deleted file only and was gone at the next restart (belfry.brussels: two card
+    members made at start were not in the register; all four boxes had the WAL deleted)."""
+    import subprocess
+    import sys
+
+    path = tmp_path / "register.sqlite"
+    db = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("CREATE TABLE t (n INTEGER)")
+    db.execute("INSERT INTO t VALUES (1)")
+    assert dbcheck.inspect(path) is None
+    subprocess.run([sys.executable, "-I", "-c", OTHER_PROCESS, str(path)], check=True)
+    db.execute("INSERT INTO t VALUES (2)")  # the service writes on
+    assert (tmp_path / "register.sqlite-wal").exists()
+    seen = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute("
+            "'SELECT count(*) FROM t').fetchone()[0])",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert seen == "2"  # what the service wrote is on disk for everyone
+    db.close()

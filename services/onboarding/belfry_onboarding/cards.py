@@ -311,7 +311,9 @@ def member_now(svc: Services, card: dict[str, Any], pubkey: str) -> bool:
     return member_key(svc, pubkey) is not None
 
 
-MIGRATED = "belfry.cards_members_migrated"
+# v2: once more after the WAL loss of 2026-11-26 (dbcheck.read_header); changes nothing for
+# those done
+MIGRATED = "belfry.cards_members_migrated.v2"
 
 
 def migrate_card_guests(svc: Services) -> list[str]:

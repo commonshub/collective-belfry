@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -75,6 +77,28 @@ def _header_damage(head: bytes) -> str | None:
     return None
 
 
+HEADER_READER = "import sys; sys.stdout.buffer.write(open(sys.argv[1], 'rb').read(100))"
+
+
+def read_header(path: Path) -> bytes:
+    """The first 100 bytes of PATH, read by a child process. Never with open()/close() here: POSIX
+    locks belong to the process, and closing any file descriptor of a database drops every lock
+    this process holds on it (sqlite.org/howtocorrupt.html §2.2). The service's own connections
+    then look gone to other processes, and the next one that opens the register and closes it
+    (``belfry apply``'s ``exec … has-people``, a read by hand) checkpoints and deletes the WAL
+    file the service is still writing to: those writes are lost at the next restart. That
+    happened on every box from 2026-11-25 to 2026-11-27."""
+    out = subprocess.run(
+        [sys.executable, "-I", "-c", HEADER_READER, str(path)],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    if out.returncode != 0:
+        raise OSError(f"header not read (exit {out.returncode})")
+    return out.stdout
+
+
 def inspect(path: Path) -> str | None:
     """None when PATH is a sound database (or can't be judged just now); else why not (fixed
     words + the header's bytes, never content).
@@ -85,9 +109,8 @@ def inspect(path: Path) -> str | None:
     four boxes and mailed a false alarm. The check now opens the file normally (it joins the WAL
     like any reader; ``query_only`` keeps it from writing) and lets transient errors pass."""
     try:
-        with path.open("rb") as fh:
-            head = fh.read(100)
-    except OSError as exc:
+        head = read_header(path)
+    except (OSError, subprocess.SubprocessError) as exc:
         log.warning("dbcheck: %s not readable just now (%s)", path.name, type(exc).__name__)
         return None
     if not head:

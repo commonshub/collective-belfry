@@ -406,9 +406,10 @@ With `join_as = member`:
 `join_as = guest` keeps everything as §§2–4 say.
 
 **Migration** (once, at the first start with this code; register param
-`belfry.cards_members_migrated`): the active guests who came in by a member card (a pass made
-by its link, or the steward pass of its claimer) and have a proven address become members by
-the same path; one log line each (`cards: <8 hex>… a member now (came by card <ID>)`). Reading
+`belfry.cards_members_migrated.v2`: v1 ran while dbcheck hid the service's writes from other
+processes, so it runs once more and skips those done): the active guests who came in by a
+member card (a pass made by its link, or the steward pass of its claimer) and have a proven
+address become members by the same path; one log line each (`cards: <8 hex>… a member now (came by card <ID>)`). Reading
 guests, guests without an address, buyers whose address is not proven and agents are left
 alone. When one fails it is not recorded and runs again at the next start (those done are
 members and are skipped).
